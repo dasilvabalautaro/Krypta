@@ -17,6 +17,9 @@ local.properties
 /keystore.properties
 *.jks
 *.keystore
+# Notas de credenciales del autor (usuario/contraseña de git). No deberían estar
+# en el árbol del repo, pero mientras lo estén, que un `git add -A` no las suba.
+/keys-git.md
 
 # --- Artefactos de compilación fuera de build/ ---
 # APK/AAB de release que Android Studio deja en app/release/.
