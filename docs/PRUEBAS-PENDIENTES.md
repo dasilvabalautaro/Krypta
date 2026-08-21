@@ -368,6 +368,13 @@ directa (DCUtR) o se queda en relay.
   `Pictures/Krypta` (el menú desplegable no aparece: se esperan dos fotogramas). Queda por
   comprobar a mano en el móvil, sin adb: el gesto nativo de captura (debe salir el aviso del
   sistema), un grabador de pantalla (debe grabar negro) y la miniatura de recientes (vacía).
+  **Acotado al chat (21 ago)**: el flag ya no se pone en `MainActivity`, sino al entrar en la
+  pantalla de chat y se quita al salir. Pendiente de comprobar en el móvil: (a) `adb shell
+  screencap` **con un chat abierto** sale negro; (b) el mismo comando en la **lista de chats,
+  ajustes y ayuda** sale con la UI normal; (c) entrar y salir del chat varias veces mantiene
+  ese comportamiento (el flag se pone/quita, no se queda pegado); (d) al ir a "recientes"
+  desde un chat la miniatura sale vacía, y desde la lista sale normal; (e) ⋮ → "Capturar
+  pantalla" sigue guardando el PNG correcto.
 - **Contenido del teclado (13 ago)**: en el TECNO, con un contacto de usar y tirar, las
   pestañas **GIF y stickers** de Gboard ya abren (antes: "la app no admite insertar aquí"); un
   sticker con fondo transparente se pinta **sobre el teal de la burbuja**, no sobre un cuadro

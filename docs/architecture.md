@@ -176,14 +176,22 @@ desacoplados y testeables.
     Cambiar el ajuste exige autenticarse en ambos sentidos, y los fallos del prompt/manager
     van por `runCatching` (nunca crash). Política pura `shouldRelock` testeada en JVM
     (`AppLockTest`).
-  - **Bloqueo de captura y grabación de pantalla** (13 ago 2026,
+  - **Bloqueo de captura y grabación de pantalla, solo en el chat** (13 ago 2026, acotado a
+    la pantalla de chat el 21 ago 2026,
     [ScreenSecurity.kt](../app/src/main/java/chat/neto/krypta/ScreenSecurity.kt)):
-    `FLAG_SECURE` en la ventana de `MainActivity` (en `onCreate`, antes de componer). Con una
-    sola Activity queda cubierta toda la app; los diálogos y `ModalBottomSheet` viven en
-    ventanas propias pero **heredan** el flag (`SecureFlagPolicy.Inherit` es el valor por
-    defecto de `DialogProperties`, y ModalBottomSheet copia el de la ventana padre), así que no
-    hay que marcarlos uno a uno. El sistema rechaza la captura, el grabador graba negro, la
-    miniatura de "recientes" sale vacía y la ventana no se vuelca a una pantalla no segura.
+    `FLAG_SECURE` se pone y se quita **por pantalla** — `SecureScreenEffect` (en
+    [ChatScreens.kt](../app/src/main/java/chat/neto/krypta/ui/ChatScreens.kt)) llama a
+    `ScreenSecurity.setSecure(activity, true)` en un `DisposableEffect` al entrar en el chat y
+    a `false` al salir. Antes iba en `MainActivity.onCreate` y, con una sola Activity, cubría
+    la app entera: eso estorbaba (no se podía capturar ni la lista, ni ajustes, ni la ayuda —
+    ni para soporte ni para la ficha de Play) sin proteger nada más, porque el contenido
+    sensible está en la conversación. Los diálogos y `ModalBottomSheet` viven en ventanas
+    propias pero **heredan** el flag de la padre al abrirse (`SecureFlagPolicy.Inherit` es el
+    valor por defecto de `DialogProperties`, y ModalBottomSheet copia el de la ventana padre),
+    así que los del chat quedan cubiertos sin marcarlos uno a uno. Mientras el flag está
+    puesto el sistema rechaza la captura, el grabador graba negro, la miniatura de "recientes"
+    sale vacía y la ventana no se vuelca a una pantalla no segura. `FLAG_SECURE` solo afecta a
+    esta ventana: nunca ha impedido capturar en otras apps.
     **La propia Krypta sí puede capturar** (`captureToGallery`): pinta la jerarquía de vistas
     sobre un `Canvas` **por software** y guarda un PNG en `Pictures/Krypta` vía `MediaStore`
     (con `RELATIVE_PATH` + `IS_PENDING`; sin permiso de almacenamiento en minSdk 30). Tiene que
@@ -191,8 +199,9 @@ desacoplados y testeables.
     compositor y con `FLAG_SECURE` devolvería negro, mientras que una app dibujando sus propias
     vistas nunca pasa por ahí. Se ofrece en **⋮ → "Capturar pantalla"** del chat, esperando
     **dos `withFrameNanos`** tras cerrar el menú (si no, el propio desplegable sale en la
-    imagen). Nota para depurar: `adb shell screencap` ya no sirve para ver la UI de Krypta —
-    usa `uiautomator dump`, que lee el árbol de accesibilidad y no se ve afectado.
+    imagen). Nota para depurar: `adb shell screencap` sirve en todas las pantallas **menos el
+    chat**; ahí sale negro — usa `uiautomator dump` (lee el árbol de accesibilidad, no se ve
+    afectado) o la captura propia.
   - **Chat** (UI-3): barra con avatar + "en línea"; burbujas con esquina-cola asimétrica
     (propias `primaryContainer`, ajenas `surfaceContainerHigh`), **agrupadas** por lado y
     ventana de 3 min (solo la primera del grupo abre esquina) y con **hora + checks de

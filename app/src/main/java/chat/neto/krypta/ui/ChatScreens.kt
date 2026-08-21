@@ -284,6 +284,23 @@ internal fun AddContactDialog(
     )
 }
 
+/**
+ * Marca la ventana como segura (`FLAG_SECURE`) mientras esta pantalla esté compuesta y la
+ * desmarca al salir. Con una sola Activity el flag es de toda la ventana, así que ponerlo y
+ * quitarlo aquí es lo que lo convierte en "solo el chat": ni capturas del sistema, ni
+ * grabación, ni miniatura en "recientes" mientras se mira una conversación, y captura normal
+ * en el resto de la app. La captura propia (⋮ › Capturar pantalla) sigue funcionando porque
+ * dibuja las vistas, no la superficie.
+ */
+@Composable
+private fun SecureScreenEffect() {
+    val activity = LocalContext.current.findActivity()
+    DisposableEffect(activity) {
+        activity?.let { ScreenSecurity.setSecure(it, true) }
+        onDispose { activity?.let { ScreenSecurity.setSecure(it, false) } }
+    }
+}
+
 // ExperimentalFoundationApi: `Modifier.contentReceiver` (contenido enriquecido del teclado).
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -307,6 +324,11 @@ private fun ChatScreen(
     var captureRequested by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val context = LocalContext.current
+
+    // Solo aquí se bloquea la captura del sistema: lo que hay que proteger es el contenido de
+    // las conversaciones. Al salir del chat el flag se quita y el resto de la app (lista,
+    // ajustes, ayuda) se puede capturar con normalidad.
+    SecureScreenEffect()
 
     // Captura propia (la del sistema está bloqueada por FLAG_SECURE). Se espera un par de
     // fotogramas para que el menú ⋮ ya haya desaparecido: si no, sale él en la imagen.
@@ -457,6 +479,7 @@ private fun ChatScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         topBar = {
             androidx.compose.material3.TopAppBar(
                 navigationIcon = {

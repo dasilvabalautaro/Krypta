@@ -16,16 +16,28 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Bloqueo de captura y grabación de pantalla, y la única vía que queda para capturar: la
- * propia Krypta.
+ * Bloqueo de captura y grabación de pantalla **de la pantalla de chat**, y la única vía que
+ * queda para capturarla: la propia Krypta.
  *
- * **El bloqueo** es `FLAG_SECURE` en la ventana de la Activity ([protect]): el sistema se
- * niega a hacer capturas, el grabador de pantalla graba negro, la miniatura de "recientes" sale
- * en blanco y la ventana no se puede volcar a una pantalla no segura (ni a `adb screencap`).
- * Como Krypta tiene una sola Activity, con marcarla una vez queda cubierta toda la app; los
- * diálogos y las hojas inferiores de Compose viven en ventanas propias pero **heredan** el flag
+ * **El bloqueo** es `FLAG_SECURE` en la ventana de la Activity ([setSecure]): mientras está
+ * puesto el sistema se niega a hacer capturas, el grabador de pantalla graba negro, la
+ * miniatura de "recientes" sale en blanco y la ventana no se puede volcar a una pantalla no
+ * segura (ni a `adb screencap`).
+ *
+ * **Es por pantalla, no de toda la app.** Krypta tiene una sola Activity, así que el flag es
+ * de la ventana entera: se pone al entrar en el chat y se quita al salir (ver
+ * `SecureScreenEffect` en `ui/ChatScreens.kt`). Lo que hay que proteger es el contenido de las
+ * conversaciones; el resto de la app (lista, ajustes, ayuda) se puede capturar con normalidad,
+ * que es lo que hace falta para dar soporte, mandar una incidencia o hacer material de la
+ * tienda. Los diálogos y las hojas inferiores de Compose viven en ventanas propias pero
+ * **heredan** el flag de la ventana padre en el momento de abrirse
  * (`SecureFlagPolicy.Inherit` es el valor por defecto de `DialogProperties`, y
- * `ModalBottomSheet` copia el flag de la ventana padre), así que no hay que marcarlos uno a uno.
+ * `ModalBottomSheet` copia el flag del padre), así que los del chat quedan cubiertos sin
+ * marcarlos uno a uno.
+ *
+ * Nota: `FLAG_SECURE` solo afecta a **esta** ventana. Nunca ha impedido capturar en otras
+ * apps; si el sistema se niega fuera de Krypta, es una política del dispositivo (perfil de
+ * trabajo, modo restringido del fabricante), no esto.
  *
  * **La excepción** es [captureToGallery]: `FLAG_SECURE` impide que *el sistema* lea la
  * superficie, no que la app dibuje su propio contenido. Pintando la jerarquía de vistas sobre
@@ -34,12 +46,16 @@ import java.util.Locale
  */
 object ScreenSecurity {
 
-    /** Marca la ventana como segura. Llamar en `onCreate`, antes de componer. */
-    fun protect(activity: Activity) {
-        activity.window.setFlags(
-            WindowManager.LayoutParams.FLAG_SECURE,
-            WindowManager.LayoutParams.FLAG_SECURE,
-        )
+    /**
+     * Pone o quita `FLAG_SECURE` en la ventana. Se puede cambiar con la ventana ya visible:
+     * el sistema aplica el flag en el siguiente fotograma.
+     */
+    fun setSecure(activity: Activity, secure: Boolean) {
+        if (secure) {
+            activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
     }
 
     /**

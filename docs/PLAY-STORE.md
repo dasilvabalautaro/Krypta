@@ -116,10 +116,10 @@ tiene que ser creciente).
       semanas de calendario: conviene arrancarla cuanto antes.
 - [ ] **Assets**: icono 512, gráfico destacado 1024×500, capturas, descripción corta y larga
       (reciclables de [MANUAL.md](MANUAL.md)).
-      ⚠️ **Las capturas para la ficha no se pueden hacer con el gesto del móvil**: desde la 1.5
-      la app lleva `FLAG_SECURE` y el sistema devuelve negro. Usa **⋮ → "Capturar pantalla"**
-      dentro del chat (guarda en `Galería › Krypta`); para pantallas fuera del chat, un
-      emulador sin el flag o quitarlo temporalmente en un build local.
+      ⚠️ **La captura del chat no se puede hacer con el gesto del móvil**: desde la 1.5 la
+      pantalla de chat lleva `FLAG_SECURE` y el sistema devuelve negro. Usa **⋮ → "Capturar
+      pantalla"** dentro del chat (guarda en `Galería › Krypta`). El resto de pantallas (lista,
+      ajustes, ayuda, llamada) se capturan con el gesto normal.
 
 ## Producto / política de contenido
 

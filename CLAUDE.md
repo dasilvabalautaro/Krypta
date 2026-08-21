@@ -594,12 +594,19 @@ decode just draws once), and `notificationText` labels it **"🎞 GIF"** instead
 the bytes **identically**) and verified live on the TECNO: a Tenor GIF sent as "archivo enviado
 … (2 trozos)", the bubble **animates** (two screenshots a second apart show different frames),
 and the list preview reads "🎞 GIF".
-**Screenshot/screen-recording block (13 Aug 2026)**: `ScreenSecurity.protect` sets
-**`FLAG_SECURE`** on `MainActivity`'s window in `onCreate` (before composing). One Activity =
-whole app covered; Compose dialogs and `ModalBottomSheet` live in their own windows but
-**inherit** it (`DialogProperties.securePolicy` defaults to `SecureFlagPolicy.Inherit`, and
-material3's ModalBottomSheet copies the parent window's flag via its internal
-`isFlagSecureEnabled`) — no per-dialog wiring. Effect: system screenshots refuse, screen
+**Screenshot/screen-recording block (13 Aug 2026; scoped to the chat screen 21 Aug 2026)**:
+**`FLAG_SECURE`** is now set **per screen**, not app-wide — `SecureScreenEffect` in
+`ui/ChatScreens.kt` calls `ScreenSecurity.setSecure(activity, true)` from a `DisposableEffect`
+when the chat screen enters composition and `false` on dispose. It first lived in
+`MainActivity.onCreate`, and with a single Activity that covered the **whole** app: the
+conversation list, Settings, Help and the call screen couldn't be captured either — no support
+screenshots, no Play-listing assets — while protecting nothing that matters, since the
+sensitive content is the conversation. (`FLAG_SECURE` only ever affects *this* window; it never
+blocked screenshots in other apps.) Compose dialogs and `ModalBottomSheet` live in their own
+windows but **inherit** the parent's flag when they open (`DialogProperties.securePolicy`
+defaults to `SecureFlagPolicy.Inherit`, and material3's ModalBottomSheet copies the parent
+window's flag via its internal `isFlagSecureEnabled`) — so the chat's dialogs/sheets are
+covered with no per-dialog wiring. While the flag is on: system screenshots refuse, screen
 recorders capture black, the recents thumbnail is blank, and the window won't mirror to a
 non-secure display. **Krypta itself can still capture**, which is the point:
 `ScreenSecurity.captureToGallery` draws the decor view onto a **software** `Canvas` and saves a
@@ -608,11 +615,12 @@ permission on minSdk 30). It must be `view.draw(Canvas)` and **not `PixelCopy`**
 reads the surface through the compositor and would come back black under FLAG_SECURE, whereas
 an app drawing its own view hierarchy never touches it. Exposed as **⋮ → "Capturar pantalla"**
 in the chat top bar; the handler waits **two `withFrameNanos`** after closing the menu, or the
-dropdown itself lands in the image. Verified live on the TECNO: `adb shell screencap` of the
-app is **fully black** (only the system status/nav bars show), while ⋮ → Capturar produced a
-correct full-UI PNG in `Pictures/Krypta`. **Consequence for this repo's workflow**:
-`adb shell screencap` no longer works for verifying Krypta's UI — use `uiautomator dump` (the
-accessibility tree is unaffected) or the in-app capture. Two trade-offs to keep in mind: casting
+dropdown itself lands in the image. Verified live on the TECNO (13 Aug, when it was app-wide):
+`adb shell screencap` of the app is **fully black** (only the system status/nav bars show),
+while ⋮ → Capturar produced a correct full-UI PNG in `Pictures/Krypta`. **Consequence for this
+repo's workflow**: `adb shell screencap` works everywhere **except an open chat**, where it
+comes back black — there, use `uiautomator dump` (the accessibility tree is unaffected) or the
+in-app capture. Two trade-offs to keep in mind: casting
 /screen mirroring shows black, and a capture saved to the gallery is outside the E2EE boundary
 (said as much in the in-app help).
 

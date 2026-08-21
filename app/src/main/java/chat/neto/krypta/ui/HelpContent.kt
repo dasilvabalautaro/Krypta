@@ -63,12 +63,13 @@ object HelpContent {
         HelpItem(
             category = "Privacidad y seguridad",
             question = "¿Se pueden hacer capturas de pantalla de mis chats?",
-            answer = "No con las herramientas del móvil: Krypta bloquea la captura y la " +
-                "grabación de pantalla, su ventana sale en negro si alguien graba, y tampoco " +
-                "aparece en la vista de apps recientes. Si quieres guardar una conversación, " +
-                "usa ⋮ → Capturar pantalla dentro del chat; la imagen se guarda en Galería › " +
-                "Krypta. Ojo: esa imagen ya está fuera del cifrado, así que trátala como " +
-                "cualquier foto de tu móvil.",
+            answer = "Mientras tienes un chat abierto, no: Krypta bloquea la captura y la " +
+                "grabación de pantalla, sale en negro si alguien graba, y el chat tampoco " +
+                "aparece en la vista de apps recientes. El bloqueo es solo de la pantalla de " +
+                "chat; en el resto de la app (lista, ajustes, ayuda) puedes capturar como " +
+                "siempre. Si quieres guardar una conversación, usa ⋮ → Capturar pantalla " +
+                "dentro del chat; se guarda en Galería › Krypta, ya fuera del cifrado, así " +
+                "que trátala como cualquier foto de tu móvil.",
         ),
         HelpItem(
             category = "Privacidad y seguridad",
