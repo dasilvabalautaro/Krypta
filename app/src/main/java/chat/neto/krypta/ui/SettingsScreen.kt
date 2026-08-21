@@ -52,10 +52,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import chat.neto.krypta.AppLock
 import chat.neto.krypta.KryptaNotifications
 import chat.neto.krypta.ThemeMode
@@ -154,7 +157,7 @@ fun SettingsScreen(
             ) {
                 Text(
                     "Comparte tu PeerID con quien quiera añadirte; es tu única seña de contacto.",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 val clipboard = LocalClipboardManager.current
@@ -201,7 +204,7 @@ fun SettingsScreen(
                     "Guarda tu identidad y tus contactos en un archivo cifrado con una " +
                         "frase-clave. Sin esta copia, perder el móvil = perder tu PeerID " +
                         "(todos tendrían que volver a añadirte y verificarte).",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Row(
@@ -234,7 +237,7 @@ fun SettingsScreen(
                         Text(
                             "Con tu huella, cara o el PIN del móvil. Krypta no guarda " +
                                 "ese secreto: lo comprueba el sistema.",
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -292,7 +295,7 @@ fun SettingsScreen(
             SettingsCard("Apariencia") {
                 Text(
                     "Tema de la app. “Sistema” sigue el modo claro/oscuro del móvil.",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 val themeMode by ThemePreference.mode.collectAsState()
@@ -359,7 +362,7 @@ fun SettingsScreen(
                     "Si los avisos no suenan o llegan tarde, prueba el aviso y revisa los " +
                         "permisos de batería/notificaciones del sistema (imprescindible en " +
                         "algunos móviles).",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Column(
@@ -523,7 +526,10 @@ private fun SettingsCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     title,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontSize = (MaterialTheme.typography.titleMedium.fontSize.value + 2f).sp,
+                        fontWeight = FontWeight.Bold,
+                    ),
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.weight(1f).padding(bottom = 8.dp),
                 )

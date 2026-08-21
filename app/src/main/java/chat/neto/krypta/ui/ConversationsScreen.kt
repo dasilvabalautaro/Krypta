@@ -82,6 +82,7 @@ fun ConversationsScreen(
     var confirmDelete by remember { mutableStateOf<Contact?>(null) }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         topBar = {
             TopAppBar(
                 title = {
@@ -412,9 +413,11 @@ private fun EmptyConversations() {
             modifier = Modifier.size(72.dp),
         )
         Spacer(Modifier.height(16.dp))
-        Text("Sin conversaciones", style = MaterialTheme.typography.titleMedium)
+        Text("Aún no tienes contactos", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Comparte tu PeerID (en Ajustes) y añade a tu primer contacto con el botón de abajo.",
+            "1. En Ajustes, comparte tu PeerID con la persona que quieres agregar y pídele el suyo.\n" +
+                "2. Toca \"Nuevo contacto\", escribe su nombre y pega su PeerID.\n" +
+                "3. Abre el chat y verifica la conexión con esa persona.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp),
