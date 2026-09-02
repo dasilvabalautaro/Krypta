@@ -505,7 +505,22 @@ suprime la alarma que debería descongelarlo.
 alarma puede ejecutarse en un proceso al que el sistema no da CPU. Los arreglos del bucle WAN y
 del latido siguen siendo correctos —quitaron cuelgues reales— pero no pueden resolver esto.
 
-### La decisión que queda (es de producto, no de código)
+### DECISIÓN (2 sep 2026): se deja como está, a la espera de más móviles
+El autor decide **no adoptar push por ahora** y tratar el caso del TECNO como
+**posiblemente particular**, hasta tener más muestras. Razonable con lo que hay: dos móviles,
+uno que falla (TECNO/HiOS) y uno que recibía bien (el de la colaboradora, §1).
+
+**Lo que haría cambiar la decisión**: que el fallo aparezca en móviles de **otras marcas**. Si
+se reproduce fuera de Transsion, deja de ser una nota de compatibilidad y pasa a bloquear la
+publicación, porque rompe la promesa central. Para probarlo basta la medición de esta sección:
+depositar la sonda y muestrear el CPU del proceso en segundo plano (`utime+stime` de
+`/proc/<pid>/stat`); si se queda clavado, es el mismo congelado.
+
+**Lo que NO conviene olvidar**: mientras esto siga abierto, la app entrega en segundo plano en
+móviles normales pero **no** en los que congelan procesos, y el usuario no tiene forma de
+saberlo. Eso pesa en la ficha de la tienda y en el aviso al usuario, no solo en el código.
+
+### Opciones descartadas por ahora (para cuando haya más datos)
 1. - [ ] **Push sin contenido por FCM** (el modelo de Signal). Google Play Services mantiene una
      conexión privilegiada que el OEM **nunca** congela — por eso WhatsApp funciona sin aviso
      fijo. El push no llevaría contenido: solo "despierta y retira tu buzón", así que el E2EE
