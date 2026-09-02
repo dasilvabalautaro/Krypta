@@ -470,10 +470,55 @@ la app**; es lo que ya documenta la §1 (autostart, Phone Master → apps proteg
 restricciones, WiFi siempre activo), y hay que **verificar en el móvil que esos ajustes están
 puestos** antes de sacar conclusiones sobre el resto.
 
-### Qué queda
-1. - [ ] **Comprobar en el TECNO los ajustes manuales del OEM** (autostart, Phone Master,
-     batería sin restricciones) y repetir la medición. Si con ellos puestos entrega, el fallo
-     es de configuración del móvil; si no, hace falta otra vía (p. ej. UnifiedPush).
+### CAUSA CONFIRMADA (2 sep 2026, con los ajustes del OEM ya puestos)
+El autor aplicó los ajustes manuales (autostart, Phone Master, batería sin restricciones) y se
+repitió la medición. **Sigue sin entregar**, y ya se sabe por qué: **HiOS congela el proceso**.
+
+Muestreo de CPU del proceso (`utime+stime` de `/proc/<pid>/stat`) con la app en segundo plano:
+
+```
+t=45s   cpu=3378   estado=S
+t=90s   cpu=3383   estado=S
+t=135s  cpu=3383   estado=S
+...
+t=360s  cpu=3383   estado=S     ← 4,5 min sin consumir NI UN jiffy
+```
+
+Cero CPU a partir del minuto y medio. Un bucle WAN vivo habría gastado algo al vencer su
+temporizador de 180 s. **No es que el código falle: es que sus hilos no se planifican.** Lo
+confirma el diagnóstico in-app, cuyos ciclos se paran en seco y reanudan al abrir la app:
+
+```
+18:01:54  rendezvous: anunciando a 2 contacto(s)
+18:05:36  rendezvous: anunciando a 2 contacto(s)
+18:15:47  rendezvous: anunciando a 2 contacto(s)   ← 10 min de hueco; reanuda al abrir
+18:15:50  buzón: 1 mensaje(s) recogido(s)
+```
+
+La sonda se depositó a las **18:09:59**, dentro del hueco. Y la red de seguridad tampoco entra:
+la alarma del latido **estaba programada** (`Pending alarms per uid` → `u0a311:1`) pero llevaba
+**9 min 42 s sin dispararse**, con el móvil `ACTIVE`, pantalla encendida, bucket **EXEMPTED (5)**
+y el uid en las listas de exención de `dumpsys alarm`. O sea: HiOS congela el proceso **y**
+suprime la alarma que debería descongelarlo.
+
+**Conclusión: no hay arreglo posible dentro de la app.** Ningún temporizador, corrutina ni
+alarma puede ejecutarse en un proceso al que el sistema no da CPU. Los arreglos del bucle WAN y
+del latido siguen siendo correctos —quitaron cuelgues reales— pero no pueden resolver esto.
+
+### La decisión que queda (es de producto, no de código)
+1. - [ ] **Push sin contenido por FCM** (el modelo de Signal). Google Play Services mantiene una
+     conexión privilegiada que el OEM **nunca** congela — por eso WhatsApp funciona sin aviso
+     fijo. El push no llevaría contenido: solo "despierta y retira tu buzón", así que el E2EE
+     queda intacto. Coste: dependencia de Google y metadatos (sabría qué dispositivo recibe algo
+     y cuándo). Obliga además a reescribir la justificación del FGS `specialUse` ante Play, que
+     hoy dice literalmente "no hay push de terceros".
+2. - [ ] **UnifiedPush** (el plan original). Sin Google, con distribuidor propio. Pero la app
+     distribuidora sufre el mismo congelado del OEM salvo que el usuario la proteja: mueve el
+     problema, no lo elimina.
+3. - [ ] **Asumirlo y documentarlo.** Hay indicio de que es específico de Transsion: la §1
+     recoge que la colaboradora, con otro modelo, **sí recibía**. Sería publicar con un aviso
+     claro y la guía de ajustes. **Antes de decidir esto hay que confirmarlo en 2–3 móviles de
+     marcas distintas**, porque si el problema es general, la app no cumple su promesa.
 2. - [ ] Confirmar si el fallo es **específico del TECNO** (la §1 dice que la colaboradora, con
      otro modelo, **sí recibía**) — es lo que decide si esto bloquea la publicación para todos
      o solo es una nota de compatibilidad para móviles Transsion.
