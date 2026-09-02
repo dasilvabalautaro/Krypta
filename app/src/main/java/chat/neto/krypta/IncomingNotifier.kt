@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.Ringtone
 import android.media.RingtoneManager
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.VibrationEffect
@@ -164,8 +165,19 @@ class IncomingNotifier @Inject constructor(
         runCatching { vibrator()?.cancel() }
     }
 
+    /**
+     * `VibratorManager` es API 31 y el `minSdk` es 30: en Android 11 la referencia a la clase
+     * no resuelve, así que ahí hay que caer al `Vibrator` clásico (obsoleto desde la 31, pero
+     * es el único que existe en la 30). Sin este reparto, el móvil más antiguo que soportamos
+     * se quedaba **sin vibración de llamada** — y en silencio la vibración es el único aviso.
+     */
     private fun vibrator(): Vibrator? =
-        context.getSystemService(VibratorManager::class.java)?.defaultVibrator
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            context.getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(Vibrator::class.java)
+        }
 
     private companion object {
         // espera, vibra, espera, vibra… (se repite desde el índice 0)
