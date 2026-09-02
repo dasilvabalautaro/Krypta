@@ -594,6 +594,26 @@ decode just draws once), and `notificationText` labels it **"🎞 GIF"** instead
 the bytes **identically**) and verified live on the TECNO: a Tenor GIF sent as "archivo enviado
 … (2 trozos)", the bubble **animates** (two screenshots a second apart show different frames),
 and the list preview reads "🎞 GIF".
+**Copy a message + tappable links (2 Sep 2026)**: chat bubbles had **no way to copy text** —
+a plain `Text`, no `SelectionContainer`, no long-press, and no link detection, so received text
+was a dead end (a code, an address, a URL). This was never a deliberate security decision:
+nothing in the docs recorded it (and this repo *does* record its deliberate omissions), and the
+clipboard was already used in Settings for the PeerID. Now a **long-press on a text bubble**
+opens a "Copiar" item (`combinedClickable` + `DropdownMenu`; the tap branch still does the
+FAILED-retry, in **one** modifier — chaining two gesture modifiers means the second never sees
+the event). Copy goes through `ui/MessageText.kt`'s `copyMessageText`, which uses the **platform**
+`ClipboardManager` rather than Compose's `LocalClipboardManager` because only the former can set
+`ClipDescription.EXTRA_IS_SENSITIVE` (API 33+, guarded) — without it Android 13+ paints the copied
+message in the clipboard preview, which is exactly what `FLAG_SECURE` prevents on that screen.
+Long-press is only wired when `message.text` is non-blank (image/file/audio/GIF bubbles carry an
+empty `text`). Links come from `linkifyText` using `android.util.Patterns.WEB_URL` (no new
+dependency) into an `AnnotatedString` with `LinkAnnotation.Url`; a URL without a scheme gets
+`https://` prepended. The link colour is passed in, since the readable colour differs between the
+own bubble (`primary`) and the received one. The pattern is an injectable parameter **only** so
+the offset arithmetic is testable on the JVM (`Patterns` is Android-only and `:app` has no
+Robolectric) — `MessageTextTest` pins that the visible text survives linkifying unchanged.
+Verified live on the TECNO: long-press shows "Copiar", and pasting into the input field returns
+the text.
 **Screenshot/screen-recording block (13 Aug 2026; scoped to the chat screen 21 Aug 2026)**:
 **`FLAG_SECURE`** is now set **per screen**, not app-wide — `SecureScreenEffect` in
 `ui/ChatScreens.kt` calls `ScreenSecurity.setSecure(activity, true)` from a `DisposableEffect`

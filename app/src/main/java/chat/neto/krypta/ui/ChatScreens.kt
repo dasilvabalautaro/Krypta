@@ -8,6 +8,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
@@ -997,6 +998,12 @@ private fun MessageBubble(
 ) {
     val align = if (message.mine) Alignment.CenterEnd else Alignment.CenterStart
     val failed = message.mine && message.status == MessageStatus.FAILED
+    // Solo hay algo que copiar en las burbujas de texto: en imagen, archivo, audio y GIF el
+    // `text` va vacío (lo pone ChatViewModel al mapear el contenido).
+    val copyable = message.text.isNotBlank()
+    var menuOpen by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
     // Un color de fondo por rol con su pareja "on" correcta. La burbuja **propia** usa
     // `primary` (color de marca saturado), no `primaryContainer`: primary es oscuro en tema
     // claro y brillante en oscuro, así queda con luminosidad **opuesta** a la recibida (un
@@ -1038,8 +1045,22 @@ private fun MessageBubble(
                         Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), shape)
                     } else Modifier,
                 )
-                // Un mensaje fallido es tocable para reintentar el envío.
-                .then(if (failed) Modifier.clickable(onClick = onRetry) else Modifier)
+                // Un toque reintenta si el mensaje falló; la pulsación larga abre "Copiar"
+                // en las burbujas de texto. Va en un solo `combinedClickable` porque encadenar
+                // dos modificadores de gesto haría que el segundo no llegue a ver el evento.
+                .then(
+                    if (failed || copyable) {
+                        Modifier.combinedClickable(
+                            onClick = { if (failed) onRetry() },
+                            onLongClick = if (copyable) {
+                                {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    menuOpen = true
+                                }
+                            } else null,
+                        )
+                    } else Modifier,
+                )
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             CompositionLocalProvider(LocalContentColor provides onBg) {
@@ -1070,7 +1091,7 @@ private fun MessageBubble(
                         } else {
                             FileAttachment(message.file)
                         }
-                    else -> Text(message.text, color = onBg)
+                    else -> Text(rememberLinkifiedText(message.text, onBg), color = onBg)
                 }
                 // Pie de burbuja: hora y, en las propias, el estado como icono (reloj/✓/✓✓).
                 if (failed) {
@@ -1105,6 +1126,16 @@ private fun MessageBubble(
                     }
                 }
             }
+        }
+        // Anclado a la burbuja: se abre donde el usuario mantuvo pulsado.
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            DropdownMenuItem(
+                text = { Text("Copiar") },
+                onClick = {
+                    menuOpen = false
+                    copyMessageText(context, message.text)
+                },
+            )
         }
     }
 }
