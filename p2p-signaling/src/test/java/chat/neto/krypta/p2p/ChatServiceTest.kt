@@ -48,9 +48,15 @@ class ChatServiceTest {
         override suspend fun bootstrap(): String? = bootstrapAddr
         override suspend fun setBootstrap(addr: String) { lastSetBootstrap = addr }
         var connectCalls = 0
+        /** Simula un nodo que acepta el TCP y deja el handshake colgado (nunca vuelve). */
+        var hangOnConnect = false
+        /** Simula un dial que falla de inmediato. */
+        var failOnConnect = false
         override suspend fun connectDht(bootstrap: String) {
             connectCalls++
             connectedBootstrap = bootstrap
+            if (hangOnConnect) kotlinx.coroutines.awaitCancellation()
+            if (failOnConnect) error("connect bootstrap: i/o timeout")
         }
         override suspend fun selfAddrs(): List<String> = emptyList()
         override suspend fun reserveRelay(): String = ""
@@ -727,6 +733,41 @@ class ChatServiceTest {
 
         assertEquals(validAddr, signaling.connectedBootstrap)
         assertTrue(signaling.fetchCalls > 0)
+    }
+
+    /**
+     * Regresión del 2 sep 2026 (medida en vivo): `pollOnce` hacía `connectDht` y **luego**
+     * `fetchMailbox`, ambos sin plazo. Un nodo que acepta el TCP y no completa el handshake
+     * dejaba el latido colgado en el primer paso, así que **nunca** retiraba el buzón: la red
+     * de seguridad fallaba justo en el escenario para el que existe. Ahora el buzón se retira
+     * pase lo que pase con el DHT.
+     */
+    @Test
+    fun `pollOnce still fetches the mailbox when the DHT dial hangs`() = runTest {
+        val signaling = FakeSignaling().apply {
+            bootstrapAddr = validAddr
+            hangOnConnect = true
+        }
+        val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(emptyList()), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        chat.pollOnce()
+
+        assertTrue("debería intentar el DHT", signaling.connectCalls > 0)
+        assertTrue("el buzón debe retirarse aunque el DHT cuelgue", signaling.fetchCalls > 0)
+    }
+
+    /** Lo mismo cuando el dial falla rápido en vez de colgarse. */
+    @Test
+    fun `pollOnce still fetches the mailbox when the DHT dial fails`() = runTest {
+        val signaling = FakeSignaling().apply {
+            bootstrapAddr = validAddr
+            failOnConnect = true
+        }
+        val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(emptyList()), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        chat.pollOnce()
+
+        assertTrue("el buzón debe retirarse aunque falle el DHT", signaling.fetchCalls > 0)
     }
 
     /** Un trozo que no se pudo persistir no se confirma; su reentrega completa el archivo. */

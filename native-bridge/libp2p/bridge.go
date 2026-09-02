@@ -40,6 +40,11 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
+// BootstrapDialTimeout acota cada dial a un nodo bootstrap. Sin plazo propio, un nodo que
+// acepta el TCP pero no completa el handshake (frecuente en móvil tras un cambio de red, o
+// atravesando Cloudflare) se lleva por delante el ciclo entero de entrega.
+const BootstrapDialTimeout = 20 * time.Second
+
 // ProtocolID is the libp2p protocol for Krypta one-shot E2EE message streams.
 const ProtocolID = protocol.ID("/krypta/msg/1.0.0")
 
@@ -340,8 +345,14 @@ func (n *Node) StartDHT(bootstrap string, server bool) error {
 	// capa ya tolera nodos caídos: el buzón deposita en el primero vivo y retira de todos).
 	// Devolver el error de un solo nodo caído hacía que la app marcara "sin conexión" con
 	// la mensajería funcionando por el otro nodo (visto en vivo el 17 jul 2026).
-	connected := 0
-	var lastErr error
+	//
+	// Los dials van **en paralelo y con plazo propio** (BootstrapDialTimeout). Antes iban en
+	// serie sobre n.ctx —el contexto de vida del nodo, sin plazo—, así que un nodo lento
+	// retrasaba a los siguientes y el ciclo entero del `wanLoop` (reconectar → relay → buzón
+	// → rendezvous) se alargaba hasta varios minutos; medido el 2 sep 2026: 37 min sin un
+	// solo ciclo, con el buzón lleno y el móvil sin recoger nada. En paralelo el coste del
+	// paso es el del nodo más lento, no la suma.
+	var ais []*peer.AddrInfo
 	for _, line := range strings.Split(bootstrap, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -351,14 +362,39 @@ func (n *Node) StartDHT(bootstrap string, server bool) error {
 		if err != nil {
 			return fmt.Errorf("bootstrap %q: %w", line, err)
 		}
-		if err := n.h.Connect(n.ctx, *ai); err != nil {
-			lastErr = fmt.Errorf("connect bootstrap %s: %w", ai.ID, err)
-		} else {
-			connected++
-		}
+		ais = append(ais, ai)
 	}
-	if connected > 0 {
+	// Sin bootstrap no hay nada que conectar y NO es un error: es el caso del propio nodo
+	// de infra (arranca la DHT en modo servidor sin nadie a quien llamar).
+	if len(ais) == 0 {
 		return nil
+	}
+
+	// Cada dial en su goroutine, con su plazo. El resultado se espera hasta que UNO conecte
+	// (basta para estar en la WAN) o hasta que fallen todos: así el paso cuesta lo que el
+	// nodo **más rápido**, no lo que el más lento. Los dials que queden en marcha NO se
+	// cancelan —se mueren solos al vencer su plazo— para que un nodo algo lento acabe
+	// conectando igual y sirva en el siguiente ciclo.
+	results := make(chan error, len(ais))
+	for _, ai := range ais {
+		go func(ai *peer.AddrInfo) {
+			ctx, cancel := context.WithTimeout(n.ctx, BootstrapDialTimeout)
+			defer cancel()
+			if err := n.h.Connect(ctx, *ai); err != nil {
+				results <- fmt.Errorf("connect bootstrap %s: %w", ai.ID, err)
+				return
+			}
+			results <- nil
+		}(ai)
+	}
+
+	var lastErr error
+	for range ais {
+		if err := <-results; err == nil {
+			return nil // un bootstrap vivo = estamos en la WAN
+		} else {
+			lastErr = err
+		}
 	}
 	return lastErr
 }
@@ -373,10 +409,18 @@ func (n *Node) ReserveRelay(relayAddrs string) string {
 	if len(relays) == 0 {
 		return "sin relay configurado"
 	}
-	parts := make([]string, 0, len(relays))
-	for _, ai := range relays {
-		parts = append(parts, n.reserveOne(ai))
+	// En paralelo: cada reserva ya tenía su plazo de 30 s, pero iban en serie, así que con
+	// tres nodos el paso costaba hasta 90 s dentro del ciclo del wanLoop.
+	parts := make([]string, len(relays))
+	var wg sync.WaitGroup
+	for i, ai := range relays {
+		wg.Add(1)
+		go func(i int, ai peer.AddrInfo) {
+			defer wg.Done()
+			parts[i] = n.reserveOne(ai)
+		}(i, ai)
 	}
+	wg.Wait()
 	return strings.Join(parts, " | ")
 }
 
@@ -737,15 +781,28 @@ func (n *Node) MailboxFetch(mailboxAddrs string) (int, error) {
 	if len(nodes) == 0 {
 		return 0, errors.New("sin nodo de buzón configurado")
 	}
+	// En paralelo: cada nodo ya tenía su plazo de 60 s, pero en serie el paso podía costar
+	// hasta 180 s con tres nodos — y este es justo el paso que entrega los mensajes.
 	total := 0
 	var errs []string
+	var (
+		mu sync.Mutex
+		wg sync.WaitGroup
+	)
 	for _, ai := range nodes {
-		got, err := n.mailboxFetchFrom(ai)
-		total += got
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", shortID(ai.ID), err))
-		}
+		wg.Add(1)
+		go func(ai peer.AddrInfo) {
+			defer wg.Done()
+			got, err := n.mailboxFetchFrom(ai)
+			mu.Lock()
+			defer mu.Unlock()
+			total += got
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", shortID(ai.ID), err))
+			}
+		}(ai)
 	}
+	wg.Wait()
 	if len(errs) == len(nodes) {
 		return total, errors.New("buzón: " + strings.Join(errs, "; "))
 	}
@@ -842,12 +899,16 @@ func (n *Node) StartWake(wakeAddrs string, h WakeHandler) {
 	if n.wakeCancel != nil {
 		return
 	}
-	ctx, cancel := context.WithCancel(n.ctx)
-	n.wakeCancel = cancel
+	// Parsear ANTES de marcar el wake como arrancado. Antes se guardaba wakeCancel y solo
+	// después se miraba la lista: si StartWake llegaba sin nodos (host aún sin arrancar, o
+	// pref de bootstrap todavía vacía), quedaba "arrancado" con **cero** streams y el guard
+	// de arriba impedía reintentarlo para siempre — sin push, solo sondeo.
 	nodes := parseAddrInfos(wakeAddrs)
 	if len(nodes) == 0 {
 		return
 	}
+	ctx, cancel := context.WithCancel(n.ctx)
+	n.wakeCancel = cancel
 	for _, ai := range nodes {
 		go n.wakeLoop(ctx, ai, h)
 	}

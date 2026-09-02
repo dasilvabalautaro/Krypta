@@ -266,18 +266,14 @@ class ChatService @Inject constructor(
         while (true) {
             val bootstrap = bootstrapAddr
             if (bootstrap != null) {
-                val wasConnected = _wanStatus.value == WanStatus.CONNECTED
-                if (!wasConnected) _wanStatus.value = WanStatus.CONNECTING
-                val result = runCatching { signaling.connectDht(bootstrap) }
-                if (result.isSuccess) {
-                    if (!wasConnected) logLine("DHT: conectado")
-                    _wanStatus.value = WanStatus.CONNECTED
-                    logRelayStatus()
-                    fetchMailbox()
-                    announceAndFind()
-                } else {
+                // Todo el ciclo bajo un plazo máximo. Cada paso lleva además el suyo (ver
+                // [step]): sin ellos, el 2 sep 2026 se midieron 37 min sin un solo ciclo, con
+                // el buzón lleno y el móvil sin recoger nada — el bucle es secuencial, así que
+                // cualquier llamada de red que se cuelgue congela **toda** la entrega.
+                val cycled = withTimeoutOrNull(CYCLE_BUDGET_MS) { wanCycle(bootstrap) }
+                if (cycled == null) {
                     _wanStatus.value = WanStatus.ERROR
-                    logLine("DHT: sin conexión, reintentando — ${result.exceptionOrNull()?.message ?: ""}")
+                    logLine("ciclo WAN abortado por tiempo (${CYCLE_BUDGET_MS / 1000}s), reintentando")
                 }
             }
             // Intervalo adaptativo (batería): si el stream de wake está abierto, los mensajes
@@ -292,6 +288,51 @@ class ChatService @Inject constructor(
             // Espera interrumpible: kickWan() (p. ej. al cambiar de red) adelanta el ciclo.
             withTimeoutOrNull(interval) { wanKick.receive() }
         }
+    }
+
+    /**
+     * Un ciclo del bucle WAN. Cada paso va acotado por [step]: un nodo lento o colgado hace
+     * que se salte **ese** paso, no que se pare la entrega. El orden importa: el buzón se
+     * retira antes del rendezvous porque es lo que entrega mensajes; descubrir peers puede
+     * esperar al siguiente ciclo.
+     */
+    private suspend fun wanCycle(bootstrap: String) {
+        val wasConnected = _wanStatus.value == WanStatus.CONNECTED
+        if (!wasConnected) _wanStatus.value = WanStatus.CONNECTING
+
+        val connected = step("DHT", CONNECT_BUDGET_MS) { signaling.connectDht(bootstrap) }
+        if (connected) {
+            if (!wasConnected) logLine("DHT: conectado")
+            _wanStatus.value = WanStatus.CONNECTED
+        } else {
+            _wanStatus.value = WanStatus.ERROR
+        }
+
+        // El wake se re-arma cada ciclo: StartWake es idempotente en Go, y si la primera
+        // llamada llegó sin host o sin lista de nodos, esta lo levanta en vez de quedarse
+        // sin push para siempre.
+        step("wake", CONNECT_BUDGET_MS) { signaling.startWake() }
+
+        // Aunque el DHT no haya conectado: el buzón se retira por dial directo a cada nodo,
+        // y es la vía que entrega los mensajes. Antes iba dentro del `if` del DHT, así que un
+        // fallo al conectar dejaba el correo sin recoger.
+        step("buzón", MAILBOX_BUDGET_MS) { fetchMailbox() }
+
+        if (connected) {
+            step("relay", RELAY_BUDGET_MS) { logRelayStatus() }
+            step("rendezvous", RENDEZVOUS_BUDGET_MS) { announceAndFind() }
+        }
+    }
+
+    /**
+     * Ejecuta un paso del ciclo con plazo y sin dejar que su fallo tumbe el resto. Devuelve
+     * `true` solo si terminó a tiempo y sin excepción. Solo loguea al vencer el plazo (un
+     * paso lento repetido llenaría el diagnóstico).
+     */
+    private suspend fun step(name: String, budgetMs: Long, block: suspend () -> Unit): Boolean {
+        val done = withTimeoutOrNull(budgetMs) { runCatching { block() }.isSuccess }
+        if (done == null) logLine("$name: sin respuesta en ${budgetMs / 1000}s, se salta este ciclo")
+        return done == true
     }
 
     @Volatile
@@ -320,12 +361,16 @@ class ChatService @Inject constructor(
      * para el que se creó. Tras `start()` se releen los nodos guardados por si acaso.
      */
     suspend fun pollOnce() {
-        runCatching { start() }
+        withTimeoutOrNull(CONNECT_BUDGET_MS) { runCatching { start() } }
         val bootstrap = bootstrapAddr
             ?: runCatching { signaling.bootstrap() }.getOrNull()?.takeIf { it.isNotBlank() }
             ?: return
-        runCatching { signaling.connectDht(bootstrap) }
-        fetchMailbox()
+        // Con plazo, y el buzón se retira **pase lo que pase** con el DHT. Antes eran dos
+        // llamadas sin plazo y en este orden, así que un dial colgado dejaba al latido sin
+        // llegar nunca a `fetchMailbox()`: la red de seguridad fallaba justo en el escenario
+        // para el que existe (medido en vivo el 2 sep 2026).
+        step("DHT (latido)", CONNECT_BUDGET_MS) { signaling.connectDht(bootstrap) }
+        step("buzón (latido)", MAILBOX_BUDGET_MS) { fetchMailbox() }
     }
 
 
@@ -857,6 +902,15 @@ class ChatService @Inject constructor(
         // Bucle relajado cuando el wake empuja la entrega: renueva relay (TTL ~1 h) y
         // redescubre cada 3 min; el buzón sigue como red de seguridad. Menos despertares.
         const val WAKE_IDLE_MS = 180_000L
+        // Plazos por paso del ciclo WAN. Existen porque el bucle es secuencial: sin ellos una
+        // sola llamada de red colgada para la entrega entera (medido en vivo el 2 sep 2026).
+        // El presupuesto del ciclo es menor que el intervalo relajado, así que un ciclo malo
+        // nunca puede solaparse con el siguiente ni "comerse" varios turnos.
+        const val CONNECT_BUDGET_MS = 30_000L
+        const val MAILBOX_BUDGET_MS = 45_000L
+        const val RELAY_BUDGET_MS = 30_000L
+        const val RENDEZVOUS_BUDGET_MS = 45_000L
+        const val CYCLE_BUDGET_MS = 150_000L
         // Tamaño de trozo de archivo: deja aire bajo el límite del buzón (64 KiB) tras el
         // sobre + el cifrado (nonce 12 + tag 16 + cabecera).
         const val CHUNK_SIZE = 48 * 1024
