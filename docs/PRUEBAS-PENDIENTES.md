@@ -9,7 +9,14 @@
 > `~/Desktop/krypta-arm64-debug.apk` (`./gradlew :app:assembleDebug -PslimAbi` + copia) y lo
 > comparte el autor. **Ambos móviles deben tener la misma versión** para cada prueba.
 >
-> Última actualización: 16 jul 2026. (La videollamada §11 quedó **VERIFICADA** el 16 jul — funcionó bien.)
+> Última actualización: **2 sep 2026** — auditoría previa a preparar la versión de producción.
+> ⛔ **Hallazgo bloqueante: la entrega en segundo plano NO funciona hoy en el móvil del autor.**
+> Ver **§13**. Con la app cerrada (pero viva, en primer plano el servicio, con WiFi validado,
+> exención de batería y pantalla encendida) el móvil **no mantiene ninguna conexión con los
+> nodos y no retira el buzón**; al abrir la app lo recoge al instante. Es exactamente la queja
+> "llegan mensajes pero no suena la alarma", y no está resuelta por la auditoría del 13 ago.
+>
+> (La videollamada §11 quedó **VERIFICADA** el 16 jul — funcionó bien.)
 >
 > **APK del 16 jul** (`~/Desktop/krypta-arm64-debug.apk`): todo lo del 12 jul (rediseño M3,
 > 7d parcial, multi-nodo cliente, respaldo de identidad) + **bloqueo de acceso a la app**
@@ -339,6 +346,142 @@ quejaba el autor ("hay mensajes recibidos pero la alarma no suena").
      el `invite` llega por buzón en el siguiente latido y timbra. (Ojo: si tarda más que el
      `INVITE_FRESH_MS` de `CallService`, lo correcto es una fila de "📞 Llamada perdida" en vez
      de timbrar tarde — anotar cuál de los dos pasa.)
+
+---
+
+## 13. Entrega en 2.º plano detenida — **FALLO REPRODUCIDO EN 1 MÓVIL (2 sep 2026)**
+
+> No es una prueba "pendiente del segundo móvil": es un **fallo ya reproducido** con uno solo.
+> Bloquea la salida a producción, porque rompe la promesa central de la app (los mensajes
+> llegan sin abrirla).
+
+### Qué se observó (móvil del autor, TECNO KM5s, Android 15)
+Condiciones de partida, todas favorables: proceso vivo (pid estable, 67 hilos, `State: S`, no
+congelado), `KryptaForegroundService` en primer plano (`isForeground=true types=0x40000000`),
+`chat.neto.krypta` en la whitelist de `deviceidle`, bucket de standby **EXEMPTED (5)**,
+`netpolicy` con `effective=NONE` (nada bloqueado), **WiFi validado**, pantalla **encendida** y
+dispositivo `ACTIVE` (sin doze).
+
+1. Se depositó un sobre de sonda en el buzón del VPS para el PeerID del propio móvil
+   (`TestMailboxPutAgainstLiveNode` con `MBX_ADDR`=VPS y `MBX_TO`=PeerID del móvil; un
+   remitente desconocido se descarta y **se confirma igual**, así que no deja basura).
+2. Durante **4 minutos** (12 muestras cada 20 s) se midió a la vez: sobres en el buzón del nodo
+   y conexiones TCP establecidas del uid de Krypta.
+   - Resultado: `sobres_en_buzon=1` y `conexiones_establecidas=0` en **las 12 muestras**.
+   - El "latido" (`HeartbeatReceiver`, ~2 min) **no lo rescató**: `dumpsys alarm` daba la
+     última alarma **18 min antes**.
+3. Al **abrir la app**: aparecen 2 conexiones establecidas y el buzón pasa a **0 sobres al
+   instante** (diagnóstico: `07:54:03 buzón: 1 mensaje(s) recogido(s)`).
+
+### La prueba de que el bucle estaba parado, no solo dormido
+El panel de Diagnóstico guarda las **últimas 30 líneas** y `announceAndFind()` escribe
+`rendezvous: anunciando a N contacto(s)` **en cada ciclo**. Las líneas visibles eran contiguas:
+
+```
+07:17:09  rendezvous: anunciando a 2 contacto(s)
+07:33:45  → enviado a …unNxKaXK
+07:54:03  buzón: 1 mensaje(s) recogido(s)
+```
+
+Con el intervalo relajado (180 s, "wake activo") deberían verse **~12 ciclos** entre 07:17 y
+07:54. No hay ninguno. Y en 07:33 el autor estaba **usando la app** (envió un mensaje), así que
+tampoco es solo "el OEM suspende la red con la pantalla apagada": **el bucle WAN estaba parado
+incluso con la app en uso**.
+
+### Causa probable (a confirmar)
+`wanLoop` es estrictamente secuencial y **ninguna de sus llamadas tiene timeout**:
+`connectDht` → `logRelayStatus` (`reserveRelay`) → `fetchMailbox` → `announceAndFind`.
+`Node.StartDHT` (Go) hace `n.h.Connect(n.ctx, …)` con el **contexto de vida del nodo**, sin
+plazo propio, y recorre los 3 bootstraps **en serie**. Si un dial se queda colgado (típico en
+móvil: TCP medio abierto tras un cambio de red, o un nodo que acepta la conexión pero no
+completa el handshake), **se congela el bucle entero de entrega**, indefinidamente.
+
+Y el mismo defecto **anula la red de seguridad**: `pollOnce()` hace
+`runCatching { signaling.connectDht(bootstrap) }` **antes** de `fetchMailbox()`, también sin
+timeout — si el dial cuelga, el latido nunca llega a retirar el buzón. Es decir, el latido
+falla justo en el escenario para el que existe.
+
+Pista que encaja: con la app abierta el móvil mantiene conexión con los **dos nodos de
+Cloudflare** (104.21.65.68:443 y 172.67.159.8:443) pero **no** con el VPS primario
+(216.128.169.83:4001), que es **la primera línea** de `DEFAULT_BOOTSTRAP` y donde
+`MailboxPut` deposita primero. El buzón del VPS sí se vació, pero por el `MailboxFetch`
+periódico (abre y cierra), no por un stream de wake sostenido.
+
+### Daño real ya causado
+En el buzón del VPS había **3 sobres para `12D3KooWHGKAvSx8…` con fecha 26 ago** (el chat de
+"Jimena" en la lista sigue en **"enviado"** con esa misma fecha). Con el **TTL de 7 días** del
+buzón, esos mensajes **caducan sin haberse entregado nunca** — pérdida silenciosa.
+
+### Arreglado el 2 sep 2026 (mismo día)
+1. - [x] **Plazo y paralelismo en el dial (Go, `StartDHT`)**. Los tres bootstraps se dialan
+     ahora **en paralelo**, cada uno con su `context.WithTimeout` (`BootstrapDialTimeout`,
+     20 s), y la función **vuelve en cuanto UNO conecta** — el paso cuesta lo que el nodo más
+     rápido, no la suma de los tres. Los dials restantes no se cancelan: se mueren solos al
+     vencer el plazo, así que un nodo algo lento acaba conectando y sirve en el ciclo
+     siguiente. Cubierto por `TestStartDHTNotBlockedByStalledBootstrap` (un *black hole* TCP
+     —acepta y no habla— el **primero** de la lista: antes bloqueaba, ahora conecta en **2 ms**)
+     y `TestStartDHTAllStalledRespectsTimeout` (con todos colgados vuelve con error dentro del
+     plazo, en vez de no volver). `StartDHT("")` sigue siendo válido (el nodo de infra arranca
+     la DHT en modo servidor sin bootstrap).
+2. - [x] **`MailboxFetch` y `ReserveRelay` en paralelo** (Go). Cada uno ya tenía su plazo
+     (60 s y 30 s), pero iban **en serie**: con tres nodos, hasta 180 s y 90 s por ciclo.
+3. - [x] **Plazos por paso + watchdog del ciclo (Kotlin, `wanCycle`/`step`)**. Cada paso del
+     ciclo va acotado (`CONNECT/MAILBOX/RELAY/RENDEZVOUS_BUDGET_MS`) y el ciclo entero bajo
+     `CYCLE_BUDGET_MS` (150 s, **menor que el intervalo relajado de 180 s**, así que un ciclo
+     malo no puede solaparse con el siguiente ni comerse varios turnos). Un paso que vence se
+     **salta**, no para la entrega, y lo dice en el diagnóstico.
+4. - [x] **El buzón se retira aunque el DHT falle o cuelgue**. Antes `fetchMailbox()` estaba
+     *dentro* del `if` del `connectDht`, así que un fallo de conexión dejaba el correo sin
+     recoger; ahora va fuera (el buzón se retira por dial directo a cada nodo, no necesita la
+     DHT). Y el **orden cambió**: primero el buzón, después el rendezvous — entregar mensajes
+     importa más que descubrir peers, que puede esperar al ciclo siguiente.
+5. - [x] **Lo mismo en el latido (`pollOnce`)**, que es donde más dolía: hacía `connectDht` y
+     **luego** `fetchMailbox`, ambos sin plazo, así que un dial colgado dejaba la red de
+     seguridad sin llegar nunca a retirar el buzón. Regresión fijada por
+     `pollOnce still fetches the mailbox when the DHT dial hangs` (**verificado que falla con
+     el código anterior**) y su gemelo para el dial que falla rápido.
+6. - [x] **Fallo de enganche en `StartWake` (Go)**: guardaba `wakeCancel` **antes** de mirar la
+     lista de nodos, así que una llamada sin nodos (host aún sin arrancar, o pref de bootstrap
+     todavía vacía) lo dejaba marcado como "arrancado" con **cero** streams, y el guard de
+     reentrada impedía reintentarlo **para siempre** — sin push, solo sondeo. Ahora parsea
+     primero, y el `wanCycle` **re-arma el wake cada ciclo** (es idempotente).
+
+### Medido tras los arreglos (2 sep, mismo día) — mejora parcial, **el fallo sigue**
+- ✅ **El stream con el VPS primario ya se sostiene**: nada más mandar la app a 2.º plano hay
+  **tres** conexiones establecidas (`216.128.169.83:4001` + las dos de Cloudflare). Antes el
+  VPS no aparecía nunca. Es coherente con los arreglos 1 y 6.
+- ❌ **Pero la entrega en 2.º plano sigue sin funcionar en este móvil.** Repetida la medición
+  (sonda + muestreo): **5 minutos, buzón a 1, conexiones a 0**. Al ~1–2 min de mandar la app a
+  segundo plano, el móvil **tira todas las conexiones** del proceso.
+- ❌ Y el latido **tampoco se dispara**: la alarma **sí está programada**
+  (`dumpsys alarm` → `Pending alarms per uid: […, u0a311:2, …]`; ojo, esta ROM **no** imprime
+  la sección de lotes, así que no verla ahí no significa nada) pero lleva **20 min sin
+  ejecutarse** (`appops … WAKE_LOCK` confirma que el receptor no corrió). Y eso con el proceso
+  vivo, FGS en marcha, `am get-standby-bucket` = **5 (EXEMPTED)** y el uid en las dos listas de
+  exención de `dumpsys alarm`.
+
+**Conclusión honesta:** los arreglos eliminan una causa real y grave (el bucle y el latido se
+podían quedar colgados para siempre, y de hecho **la cadena del latido moría del todo**: como
+`pollOnce` no volvía, el `finally` que reprograma la siguiente alarma no llegaba a ejecutarse
+nunca). Pero **no eran la única causa**. Lo que queda es de **nivel OEM**: Transsion/HiOS le
+retira los sockets a la app en segundo plano y le suprime las alarmas
+`setAndAllowWhileIdle` pese a la exención de batería. Eso **no se arregla desde el código de
+la app**; es lo que ya documenta la §1 (autostart, Phone Master → apps protegidas, batería sin
+restricciones, WiFi siempre activo), y hay que **verificar en el móvil que esos ajustes están
+puestos** antes de sacar conclusiones sobre el resto.
+
+### Qué queda
+1. - [ ] **Comprobar en el TECNO los ajustes manuales del OEM** (autostart, Phone Master,
+     batería sin restricciones) y repetir la medición. Si con ellos puestos entrega, el fallo
+     es de configuración del móvil; si no, hace falta otra vía (p. ej. UnifiedPush).
+2. - [ ] Confirmar si el fallo es **específico del TECNO** (la §1 dice que la colaboradora, con
+     otro modelo, **sí recibía**) — es lo que decide si esto bloquea la publicación para todos
+     o solo es una nota de compatibilidad para móviles Transsion.
+3. - [ ] Avisar al usuario cuando un mensaje lleva demasiado en "enviado" sin confirmar (hoy
+     caduca en silencio a los 7 días). **No abordado**: es cambio de producto, no de este fallo.
+4. - [ ] **Prueba de no regresión, obligatoria antes de publicar**: repetir la medición de
+     arriba (depositar la sonda + muestrear 4 min con la app cerrada) y ver el buzón a 0 **sin
+     abrir la app**. Con dos móviles, además, §12.1.
 
 ---
 
