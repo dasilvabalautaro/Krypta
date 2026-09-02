@@ -717,6 +717,17 @@ compiled to an AAR with gomobile. Kotlin calls it through generated classes
 - **Regenerate the AAR** after editing any `.go`: run
   [native-bridge/libp2p/build-aar.sh](native-bridge/libp2p/build-aar.sh). Gradle does
   *not* rebuild it — it consumes the `libs/krypta-p2p.aar` sitting on disk.
+- **The AAR's consumer ProGuard rules are narrowed by the build script** (2 Sep 2026):
+  gomobile writes a `proguard.txt` *inside* the AAR derived from `-javapkg`, containing
+  `-keep class chat.neto.krypta.** { *; }` — the `-javapkg` prefix, which covers the **whole
+  app**, not just the bound package. Because consumer rules live inside the AAR they never
+  appear in [app/proguard-rules.pro](app/proguard-rules.pro), so the effect was invisible: R8
+  was **not obfuscating, optimizing or shrinking any of Krypta's own code** (member names
+  included), only the libraries'. `build-aar.sh` now rewrites that entry to
+  `chat.neto.krypta.bridge.**` after `gomobile bind`. Own-code obfuscation went 12.8% → 92.7%
+  and the DEX 3.03 → 2.73 MB. **If you ever regenerate the AAR by calling `gomobile bind`
+  directly instead of via the script, the wide rule comes back.** Runtime-verified under R8 on
+  device (node starts, valid PeerID, real connections, "conectado").
 - **Mandatory linker flags:** the build script passes
   `-ldflags="-checklinkname=0 -extldflags=-Wl,-z,max-page-size=16384"`. Both are required:
   (a) go-libp2p pulls `github.com/wlynxg/anet`, which `//go:linkname`s the unexported

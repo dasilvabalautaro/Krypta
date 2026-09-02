@@ -32,5 +32,37 @@ gomobile bind \
   -o ../libs/krypta-p2p.aar \
   .
 
+# --- Acota el proguard de consumidor que mete gomobile -----------------------------------
+# gomobile escribe dentro del AAR un proguard.txt de consumidor derivado de -javapkg:
+#
+#     -keep class go.** { *; }
+#     -keep class chat.neto.krypta.** { *; }
+#
+# La segunda regla es MUCHO más ancha de lo necesario: el paquete bindeado es
+# chat.neto.krypta.bridge, pero el prefijo cubre `chat.neto.krypta.**`, o sea **la app
+# entera**. Efecto real (detectado el 2 sep 2026 al revisar el mapping.txt): R8 no ofuscaba,
+# ni optimizaba, ni podaba NADA del código propio de Krypta —ni los nombres de miembros—,
+# solo el de las librerías. Las reglas de consumidor de un AAR se aplican sin que nadie las
+# vea en app/proguard-rules.pro, así que esto es invisible salvo que se audite la config
+# final de R8 (app/build/outputs/mapping/release/configuration.txt).
+#
+# Lo que de verdad hace falta preservar para el puente JNI ya está en
+# app/proguard-rules.pro: go.**, chat.neto.krypta.bridge.** y las implementaciones de
+# go.Seq$Proxy. Aquí se reescribe la regla al paquete realmente bindeado.
+echo "Acotando el proguard de consumidor del AAR a chat.neto.krypta.bridge.**"
+AAR_ABS="$(cd ../libs && pwd)/krypta-p2p.aar"
+PG_TMP="$(mktemp -d)"
+cat > "$PG_TMP/proguard.txt" <<'PROGUARD'
+-keep class go.** { *; }
+-keep class chat.neto.krypta.bridge.** { *; }
+PROGUARD
+# `zip` reemplaza la entrada existente dentro del AAR (que es un zip). Hay que ejecutarlo
+# desde el directorio del fichero para que la entrada quede en la raíz del AAR, sin ruta.
+(cd "$PG_TMP" && zip -q "$AAR_ABS" proguard.txt)
+rm -rf "$PG_TMP"
+
+echo "proguard.txt del AAR:"
+unzip -p ../libs/krypta-p2p.aar proguard.txt | sed 's/^/    /'
+
 echo "AAR regenerado en native-bridge/libs/krypta-p2p.aar"
 ls -lh ../libs/krypta-p2p.aar
