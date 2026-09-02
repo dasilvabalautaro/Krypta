@@ -599,9 +599,14 @@ a plain `Text`, no `SelectionContainer`, no long-press, and no link detection, s
 was a dead end (a code, an address, a URL). This was never a deliberate security decision:
 nothing in the docs recorded it (and this repo *does* record its deliberate omissions), and the
 clipboard was already used in Settings for the PeerID. Now a **long-press on a text bubble**
-opens a "Copiar" item (`combinedClickable` + `DropdownMenu`; the tap branch still does the
-FAILED-retry, in **one** modifier — chaining two gesture modifiers means the second never sees
-the event). Copy goes through `ui/MessageText.kt`'s `copyMessageText`, which uses the **platform**
+opens a small round **icon-only copy button** in a `Popup`, anchored to the side the bubble sits
+on (`combinedClickable`; the tap branch still does the FAILED-retry, in **one** modifier —
+chaining two gesture modifiers means the second never sees the event). It started as a
+`DropdownMenu` with a "Copiar" item and the author rejected it as "un grito, muy grande": a
+single-action menu still pays M3's 112dp minimum menu width plus padding, so it landed as a
+placard over the message (224×96 px measured). The button is 40dp visually, and M3 still gives
+it the 48dp (80 px) touch target. With the label gone the icon's `contentDescription` is the
+only thing left for TalkBack, so it must stay. Copy goes through `ui/MessageText.kt`'s `copyMessageText`, which uses the **platform**
 `ClipboardManager` rather than Compose's `LocalClipboardManager` because only the former can set
 `ClipDescription.EXTRA_IS_SENSITIVE` (API 33+, guarded) — without it Android 13+ paints the copied
 message in the clipboard preview, which is exactly what `FLAG_SECURE` prevents on that screen.

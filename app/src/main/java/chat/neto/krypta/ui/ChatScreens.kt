@@ -47,6 +47,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -88,6 +89,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.window.Popup
 import androidx.hilt.navigation.compose.hiltViewModel
 import chat.neto.krypta.AppLock
 import chat.neto.krypta.ScreenSecurity
@@ -1132,21 +1136,40 @@ private fun MessageBubble(
                 }
             }
         }
-        // Anclado a la burbuja: se abre donde el usuario mantuvo pulsado.
-        DropdownMenu(
-            expanded = menuOpen,
-            onDismissRequest = { menuOpen = false },
-            shape = RoundedCornerShape(16.dp),
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        ) {
-            DropdownMenuItem(
-                text = { Text("Copiar") },
-                leadingIcon = { Icon(KryptaCopyIcon, contentDescription = null) },
-                onClick = {
-                    menuOpen = false
-                    copyMessageText(context, message.text)
-                },
-            )
+        // Acción única = un botón, no un menú. Un DropdownMenu con un solo item ocupa el ancho
+        // mínimo de menú de M3 (112 dp) más su relleno, y para "Copiar" resultaba un cartel
+        // enorme encima del mensaje. Aquí basta un botón redondo con el icono, pegado al lado
+        // de la burbuja que se pulsó.
+        if (menuOpen) {
+            Popup(
+                alignment = if (message.mine) Alignment.TopEnd else Alignment.TopStart,
+                offset = IntOffset(0, with(LocalDensity.current) { (-6).dp.roundToPx() }),
+                onDismissRequest = { menuOpen = false },
+                properties = PopupProperties(focusable = true),
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    tonalElevation = 3.dp,
+                    shadowElevation = 3.dp,
+                ) {
+                    IconButton(
+                        onClick = {
+                            menuOpen = false
+                            copyMessageText(context, message.text)
+                        },
+                        modifier = Modifier.size(40.dp),
+                    ) {
+                        // Con el texto fuera, la descripción es lo único que queda para
+                        // TalkBack: sin ella el botón sería un icono mudo.
+                        Icon(
+                            KryptaCopyIcon,
+                            contentDescription = "Copiar mensaje",
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+            }
         }
     }
 }
