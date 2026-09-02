@@ -485,6 +485,69 @@ puestos** antes de sacar conclusiones sobre el resto.
 
 ---
 
+## 14. "Cerrar todo" y borrar notificaciones — **MEDIDO (2 sep 2026)**
+
+Reporte del autor: al usar "Cerrar todo" en recientes, o al borrar todas las notificaciones
+desde la cortina, desaparece el aviso "Conectado — recibiendo mensajes cifrados" y Krypta deja
+de recibir. Son **dos casos distintos** y solo uno hace lo que parece.
+
+### Caso A — "Cerrar todo" en recientes (`com.transsion.hilauncher:id/ts_btn_recents_clear`)
+**Mata Krypta, pero se recupera sola.** Primera medición: el pid desaparece al instante, el
+FGS cae y el aviso se va. La **alarma del latido sobrevive** (`Pending alarms per uid` →
+`u0a311:1`) y a los **~160 s** el proceso volvió, con el servicio incluido:
+
+```
+ActivityManager: Background started FGS: Allowed [callingPackage: chat.neto.krypta;
+  code:SYSTEM_ALLOW_LISTED; ...]
+```
+
+(se le permite arrancar un FGS desde segundo plano por la exención de batería). O sea: no queda
+muerta, queda **ciega ~2–3 min**.
+
+⚠️ **No se pudo reproducir después.** En 4 intentos posteriores la tarea sí se quitaba de
+recientes (`dumpsys activity recents` → 0) pero **el proceso sobrevivía** con el FGS en pie. Se
+hizo una prueba A/B desactivando el `onTaskRemoved` nuevo y **también sobrevivía**, así que la
+diferencia con la primera medición es **ambiental** (probablemente el limpiador de HiOS perdona
+a las apps lanzadas hace poco), no mérito del arreglo. Queda pendiente reproducirlo en
+condiciones más parecidas a las del autor: app llevando horas abierta, a batería, sin cable.
+
+### Caso B — "Borrar todo" en la cortina — **NO mata nada**
+Pulsando el botón real del sistema (`com.android.systemui:id/btn_clear_all`): mismo pid antes y
+después, `isForeground=true`, y el aviso **sigue posteado**
+(`flags=ONGOING_EVENT|NO_CLEAR|FOREGROUND_SERVICE`). Lo único que ocurre es que **desaparece de
+la vista**: desde Android 14 el usuario puede descartar el aviso de un servicio en primer plano
+y el servicio sigue corriendo. Krypta **sigue recibiendo**; lo que se pierde es la señal visual.
+
+### Por qué WhatsApp no necesita esto
+Es diferencia de arquitectura, no fallo: WhatsApp recibe por **FCM (el push de Google)** y por
+eso no necesita aviso permanente. Krypta renunció a los terceros a propósito, así que depende de
+mantener su propia conexión, y en Android eso obliga al FGS con su aviso. No se pueden tener las
+tres cosas a la vez: sin push de terceros, sin aviso permanente y con entrega instantánea.
+
+### Arreglado
+- [x] **`onDestroy` cancelaba el latido.** `HeartbeatReceiver.cancel(this)` corría al destruirse
+      el servicio — y como **nada en la app lo para a propósito** (no hay un solo `stopSelf` ni
+      `stopService` en todo el código), ese `cancel` solo podía dispararse cuando el sistema o
+      el OEM tumbaba el servicio: justo cuando el latido es lo único que puede resucitarlo. Se
+      estaba matando la red de seguridad en el único escenario para el que existe. Ahora
+      `onDestroy` **pide un latido inmediato** en vez de cancelarlo.
+- [x] **`onTaskRemoved` no existía.** Ahora pide un latido inmediato (`scheduleNow`, +3 s) para
+      que, cuando el "Cerrar todo" sí mate la app, vuelva en segundos en vez de en ~160 s. No se
+      pudo demostrar en vivo por lo dicho arriba, pero es correcto: `START_STICKY` no rearranca
+      un servicio cuya tarea ha quitado el usuario.
+- [x] **Ayuda in-app**: entrada nueva en "Problemas frecuentes" explicando que "Cerrar todo" sí
+      cierra Krypta, que el candado de recientes la excluye, y por qué otras apps no lo
+      necesitan. La entrada que ya existía sobre ocultar el aviso fijo era correcta y se
+      confirma con la medición del caso B.
+
+### Pendiente
+1. - [ ] Reproducir el caso A a batería y con la app llevando horas, para saber si el latido de
+     3 s basta o si HiOS también bloquea el rearranque.
+2. - [ ] Valorar un aviso en la UI que distinga "aviso oculto" de "servicio parado", ya que hoy
+     el usuario no puede saber cuál de los dos tiene.
+
+---
+
 ## 10. DCUtR directo en celular (gate de NAT) — **BLOQUEADO por hardware**
 Requiere **2 SIMs de operadoras distintas** (CGNAT real). Medir si la conexión sube a
 directa (DCUtR) o se queda en relay.

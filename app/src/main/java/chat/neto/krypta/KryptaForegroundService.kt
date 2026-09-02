@@ -90,13 +90,35 @@ class KryptaForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
+    /**
+     * El usuario quitó Krypta de **recientes** (en HiOS, el botón "Cerrar todo"). Eso mata el
+     * proceso, el servicio y su aviso: medido en el TECNO el 2 sep 2026, el pid desaparece al
+     * instante y con él la conexión.
+     *
+     * `START_STICKY` no basta —el sistema no rearranca un servicio cuya tarea ha quitado el
+     * usuario— así que aquí se pide un latido **inmediato**: es la misma vía que ya resucita
+     * la app sola (verificado: el sistema lo permite con `Background started FGS: Allowed`,
+     * `code:SYSTEM_ALLOW_LISTED`, por la exención de batería). Sin esto había que esperar al
+     * latido normal: se midieron **~160 s a ciegas**, sin recibir nada y sin aviso, que el
+     * usuario lee como "Krypta se apagó".
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        HeartbeatReceiver.scheduleNow(this)
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         runCatching {
             getSystemService(ConnectivityManager::class.java)
                 .unregisterNetworkCallback(networkCallback)
         }
         wifiLock?.let { runCatching { if (it.isHeld) it.release() } }
-        HeartbeatReceiver.cancel(this)
+        // OJO: aquí NO se cancela el latido. Nada en la app para este servicio a propósito
+        // (no hay un solo stopSelf/stopService), así que si llegamos aquí es porque el
+        // sistema o el OEM lo está tumbando — justo cuando el latido es lo ÚNICO que puede
+        // devolver la app a la vida. Cancelarlo mataba la red de seguridad en el único
+        // escenario para el que existe. Se pide uno inmediato por el mismo motivo.
+        HeartbeatReceiver.scheduleNow(this)
         scope.cancel()
         super.onDestroy()
     }

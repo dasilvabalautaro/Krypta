@@ -119,6 +119,16 @@ object HelpContent {
                 "sistema” y permite a Krypta: batería sin restricciones, inicio automático y " +
                 "notificaciones. Con eso los avisos llegan aunque no tengas la app abierta.",
         ),
+        HelpItem(
+            category = "Problemas frecuentes",
+            question = "Uso “Cerrar todo” en aplicaciones recientes, ¿afecta a Krypta?",
+            answer = "Sí, y es distinto de ocultar el aviso: “Cerrar todo” cierra Krypta de " +
+                "verdad y deja de recibir hasta que vuelve a levantarse sola unos segundos " +
+                "después. Para evitarlo, abre recientes, mantén pulsada la tarjeta de Krypta y " +
+                "usa el candado: así queda fuera de “Cerrar todo”. Otras apps de mensajería no " +
+                "lo necesitan porque usan los servidores de Google; Krypta no los usa, y por " +
+                "eso depende de seguir viva en tu móvil.",
+        ),
     )
 
     /** Categorías en el orden en que deben mostrarse, preservando el de [items]. */

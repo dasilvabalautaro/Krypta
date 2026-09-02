@@ -52,6 +52,8 @@ class HeartbeatReceiver : BroadcastReceiver() {
 
     companion object {
         private const val INTERVAL_MS = 2 * 60 * 1000L
+        // Margen para que el sistema termine de desmontar el proceso antes de relanzarlo.
+        private const val RESTART_DELAY_MS = 3_000L
         private const val WAKELOCK_MS = 25_000L
 
         private fun pendingIntent(context: Context): PendingIntent =
@@ -61,19 +63,27 @@ class HeartbeatReceiver : BroadcastReceiver() {
             )
 
         /** Programa el próximo latido. `setAndAllowWhileIdle` atraviesa Doze. */
-        fun schedule(context: Context) {
+        fun schedule(context: Context) = scheduleIn(context, INTERVAL_MS)
+
+        /**
+         * Latido **cuanto antes**, para resucitar la app tras una muerte del servicio: lo piden
+         * `onTaskRemoved` (el usuario dio a "Cerrar todo" en recientes) y `onDestroy`. Reusa la
+         * misma vía que ya funciona sola —el receptor relanza el FGS y retira el buzón—, pero
+         * sin esperar los 2 min del ciclo normal, que en el TECNO se midieron como ~160 s con
+         * la app a ciegas.
+         *
+         * No es 0 ms a propósito: al quitar la tarea el sistema aún está desmontando el
+         * proceso, y un rearranque instantáneo se pisa con esa limpieza.
+         */
+        fun scheduleNow(context: Context) = scheduleIn(context, RESTART_DELAY_MS)
+
+        private fun scheduleIn(context: Context, delayMs: Long) {
             runCatching {
                 context.getSystemService(AlarmManager::class.java).setAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP,
-                    System.currentTimeMillis() + INTERVAL_MS,
+                    System.currentTimeMillis() + delayMs,
                     pendingIntent(context),
                 )
-            }
-        }
-
-        fun cancel(context: Context) {
-            runCatching {
-                context.getSystemService(AlarmManager::class.java).cancel(pendingIntent(context))
             }
         }
     }
