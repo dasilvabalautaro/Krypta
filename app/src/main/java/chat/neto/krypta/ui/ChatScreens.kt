@@ -524,7 +524,12 @@ private fun ChatScreen(
                         IconButton(onClick = { showMenu = true }) {
                             Icon(KryptaMoreIcon, contentDescription = "Más opciones")
                         }
-                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false },
+                            shape = RoundedCornerShape(16.dp),
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        ) {
                             DropdownMenuItem(
                                 text = { Text("Capturar pantalla") },
                                 leadingIcon = { Icon(KryptaImageIcon, contentDescription = null) },
@@ -1128,9 +1133,15 @@ private fun MessageBubble(
             }
         }
         // Anclado a la burbuja: se abre donde el usuario mantuvo pulsado.
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+            shape = RoundedCornerShape(16.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
             DropdownMenuItem(
                 text = { Text("Copiar") },
+                leadingIcon = { Icon(KryptaCopyIcon, contentDescription = null) },
                 onClick = {
                     menuOpen = false
                     copyMessageText(context, message.text)

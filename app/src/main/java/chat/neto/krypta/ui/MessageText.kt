@@ -7,6 +7,7 @@ import android.content.Context
 import android.os.Build
 import android.os.PersistableBundle
 import android.util.Patterns
+import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
@@ -42,6 +43,12 @@ fun copyMessageText(context: Context, text: String) {
             }
         }
         context.getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
+        // Desde Android 13 el propio sistema confirma la copia con su globo; añadir un Toast
+        // ahí saldrían **dos** avisos por la misma acción. Por debajo no hay confirmación
+        // ninguna, y sin ella el usuario no sabe si la pulsación larga hizo algo.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            Toast.makeText(context, "Mensaje copiado", Toast.LENGTH_SHORT).show()
+        }
     }
 }
 

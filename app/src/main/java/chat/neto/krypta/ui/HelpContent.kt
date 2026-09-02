@@ -120,6 +120,16 @@ object HelpContent {
                 "notificaciones. Con eso los avisos llegan aunque no tengas la app abierta.",
         ),
         HelpItem(
+            category = "Privacidad y seguridad",
+            question = "¿Puedo copiar un mensaje? ¿Es seguro?",
+            answer = "Sí: mantén pulsado el mensaje y elige “Copiar”. Ten en cuenta que al " +
+                "copiarlo el texto sale del cifrado de extremo a extremo y pasa a manos del " +
+                "portapapeles del móvil, igual que ocurre al guardar una captura en la galería: " +
+                "otras apps podrían leerlo al pegarlo. Krypta lo marca como contenido sensible " +
+                "para que Android no lo muestre en la vista previa del portapapeles, pero si el " +
+                "mensaje es delicado, cópialo solo cuando de verdad lo necesites.",
+        ),
+        HelpItem(
             category = "Problemas frecuentes",
             question = "Uso “Cerrar todo” en aplicaciones recientes, ¿afecta a Krypta?",
             answer = "Sí, y es distinto de ocultar el aviso: “Cerrar todo” cierra Krypta de " +
