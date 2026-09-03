@@ -14,9 +14,19 @@ package chat.neto.krypta.p2p
  *   FDESC: "D\n<size>\n<mime>\n<path>\n<name>"  (descriptor LOCAL del archivo; nunca se envía)
  *   CALL:  "C\n<kind>\n<callId>\n<ts>"  (señalización de llamada: invite/accept/reject/
  *          hangup/busy; ts = unix millis del emisor, para descartar invites rancios)
+ *   REPLY: "Y\n<replyToId>\n" ++ <sobre interior>   (cita: envuelve a T/I/F/D)
+ *
+ * REPLY es un **envoltorio**, no un tipo de contenido: cita el mensaje [replyToId] y dentro
+ * lleva el sobre normal del mensaje que responde. Así responder funciona con cualquier
+ * contenido (texto, foto, archivo, nota de voz) sin duplicar un tipo por cada uno. Viaja
+ * **solo el id**, nunca una copia del mensaje citado: los dos extremos guardan cada mensaje
+ * con el mismo id (el que va en el sobre), así que cada uno resuelve la cita contra su propia
+ * base — y una cita no puede resucitar contenido que el otro ya borró.
  *
  * Decodificar tolera bytes sin sobre (mensajes previos a esta versión) devolviendo null, para
- * que la capa superior los trate como texto legado.
+ * que la capa superior los trate como texto legado. Un sobre con un tipo **desconocido** (una
+ * versión futura) devuelve [Decoded.Unsupported] en vez de null, para no pintar su cabecera
+ * cruda como si fuera texto.
  */
 object MessageEnvelope {
 
@@ -42,6 +52,13 @@ object MessageEnvelope {
         ) : Decoded
         /** Señal de llamada: [kind] ∈ invite/accept/reject/hangup/busy, [ts] = unix millis. */
         data class Call(val kind: String, val callId: String, val ts: Long) : Decoded
+        /**
+         * Cita: [inner] es el mensaje que se envía, [replyTo] el id del mensaje citado.
+         * Nunca anida otra [Reply] (decodificar una respuesta dentro de otra da null).
+         */
+        data class Reply(val replyTo: String, val inner: Decoded) : Decoded
+        /** Sobre bien formado de un tipo que esta versión no conoce (cliente más nuevo). */
+        data object Unsupported : Decoded
     }
 
     fun encodeText(id: String, body: ByteArray): ByteArray =
@@ -64,6 +81,14 @@ object MessageEnvelope {
 
     fun encodeCall(kind: String, callId: String, ts: Long): ByteArray =
         "C\n$kind\n$callId\n$ts".toByteArray(Charsets.UTF_8)
+
+    /** Envuelve [inner] (un sobre ya codificado) como respuesta al mensaje [replyTo]. */
+    fun encodeReply(replyTo: String, inner: ByteArray): ByteArray =
+        "Y\n$replyTo\n".toByteArray(Charsets.UTF_8) + inner
+
+    /** [inner] envuelto como respuesta si [replyTo] no es nulo/vacío; si no, tal cual. */
+    fun wrapReply(replyTo: String?, inner: ByteArray): ByteArray =
+        if (replyTo.isNullOrBlank()) inner else encodeReply(replyTo, inner)
 
     fun decode(bytes: ByteArray): Decoded? {
         if (bytes.size < 2 || bytes[1] != NL) return null
@@ -107,6 +132,20 @@ object MessageEnvelope {
                 val size = parts[0].toLongOrNull() ?: return null
                 Decoded.FileDescriptor(parts[3], parts[1], size, parts[2].ifBlank { null })
             }
+            'Y' -> {
+                // Y\n<replyToId>\n<sobre interior>. Una respuesta no puede envolver a otra
+                // (ni a un sobre ilegible): sin esto la recursión no tendría fondo.
+                val idEnd = bytes.indexOf(NL, from = 2)
+                if (idEnd < 0) return null
+                val replyTo = String(bytes, 2, idEnd - 2, Charsets.UTF_8)
+                if (replyTo.isBlank()) return null
+                val inner = decode(bytes.copyOfRange(idEnd + 1, bytes.size))
+                if (inner == null || inner is Decoded.Reply) return null
+                Decoded.Reply(replyTo, inner)
+            }
+            // Sobre con forma válida pero tipo que esta versión no conoce (p. ej. un cliente
+            // más nuevo): no es texto legado, así que no se pinta su cabecera cruda.
+            in 'A'..'Z' -> Decoded.Unsupported
             else -> null
         }
     }

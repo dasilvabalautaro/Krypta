@@ -1,11 +1,17 @@
 package chat.neto.krypta.core
 
-/** Metadatos de un archivo entrante (llegan en el mensaje "meta", antes de los trozos). */
+/**
+ * Metadatos de un archivo entrante (llegan en el mensaje "meta", antes de los trozos).
+ * [replyTo] es el id del mensaje citado si el archivo se envió como respuesta: viaja aquí
+ * porque la burbuja no se crea hasta que el archivo está completo, y para entonces el sobre
+ * que traía la cita ya se procesó (y el proceso pudo haber muerto entre medias).
+ */
 data class IncomingFileMeta(
     val name: String,
     val mime: String,
     val size: Long,
     val totalChunks: Int,
+    val replyTo: String? = null,
 )
 
 /** Archivo ya reensamblado y escrito en disco. */
@@ -14,6 +20,7 @@ data class AssembledFile(
     val mime: String,
     val size: Long,
     val path: String,
+    val replyTo: String? = null,
 )
 
 /**

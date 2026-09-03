@@ -95,6 +95,17 @@ object HelpContent {
         ),
         HelpItem(
             category = "Mensajes y llamadas",
+            question = "¿Cómo respondo a un mensaje concreto y no al último?",
+            answer = "Desliza el mensaje hacia la derecha, o mantenlo pulsado y toca la flecha " +
+                "de responder. Encima del cuadro de escribir verás a quién estás respondiendo, " +
+                "con una ✕ para descartarlo. Vale para cualquier mensaje —texto, foto, nota de " +
+                "voz o archivo— y puedes responder con lo que quieras, no solo con texto. En el " +
+                "chat, tocar la cita te lleva al mensaje original. Por la red solo viaja una " +
+                "referencia interna al mensaje citado, nunca una copia de su contenido: por eso, " +
+                "si esa persona ya había vaciado el chat, verá “Mensaje no disponible” en la cita.",
+        ),
+        HelpItem(
+            category = "Mensajes y llamadas",
             question = "¿Puedo enviar GIF, stickers o emoji grandes desde el teclado?",
             answer = "Sí. Abre la pestaña de GIF o de stickers de tu teclado y toca el que " +
                 "quieras: los GIF llegan animados y los stickers conservan su fondo " +

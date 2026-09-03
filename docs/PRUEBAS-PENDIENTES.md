@@ -619,6 +619,19 @@ directa (DCUtR) o se queda en relay.
 ---
 
 ## Verificado en 1 móvil (no requiere el segundo)
+- **Responder citando (3 sep)**: en el TECNO, con un contacto de usar y tirar. **Mantener
+  pulsada** una burbuja abre la píldora con "Responder a este mensaje" + "Copiar mensaje";
+  **deslizarla a la derecha** abre directamente la barra de cita (autor + resumen + ✕ sobre el
+  campo de escribir). La ✕ y el botón **atrás** la descartan sin salir del chat. Enviada la
+  respuesta, la burbuja se pinta con la cita dentro ("Tú" / texto citado) encima del texto
+  nuevo (comprobado con la captura propia de ⋮, porque `screencap` sale negro en el chat).
+  - [ ] **Pendiente con 2 móviles**: (a) que el receptor vea la cita resuelta con **su** copia
+    del mensaje citado (aquí ambos extremos eran el mismo móvil); (b) responder **con** una
+    foto y **con** una nota de voz y comprobar que la cita sobrevive al troceado/reensamblado
+    (la cita viaja en la meta, no en los trozos); (c) responder a un mensaje que el receptor
+    ya **vació** de su chat → debe salir "Mensaje no disponible", no un hueco ni un fallo;
+    (d) responder con el receptor **desconectado** (entrega por buzón) y ver la cita al abrir;
+    (e) tocar la cita en el móvil receptor debe saltar al mensaje original y destellarlo.
 - **Avisos, auditoría del 13 ago**: `KryptaNotificationsTest` (instrumentado, 4/4 en el
   TECNO/Android 15) cubre la acumulación por contacto (MessagingStyle), que cancelar un
   contacto no toca al otro, que `cancelAllMessages` barre el canal **sin** tirar el permanente

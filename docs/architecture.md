@@ -209,7 +209,30 @@ desacoplados y testeables.
     adjuntos** (clip → Foto/Archivo); **nota de voz mantener-y-soltar** (mantener graba y
     soltar envía, <1 s descarta; toque corto = grabación fijada con Cancelar/Enviar — y el
     Box del micro permanece en composición durante la grabación, o su `pointerInput` se
-    cancelaría y la soltada nunca llegaría). Alta de contacto (solo **nombre + PeerID**).
+    cancelaría y la soltada nunca llegaría). **Responder citando** (3 sep 2026): deslizar la
+    burbuja a la derecha (`detectHorizontalDragGestures` en el Box de la fila, con umbral de
+    56 dp, háptico al cruzarlo y vuelta animada al soltar) o mantener pulsado → píldora con
+    **Responder** (siempre) y **Copiar** (solo si hay texto); barra de cita sobre el campo de
+    escribir con ✕ para descartarla (y **atrás** también la descarta, en vez de salir del
+    chat); la cita se pinta dentro de la burbuja (`QuotedPreview`: franja + autor + resumen,
+    a todo el ancho de la burbuja y con la franja a la altura real del texto vía
+    `height(IntrinsicSize.Min)` + `fillMaxHeight`)
+    y **tocarla salta al mensaje original**, que destella (`animateColorAsState` mezclando con
+    `tertiary`) para localizarlo. El gesto de deslizar vive en el Box de fuera y no encadenado
+    al `combinedClickable` de la burbuja, que sigue llevando toque y pulsación larga juntos.
+    **La silueta de la burbuja no la dicta su contenido** (3 sep 2026): la fila es un
+    `BoxWithConstraints` y la burbuja se topa en `BUBBLE_MAX_WIDTH_RATIO` (0.78) del ancho
+    disponible — antes no había límite y un texto largo, una imagen ancha o la cita de un
+    mensaje largo la estiraban de lado a lado, con siluetas distintas en mensajes seguidos.
+    **La píldora de acciones** usa `inverseSurface` + **aro** de `inverseOnSurface` (1.5 dp):
+    tiene que verse sobre las dos orillas y ningún relleno plano lo consigue (en oscuro, entre
+    la propia `#53DBC9` y la recibida `#303635` el óptimo equidistante es 2.84:1); con las dos
+    capas siempre hay una que contrasta (9.5:1 / 7.7:1 en oscuro, 10.7:1 / 5.7:1 en claro).
+    Antes era `surfaceContainerHighest`, **el mismo color que la burbuja recibida** (1.0:1).
+    Ojo al verificar: la píldora es un `Popup` y **hereda `FLAG_SECURE`**
+    (`PopupProperties.securePolicy` = `Inherit`), así que ni `screencap` ni la captura interna
+    (que solo pinta la decorView) la recogen — sus colores se comprueban por cálculo.
+    Alta de contacto (solo **nombre + PeerID**).
     Los iconos siguen locales en `ui/KryptaIcons.kt` (`ImageVector`, ahora también vía
     `addPathNodes`) para no depender de `material-icons-*`.
   El `ChatViewModel` arranca el nodo (`ChatService.start()`) al iniciarse.
@@ -244,8 +267,17 @@ desacoplados y testeables.
   ajeno, nada en claro) y verificado en vivo (export → import → reinicio → mismo PeerID).
 - `MessageEnvelope` — sobre de aplicación **dentro** del cifrado E2EE. Tipos: `T` texto,
   `R` acuse de lectura, `I` imagen JPEG en línea, `F` meta de archivo, `K` trozo de archivo,
-  `D` descriptor local de archivo (no viaja). `decode` tolera bytes sin sobre (mensajes legado)
-  devolviendo null. Cubierto por `MessageEnvelopeTest`.
+  `D` descriptor local de archivo (no viaja), `C` señal de llamada, `Y` **cita (respuesta)**.
+  `Y` es un **envoltorio**, no un contenido: `Y\n<idCitado>\n` + el sobre normal del mensaje,
+  así responder vale para texto, foto, archivo o nota de voz sin duplicar un tipo por cada uno
+  (y no anida: una respuesta dentro de otra decodifica a null). Viaja **solo el id** del
+  mensaje citado, nunca una copia de su contenido. `decode` tolera bytes sin sobre (mensajes
+  legado) devolviendo null, y un tipo desconocido (versión más nueva) da `Unsupported` en vez
+  de pintar su cabecera cruda. Cubierto por `MessageEnvelopeTest`.
+- `DecodedMessage` (en `:core`) — lo que devuelve `ChatService.decodeMessage(contact, message)`:
+  el `MessageContent` **y** `replyTo` (id del mensaje citado, o null). La cita va fuera de
+  `MessageContent` porque es ortogonal al tipo — se responde con texto, con una foto o con una
+  nota de voz. Quien pinta la resuelve contra su propia conversación.
 - `MessageContent` (en `:core`) — contenido descifrado listo para pintar: `Text`, `Image`
   (JPEG) o `File` (nombre/mime/tamaño/ruta local). `ChatService.content(contact, message)` lo
   produce; el ViewModel decide la burbuja.
@@ -324,6 +356,13 @@ desacoplados y testeables.
   MediaPlayer por burbuja); el micro sustituye a "Enviar" con el borrador vacío (permiso
   RECORD_AUDIO en el primer uso) y `notificationText` da "🎤 Nota de voz".
   `decrypt()` sigue para texto (fallback a legado sin sobre).
+  **Responder citando (3 sep 2026)**: `send`/`sendImage`/`sendFile` aceptan un `replyTo`
+  opcional y envuelven su sobre en uno de cita (`MessageEnvelope.wrapReply`); al recibir,
+  `onReceived` abre el envoltorio antes de ramificar. En los archivos troceados la cita viaja
+  en la **meta** (`IncomingFileMeta.replyTo` → staging en disco → `AssembledFile.replyTo` →
+  descriptor local), porque la burbuja del receptor no nace hasta tener todos los trozos y el
+  proceso puede morir entre medias. **Sin cambio de esquema en Room**: el `replyTo` viaja
+  dentro del `ciphertext` que ya se persiste.
   Usa `MessageCipher` + `MessageRepository` + `ContactRepository` + un `CoroutineScope` de app.
 - `CallService` (`:p2p-signaling`) — **llamadas de voz (Fase 7b, Opción A)**. Señalización
   por sobres `C` (invite/accept/reject/hangup/busy, con ts para descartar invites rancios →

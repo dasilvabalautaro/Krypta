@@ -6,6 +6,7 @@ import chat.neto.krypta.core.KeyExchange
 import chat.neto.krypta.core.MessageCipher
 import chat.neto.krypta.core.SignalingEvent
 import chat.neto.krypta.core.model.Contact
+import chat.neto.krypta.core.model.DecodedMessage
 import chat.neto.krypta.core.model.Message
 import chat.neto.krypta.core.model.MessageContent
 import chat.neto.krypta.core.model.MessageStatus
@@ -447,12 +448,16 @@ class ChatService @Inject constructor(
      * nodo (entrega offline) → `SENT`. Solo si el buzón también falla queda **FAILED** —
      * nunca se propaga la excepción, para no tumbar la app. Devuelve el estado final.
      */
-    suspend fun send(contact: Contact, plaintext: ByteArray): Message {
+    suspend fun send(contact: Contact, plaintext: ByteArray, replyTo: String? = null): Message {
         val secret = requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
         // El ciphertext cifra un SOBRE que lleva el id del mensaje, para que el receptor
-        // pueda acusar su lectura citándolo (marca de leído).
+        // pueda acusar su lectura citándolo (marca de leído). Si es una respuesta, ese sobre
+        // va envuelto en uno de cita, que solo lleva el id del mensaje citado.
         val msgId = UUID.randomUUID().toString()
-        val ciphertext = cipher.encrypt(secret, MessageEnvelope.encodeText(msgId, plaintext))
+        val ciphertext = cipher.encrypt(
+            secret,
+            MessageEnvelope.wrapReply(replyTo, MessageEnvelope.encodeText(msgId, plaintext)),
+        )
         val message = Message(
             id = msgId,
             conversationId = contact.id,
@@ -469,10 +474,13 @@ class ChatService @Inject constructor(
      * Envía una **imagen** (JPEG ya comprimido, ≤ límite del buzón) a [contact]. Igual que
      * [send] pero el sobre es de tipo imagen; viaja por el mismo camino (directo → buzón).
      */
-    suspend fun sendImage(contact: Contact, jpeg: ByteArray): Message {
+    suspend fun sendImage(contact: Contact, jpeg: ByteArray, replyTo: String? = null): Message {
         val secret = requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
         val msgId = UUID.randomUUID().toString()
-        val ciphertext = cipher.encrypt(secret, MessageEnvelope.encodeImage(msgId, jpeg))
+        val ciphertext = cipher.encrypt(
+            secret,
+            MessageEnvelope.wrapReply(replyTo, MessageEnvelope.encodeImage(msgId, jpeg)),
+        )
         val message = Message(
             id = msgId,
             conversationId = contact.id,
@@ -498,11 +506,17 @@ class ChatService @Inject constructor(
         mime: String,
         bytes: ByteArray,
         localPath: String? = null,
+        replyTo: String? = null,
     ): Message {
         val secret = requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
         val fileId = UUID.randomUUID().toString()
         val total = (bytes.size + CHUNK_SIZE - 1) / CHUNK_SIZE
-        val descriptor = MessageEnvelope.encodeFileDescriptor(name, mime, bytes.size.toLong(), localPath)
+        // La cita va en el descriptor local (burbuja propia) y en la meta que viaja: los
+        // trozos no la llevan, y la burbuja del receptor no nace hasta tenerlos todos.
+        val descriptor = MessageEnvelope.wrapReply(
+            replyTo,
+            MessageEnvelope.encodeFileDescriptor(name, mime, bytes.size.toLong(), localPath),
+        )
         val message = Message(
             id = fileId,
             conversationId = contact.id,
@@ -513,7 +527,13 @@ class ChatService @Inject constructor(
         )
         messages.save(message)
         return try {
-            sendRaw(contact, MessageEnvelope.encodeFileMeta(fileId, name, mime, bytes.size.toLong(), total))
+            sendRaw(
+                contact,
+                MessageEnvelope.wrapReply(
+                    replyTo,
+                    MessageEnvelope.encodeFileMeta(fileId, name, mime, bytes.size.toLong(), total),
+                ),
+            )
             for (i in 0 until total) {
                 val from = i * CHUNK_SIZE
                 val to = minOf(from + CHUNK_SIZE, bytes.size)
@@ -652,7 +672,12 @@ class ChatService @Inject constructor(
     ): Message? {
         val contact = contacts.findByPeerId(peerId) ?: return null
         val secret = contact.sharedSecret ?: return null
-        val decoded = runCatching { MessageEnvelope.decode(cipher.decrypt(secret, ciphertext)) }.getOrNull()
+        val envelope = runCatching { MessageEnvelope.decode(cipher.decrypt(secret, ciphertext)) }.getOrNull()
+        // La cita es un envoltorio: se abre aquí para que el resto ramifique por el contenido
+        // real. El id citado solo hace falta en lo que crea burbuja (archivo); el texto y la
+        // imagen lo llevan en su propio ciphertext, que es lo que se persiste.
+        val replyTo = (envelope as? MessageEnvelope.Decoded.Reply)?.replyTo
+        val decoded = (envelope as? MessageEnvelope.Decoded.Reply)?.inner ?: envelope
 
         when (decoded) {
             is MessageEnvelope.Decoded.Read -> {
@@ -662,7 +687,9 @@ class ChatService @Inject constructor(
             is MessageEnvelope.Decoded.FileMeta -> {
                 val f = fileStore.onMeta(
                     decoded.fileId,
-                    chat.neto.krypta.core.IncomingFileMeta(decoded.name, decoded.mime, decoded.size, decoded.totalChunks),
+                    chat.neto.krypta.core.IncomingFileMeta(
+                        decoded.name, decoded.mime, decoded.size, decoded.totalChunks, replyTo,
+                    ),
                 )
                 return f?.let { persistFile(contact, decoded.fileId, it) }
             }
@@ -674,6 +701,9 @@ class ChatService @Inject constructor(
                 _callSignals.tryEmit(contact to decoded)
                 return null
             }
+            // Sobre de un tipo que esta versión no entiende: ignorar (no crear burbuja) es
+            // mejor que persistir algo que no se sabe pintar.
+            is MessageEnvelope.Decoded.Unsupported -> return null
             else -> Unit
         }
         val msgId = when (decoded) {
@@ -703,7 +733,10 @@ class ChatService @Inject constructor(
         // No sobrescribas un envío propio con su eco (contacto que apunta a tu PeerID).
         val existing = messages.findById(fileId)
         if (existing != null && existing.senderId == SELF) return null
-        val descriptor = MessageEnvelope.encodeFileDescriptor(f.name, f.mime, f.size, f.path)
+        val descriptor = MessageEnvelope.wrapReply(
+            f.replyTo,
+            MessageEnvelope.encodeFileDescriptor(f.name, f.mime, f.size, f.path),
+        )
         val message = Message(
             id = fileId,
             conversationId = contact.id,
@@ -849,7 +882,8 @@ class ChatService @Inject constructor(
      */
     fun decrypt(contact: Contact, message: Message): ByteArray {
         val plain = cipher.decrypt(requireNotNull(contact.sharedSecret), message.ciphertext)
-        return when (val d = MessageEnvelope.decode(plain)) {
+        val decoded = MessageEnvelope.decode(plain)
+        return when (val d = (decoded as? MessageEnvelope.Decoded.Reply)?.inner ?: decoded) {
             is MessageEnvelope.Decoded.Text -> d.body
             null -> plain // legado: mensaje anterior al sobre
             else -> ByteArray(0)
@@ -858,11 +892,21 @@ class ChatService @Inject constructor(
 
     /**
      * Descifra [message] y lo clasifica en [MessageContent] (texto o imagen) para pintarlo.
-     * Un sobre legado (sin tipo) se trata como texto.
+     * Un sobre legado (sin tipo) se trata como texto. Para saber además a qué mensaje
+     * responde, usa [decodeMessage].
      */
-    fun content(contact: Contact, message: Message): MessageContent {
+    fun content(contact: Contact, message: Message): MessageContent =
+        decodeMessage(contact, message).content
+
+    /**
+     * Descifra [message] y devuelve su contenido **y la cita**, si es una respuesta. Descifra
+     * una sola vez: la UI necesita las dos cosas por mensaje al pintar la conversación.
+     */
+    fun decodeMessage(contact: Contact, message: Message): DecodedMessage {
         val plain = cipher.decrypt(requireNotNull(contact.sharedSecret), message.ciphertext)
-        return when (val d = MessageEnvelope.decode(plain)) {
+        val decoded = MessageEnvelope.decode(plain)
+        val replyTo = (decoded as? MessageEnvelope.Decoded.Reply)?.replyTo
+        val content = when (val d = (decoded as? MessageEnvelope.Decoded.Reply)?.inner ?: decoded) {
             is MessageEnvelope.Decoded.Text -> MessageContent.Text(String(d.body))
             is MessageEnvelope.Decoded.Image -> MessageContent.Image(d.bytes)
             is MessageEnvelope.Decoded.FileDescriptor ->
@@ -871,8 +915,11 @@ class ChatService @Inject constructor(
             is MessageEnvelope.Decoded.FileMeta, is MessageEnvelope.Decoded.FileChunk,
             is MessageEnvelope.Decoded.Call ->
                 MessageContent.Text("") // no deberían persistirse como Message
+            is MessageEnvelope.Decoded.Unsupported, is MessageEnvelope.Decoded.Reply ->
+                MessageContent.Text(UNSUPPORTED_TEXT)
             null -> MessageContent.Text(String(plain)) // legado
         }
+        return DecodedMessage(content, replyTo)
     }
 
     /** Texto para la notificación de [message] (para imágenes/archivos, un rótulo). */
@@ -896,6 +943,8 @@ class ChatService @Inject constructor(
         val ANIMATED_IMAGE_MIMES = setOf("image/gif", "image/webp")
         // Texto de la fila local de llamada perdida (no viaja por la red).
         const val MISSED_CALL_TEXT = "📞 Llamada perdida"
+        // Sobre válido de un tipo que esta versión no conoce (cliente más nuevo).
+        const val UNSUPPORTED_TEXT = "[mensaje no compatible con esta versión]"
         // Bucle ágil cuando el wake no está (sonda buzón + redescubre). Bien por debajo del
         // corte por inactividad de Cloudflare (~100 s) para sanar la wss de la DHT a tiempo.
         const val REDISCOVER_MS = 30_000L

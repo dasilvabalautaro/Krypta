@@ -172,7 +172,7 @@ class ChatServiceTest {
             val m = meta ?: return null
             if (chunks.size < m.totalChunks) return null
             val all = (0 until m.totalChunks).fold(ByteArray(0)) { acc, i -> acc + chunks[i]!! }
-            return chat.neto.krypta.core.AssembledFile(m.name, m.mime, m.size, "/tmp/${m.name}").also {
+            return chat.neto.krypta.core.AssembledFile(m.name, m.mime, m.size, "/tmp/${m.name}", m.replyTo).also {
                 assembled = all
             }
         }
@@ -369,6 +369,71 @@ class ChatServiceTest {
     }
 
     /** Reintentar un mensaje FALLIDO lo reenvía (mismo id) y, si ahora va, queda SENT. */
+    /**
+     * Responder cita **solo el id** del mensaje citado: nunca viaja una copia de su texto.
+     * Los dos extremos guardan cada mensaje con el mismo id (el del sobre), así que cada uno
+     * resuelve la cita contra su propia base — y una cita no resucita lo que el otro borró.
+     */
+    @Test
+    fun `a reply carries the quoted id end to end and never a copy of the quoted text`() = runTest {
+        val senderSig = FakeSignaling()
+        val senderMessages = FakeMessages()
+        val sender = ChatService(senderSig, cipher, senderMessages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+        val rxMessages = FakeMessages()
+        val receiver = ChatService(FakeSignaling(), cipher, rxMessages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        // Un primer mensaje, que será el citado.
+        val quoted = sender.send(contact, "el texto del mensaje citado".toByteArray())
+        sender.send(contact, "respuesta".toByteArray(), replyTo = quoted.id)
+
+        // Burbuja propia: contenido y cita.
+        val own = sender.decodeMessage(contact, senderMessages.saved.last())
+        assertEquals("respuesta", (own.content as chat.neto.krypta.core.model.MessageContent.Text).text)
+        assertEquals(quoted.id, own.replyTo)
+
+        // Dentro del cifrado solo va el **id** del citado, no una copia de su texto.
+        val plain = String(cipher.decrypt(secret, senderSig.sentCiphertext!!))
+        assertTrue(plain.contains(quoted.id))
+        assertFalse(plain.contains("el texto del mensaje citado"))
+
+        // Y llega igual al otro lado.
+        val delivered = receiver.onReceived(contact.peerId, senderSig.sentCiphertext!!)!!
+        val got = receiver.decodeMessage(contact, delivered)
+        assertEquals("respuesta", (got.content as chat.neto.krypta.core.model.MessageContent.Text).text)
+        assertEquals(quoted.id, got.replyTo)
+
+        // Un mensaje normal sigue sin cita (el sobre no cambia si no se responde a nada).
+        sender.send(contact, "suelto".toByteArray())
+        assertNull(sender.decodeMessage(contact, senderMessages.saved.last()).replyTo)
+    }
+
+    /**
+     * Responder **con** una foto/nota de voz/archivo: la cita viaja en la META, porque la
+     * burbuja del receptor no nace hasta tener todos los trozos (y el proceso puede morir
+     * entre medias). Debe seguir ahí tras el reensamblado.
+     */
+    @Test
+    fun `a voice note sent as a reply keeps its quote after reassembly`() = runTest {
+        val senderSig = FakeSignaling()
+        val sender = ChatService(senderSig, cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+        val rxMessages = FakeMessages()
+        val receiver = ChatService(FakeSignaling(), cipher, rxMessages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        val sent = sender.sendFile(
+            contact, "nota.m4a", "audio/mp4", ByteArray(1024) { 7 },
+            localPath = "/data/notas/nota.m4a", replyTo = "id-citado",
+        )
+        assertEquals(MessageStatus.SENT, sent.status)
+        // La burbuja propia (descriptor local) también lleva la cita.
+        assertEquals("id-citado", sender.decodeMessage(contact, sent).replyTo)
+
+        senderSig.sentAll.forEach { receiver.onReceived(contact.peerId, it) }
+        val persisted = rxMessages.saved.single()
+        val decoded = receiver.decodeMessage(contact, persisted)
+        assertEquals("audio/mp4", (decoded.content as chat.neto.krypta.core.model.MessageContent.File).mime)
+        assertEquals("id-citado", decoded.replyTo)
+    }
+
     @Test
     fun `retry re-sends a FAILED message and marks SENT without duplicating`() = runTest {
         val signaling = FakeSignaling().apply { failOnSend = true; failOnMailbox = true }

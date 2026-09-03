@@ -67,6 +67,40 @@ class DiskFileStoreTest {
         assertArrayEquals("0123456789".toByteArray(), File(f.path).readBytes())
     }
 
+    /**
+     * La cita (responder con una foto o una nota de voz) llega en la meta, mucho antes de que
+     * el archivo esté completo, así que tiene que sobrevivir en el staging igual que los
+     * trozos — incluido el caso "muere el proceso a mitad de transferencia".
+     */
+    @Test
+    fun `the quoted id travels in the staged meta and survives process death`() = runBlocking {
+        val first = store()
+        assertNull(first.onMeta("f-cita", meta.copy(replyTo = "id-citado")))
+        assertNull(first.onChunk("f-cita", 0, chunks[0]))
+
+        val second = store()
+        assertNull(second.onChunk("f-cita", 1, chunks[1]))
+        val f = second.onChunk("f-cita", 2, chunks[2])!!
+        assertEquals("id-citado", f.replyTo)
+    }
+
+    /** Una meta ya en staging de una versión anterior no trae la línea de cita: no rompe. */
+    @Test
+    fun `a staged meta without the quote line still assembles`() = runBlocking {
+        val s = store()
+        assertNull(s.onMeta("f-vieja", meta))
+        // Se reescribe la meta como la escribía la versión anterior (4 líneas, sin cita).
+        val metaFile = File(tmp.root, "krypta_files/staging/f-vieja/meta.txt")
+        assertTrue(metaFile.isFile)
+        metaFile.writeText(metaFile.readLines().take(4).joinToString("\n", postfix = "\n"))
+
+        assertNull(s.onChunk("f-vieja", 0, chunks[0]))
+        assertNull(s.onChunk("f-vieja", 1, chunks[1]))
+        val f = s.onChunk("f-vieja", 2, chunks[2])!!
+        assertNull(f.replyTo)
+        assertArrayEquals("0123456789".toByteArray(), File(f.path).readBytes())
+    }
+
     @Test
     fun `sanitizes hostile file names and ids`() = runBlocking {
         val s = store()

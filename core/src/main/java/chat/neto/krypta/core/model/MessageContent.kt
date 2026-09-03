@@ -19,3 +19,13 @@ sealed interface MessageContent {
         val localPath: String?,
     ) : MessageContent
 }
+
+/**
+ * Mensaje descifrado listo para pintar: su [content] y, si es una **respuesta**, el id del
+ * mensaje citado en [replyTo]. La cita va fuera de [MessageContent] porque es ortogonal al
+ * tipo: se puede responder con texto, con una foto o con una nota de voz.
+ *
+ * [replyTo] es solo un id: quien pinta resuelve la cita contra su propia base de mensajes
+ * (si ya no está —chat vaciado, o aún no ha llegado— se pinta como no disponible).
+ */
+data class DecodedMessage(val content: MessageContent, val replyTo: String? = null)

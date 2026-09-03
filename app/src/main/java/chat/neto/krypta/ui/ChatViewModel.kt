@@ -32,6 +32,7 @@ import javax.inject.Inject
 /**
  * Mensaje listo para pintar: contenido ya descifrado + de quién es. Prioridad de tipo:
  * [file] no nulo → burbuja de archivo; [image] no nulo → imagen; si no, [text].
+ * [quoted] no nulo = el mensaje responde a otro y se pinta con su cita encima.
  */
 data class DisplayMessage(
     val id: String,
@@ -41,6 +42,19 @@ data class DisplayMessage(
     val mine: Boolean,
     val status: MessageStatus,
     val timestamp: Long = 0L,
+    val quoted: QuotedMessage? = null,
+)
+
+/**
+ * Cita de un mensaje anterior, ya resuelta contra la conversación local. [available] false =
+ * el citado ya no está (chat vaciado, o aún no ha llegado): por la red viaja solo su id, no
+ * una copia, así que no hay nada que pintar más allá del aviso.
+ */
+data class QuotedMessage(
+    val id: String,
+    val author: String,
+    val preview: String,
+    val available: Boolean = true,
 )
 
 /** Datos de un archivo adjunto para la burbuja (abrir requiere [localPath]). */
@@ -251,12 +265,18 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /** Flujo de mensajes de la conversación, descifrados para mostrar. */
+    /**
+     * Flujo de mensajes de la conversación, descifrados para mostrar. En dos pasadas: primero
+     * cada mensaje, después las **citas**, que se resuelven contra los mensajes ya mapeados
+     * (por la red viaja solo el id del citado). Como la fuente es un Flow de la conversación
+     * entera, una cita a un mensaje que aún no había llegado se completa sola en cuanto llega.
+     */
     fun messages(contact: Contact): Flow<List<DisplayMessage>> =
         chat.observeConversation(contact.id).map { list ->
-            list.map { m ->
+            val decoded = list.map { m ->
                 val mine = m.senderId != contact.id
-                when (val c = runCatching { chat.content(contact, m) }.getOrNull()) {
+                val d = runCatching { chat.decodeMessage(contact, m) }.getOrNull()
+                when (val c = d?.content) {
                     is MessageContent.Image ->
                         DisplayMessage(
                             m.id, text = "", image = c.jpeg, mine = mine, status = m.status,
@@ -278,15 +298,41 @@ class ChatViewModel @Inject constructor(
                             m.id, text = "[cifrado]", mine = mine, status = m.status,
                             timestamp = m.timestamp,
                         )
-                }
+                } to d?.replyTo
+            }
+            val byId = decoded.associate { (msg, _) -> msg.id to msg }
+            decoded.map { (msg, replyTo) ->
+                if (replyTo == null) msg else msg.copy(quoted = quoteOf(contact, replyTo, byId[replyTo]))
             }
         }
 
-    fun send(contact: Contact, text: String) {
+    /** Cita pintable de [target] (el mensaje citado), o el aviso de que ya no está. */
+    private fun quoteOf(contact: Contact, replyTo: String, target: DisplayMessage?): QuotedMessage =
+        if (target == null) {
+            QuotedMessage(replyTo, author = "", preview = "Mensaje no disponible", available = false)
+        } else {
+            QuotedMessage(
+                id = target.id,
+                author = if (target.mine) "Tú" else contact.displayName,
+                preview = previewOf(target),
+            )
+        }
+
+    /** Resumen de una línea de [m] para pintarlo dentro de una cita. */
+    private fun previewOf(m: DisplayMessage): String = when {
+        m.image != null -> "📷 Foto"
+        m.file != null && m.file.mime.startsWith("audio/") -> "🎤 Nota de voz"
+        m.file != null && m.file.mime in ANIMATED_MIMES -> "🎞 GIF"
+        m.file != null -> "📎 ${m.file.name}"
+        else -> m.text
+    }
+
+    /** [replyTo]: id del mensaje citado si se está respondiendo a uno (null = mensaje suelto). */
+    fun send(contact: Contact, text: String, replyTo: String? = null) {
         if (text.isBlank()) return
         // ChatService.send ya no propaga fallos de envío (marca FAILED); el runCatching es
         // cinturón extra para que nada (p. ej. cifrado) pueda tumbar la app.
-        viewModelScope.launch { runCatching { chat.send(contact, text.toByteArray()) } }
+        viewModelScope.launch { runCatching { chat.send(contact, text.toByteArray(), replyTo) } }
     }
 
     /**
@@ -296,18 +342,19 @@ class ChatViewModel @Inject constructor(
      * conserve la animación; el resto se comprime a una sola pieza en línea. Comprimir un GIF
      * con `ImageCodec` lo dejaba en su primer fotograma — llegaba congelado.
      */
-    fun sendImage(contact: Contact, uri: android.net.Uri) {
+    fun sendImage(contact: Contact, uri: android.net.Uri, replyTo: String? = null) {
         viewModelScope.launch {
             val mime = withContext(Dispatchers.IO) {
                 runCatching { context.contentResolver.getType(uri) }.getOrNull()
             }
             if (mime in ANIMATED_MIMES) {
-                sendAnimation(contact, uri, mime!!)
+                sendAnimation(contact, uri, mime!!, replyTo)
                 return@launch
             }
             runCatching {
                 val jpeg = withContext(Dispatchers.IO) { ImageCodec.compress(context, uri) }
-                if (jpeg != null) chat.sendImage(contact, jpeg) else _error.value = "No se pudo procesar la imagen"
+                if (jpeg != null) chat.sendImage(contact, jpeg, replyTo)
+                else _error.value = "No se pudo procesar la imagen"
             }
         }
     }
@@ -322,7 +369,12 @@ class ChatViewModel @Inject constructor(
      * para que la burbuja propia del emisor también se anime; sin ella solo la vería el que
      * recibe.
      */
-    private suspend fun sendAnimation(contact: Contact, uri: android.net.Uri, mime: String) {
+    private suspend fun sendAnimation(
+        contact: Contact,
+        uri: android.net.Uri,
+        mime: String,
+        replyTo: String? = null,
+    ) {
         val picked = withContext(Dispatchers.IO) {
             runCatching { FilePicker.read(context, uri, MAX_ANIMATION_BYTES) }.getOrNull()
         }
@@ -340,18 +392,18 @@ class ChatViewModel @Inject constructor(
                     .absolutePath
             }.getOrNull()
         }
-        runCatching { chat.sendFile(contact, name, mime, picked.bytes, localPath) }
+        runCatching { chat.sendFile(contact, name, mime, picked.bytes, localPath, replyTo) }
             .onFailure { _error.value = "No se pudo enviar el GIF" }
     }
 
     /** Lee y envía un archivo desde su [uri] (file picker), troceado. Límite v1: 8 MB. */
-    fun sendFile(contact: Contact, uri: android.net.Uri) {
+    fun sendFile(contact: Contact, uri: android.net.Uri, replyTo: String? = null) {
         viewModelScope.launch {
             runCatching {
                 val info = withContext(Dispatchers.IO) { FilePicker.read(context, uri, MAX_FILE_BYTES) }
                 when {
                     info == null -> _error.value = "No se pudo leer el archivo"
-                    else -> chat.sendFile(contact, info.name, info.mime, info.bytes)
+                    else -> chat.sendFile(contact, info.name, info.mime, info.bytes, replyTo = replyTo)
                 }
             }.onFailure { _error.value = "Archivo demasiado grande (máx 8 MB) o ilegible" }
         }
@@ -361,14 +413,16 @@ class ChatViewModel @Inject constructor(
      * Envía una nota de voz ya grabada (archivo .m4a en disco). Viaja como archivo troceado
      * (mime de audio) y conserva la copia local para que la burbuja propia sea reproducible.
      */
-    fun sendVoiceNote(contact: Contact, file: java.io.File) {
+    fun sendVoiceNote(contact: Contact, file: java.io.File, replyTo: String? = null) {
         viewModelScope.launch {
             runCatching {
                 val bytes = withContext(Dispatchers.IO) { file.readBytes() }
                 when {
                     bytes.isEmpty() -> _error.value = "Nota de voz vacía"
                     bytes.size > MAX_FILE_BYTES -> _error.value = "Nota de voz demasiado larga"
-                    else -> chat.sendFile(contact, file.name, "audio/mp4", bytes, file.absolutePath)
+                    else -> chat.sendFile(
+                        contact, file.name, "audio/mp4", bytes, file.absolutePath, replyTo,
+                    )
                 }
             }.onFailure { _error.value = "No se pudo enviar la nota de voz" }
         }

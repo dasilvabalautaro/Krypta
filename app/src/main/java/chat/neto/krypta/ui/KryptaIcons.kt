@@ -22,6 +22,23 @@ private fun materialIcon(name: String, pathData: String): ImageVector =
         viewportHeight = 24f,
     ).addPath(addPathNodes(pathData), fill = SolidColor(Color.Black)).build()
 
+/** Flecha curva de responder (`Reply`): citar un mensaje. */
+val KryptaReplyIcon: ImageVector by lazy {
+    materialIcon(
+        "Reply",
+        "M10,9V5l-7,7 7,7v-4.1c5,0 8.5,1.6 11,5.1 -1,-5 -4,-10 -11,-11z",
+    )
+}
+
+/** Aspa de cerrar (`Close`): descartar la cita en la barra de respuesta. */
+val KryptaCloseIcon: ImageVector by lazy {
+    materialIcon(
+        "Close",
+        "M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59," +
+            "19 19,17.59 13.41,12z",
+    )
+}
+
 /** Flecha atrás (equivalente a `ArrowBack`), para las barras superiores. */
 val KryptaBackIcon: ImageVector by lazy {
     materialIcon("Back", "M20,11H7.83l5.59,-5.59L12,4l-8,8 8,8 1.41,-1.41L7.83,13H20v-2z")

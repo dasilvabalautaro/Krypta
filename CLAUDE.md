@@ -619,6 +619,71 @@ the offset arithmetic is testable on the JVM (`Patterns` is Android-only and `:a
 Robolectric) — `MessageTextTest` pins that the visible text survives linkifying unchanged.
 Verified live on the TECNO: long-press shows "Copiar", and pasting into the input field returns
 the text.
+**Reply to a specific message (3 Sep 2026)**: chat had no way to answer a message other than
+the last one. Shipped with **no Room migration and no copy of the quoted text on the wire**.
+Transport: a new envelope type `Y` that is a **wrapper**, not a content type —
+`"Y\n<replyToId>\n" ++ <the normal envelope>` — so replying works for text, photo, file and
+voice note without one new type per content (`MessageEnvelope.wrapReply`/`encodeReply`; a
+reply inside a reply decodes to null, so the recursion has a floor). Only the **id** travels:
+both ends already store every message under the same id (the one in the envelope), so each
+side resolves the quote against its own Room — which also means a quote can't resurrect
+content the peer already deleted (a deliberate difference from WhatsApp/Signal, which embed a
+copy; the cost is a "Mensaje no disponible" quote when the original is gone, and it heals by
+itself when the original merely hasn't arrived yet, since the quote resolves at paint time
+over the conversation Flow). `send`/`sendImage`/`sendFile` take an optional `replyTo`;
+`onReceived` unwraps before branching; `ChatService.decodeMessage` returns the new
+`DecodedMessage(content, replyTo)` (`content()` delegates to it) so the UI decrypts once per
+message. For **chunked files** the quote rides in the **meta**, not the chunks
+(`IncomingFileMeta.replyTo` → 5th line of the on-disk staging meta, tolerant of a 4-line meta
+from an older build → `AssembledFile.replyTo` → local descriptor): the receiver's bubble isn't
+born until every chunk is in, and the process can die in between. `decode` also gained
+`Unsupported` for a well-formed envelope of an unknown type (a newer client), so its raw
+header is never painted as if it were legacy text. UI (`ChatScreens.kt`): **swipe the bubble
+right** (`detectHorizontalDragGestures` on the row's Box — deliberately *not* chained onto the
+bubble's `combinedClickable`, which still carries tap+long-press together — 56 dp threshold,
+haptic on crossing, animated snap-back) **or long-press** → the popup that used to hold only
+"Copiar" is now a pill with **Responder** (every bubble, including photo/audio/file) +
+**Copiar** (text only); a quote bar sits above the input with an ✕, and **back** dismisses the
+reply instead of leaving the chat; the quote renders inside the bubble (`QuotedPreview`) and
+**tapping it jumps to the original**, which flashes (`animateColorAsState` blended toward
+`tertiary`). Every send path carries it: text, photo, keyboard GIF/sticker, file and voice
+note. Covered by `MessageEnvelopeTest` (wrapper round-trip over T/I/F, nesting rejected,
+unknown type), `ChatServiceTest` (id travels end to end and the quoted **text** does not; a
+voice note keeps its quote through reassembly), `DiskFileStoreTest` (quote survives the
+staging across "process death"; a 4-line meta still assembles) and verified live on the TECNO
+(long-press and swipe both open the reply bar, the sent reply renders its quote, ✕ and back
+dismiss it).
+**Two finishing fixes the same day, both cases of "the detail is the product"**: (a) **the
+action pill's colour must contrast with BOTH bubbles.** It was `surfaceContainerHighest` —
+which *is* the received bubble's background, i.e. **1.0:1** over a received message, invisible.
+No flat fill can fix it: in the dark theme the own bubble is bright teal (`#53DBC9`) and the
+received one dark grey (`#303635`), and the best possible equidistant colour tops out at
+**2.84:1** against both, under WCAG's 3:1 for non-text UI. So the contrast now comes in **two
+layers** — `inverseSurface` fill plus a 1.5dp **ring** of `inverseOnSurface` (inverse tones of
+each other): over the dark bubble the fill carries it (9.5:1) and over the bright one the ring
+does (7.7:1); in the light theme the roles swap (10.7:1 / 5.7:1). Whatever is underneath, one
+of the two layers separates the pill from it. (b) **the bubble's silhouette must not be
+dictated by its content.** Bubbles had *no* width constraint, so a long text, a wide image or —
+new with replies — the quote of a long message stretched them edge to edge and consecutive
+messages came out with wildly different shapes. The row is now a `BoxWithConstraints` and the
+bubble is capped at `BUBBLE_MAX_WIDTH_RATIO` (0.78) of the row width, so content wraps inside a
+stable shape instead of defining it (and the opposite margin always stays visible, which is
+half of what makes sender-side legible at a glance). The quote block inside also `fillMaxWidth`s
+— it reads as a header of the message rather than a floating chip leaving a ragged interior —
+and its coloured bar uses `height(IntrinsicSize.Min)` + `fillMaxHeight` so it spans the real
+height of a two-line preview instead of a fixed 34dp. Verified live on the TECNO with a
+throwaway contact (in-app ⋮ capture: long text wraps at the cap, the reply's quote spans the
+bubble and its bar runs full height). Note for future UI verification: **the action pill cannot
+be screenshotted at all** — it's a `Popup`, whose `PopupProperties.securePolicy` inherits the
+chat's `FLAG_SECURE`, so `screencap` is black and the in-app capture only draws the decor view,
+not other windows. Its colours were verified by computing the contrast ratios from the scheme
+values in `ui/theme/Color.kt`.
+**Still open on the bubble (3 Sep 2026, deferred by the author)**: with a long message the
+bubble **loses its shape** — the contour goes. The 18dp corners and the 1dp `outlineVariant`
+border read fine on a short bubble, but on a tall multi-line one the same corner radius is a
+tiny fraction of the silhouette and the edge stops reading as a bubble; the 1.5dp shadow
+disappears at that size too. To revisit: corner radius and/or border weight that scale with
+the bubble, rather than the fixed values that were tuned on short messages.
 **Screenshot/screen-recording block (13 Aug 2026; scoped to the chat screen 21 Aug 2026)**:
 **`FLAG_SECURE`** is now set **per screen**, not app-wide — `SecureScreenEffect` in
 `ui/ChatScreens.kt` calls `ScreenSecurity.setSecure(activity, true)` from a `DisposableEffect`

@@ -83,6 +83,72 @@ class MessageEnvelopeTest {
     }
 
     @Test
+    fun `reply wraps any envelope and keeps the quoted id`() {
+        // Texto: el cuerpo y el id del mensaje sobreviven al envoltorio de cita.
+        val text = MessageEnvelope.decode(
+            MessageEnvelope.encodeReply("citado-1", MessageEnvelope.encodeText("m1", "hola".toByteArray())),
+        )
+        val reply = text as MessageEnvelope.Decoded.Reply
+        assertEquals("citado-1", reply.replyTo)
+        val inner = reply.inner as MessageEnvelope.Decoded.Text
+        assertEquals("m1", inner.id)
+        assertEquals("hola", String(inner.body))
+
+        // Imagen: bytes binarios intactos (el envoltorio no toca el cuerpo).
+        val jpeg = byteArrayOf(1, 0, 10, -3, 7)
+        val image = MessageEnvelope.decode(
+            MessageEnvelope.encodeReply("citado-2", MessageEnvelope.encodeImage("m2", jpeg)),
+        ) as MessageEnvelope.Decoded.Reply
+        assertArrayEquals(jpeg, (image.inner as MessageEnvelope.Decoded.Image).bytes)
+
+        // Meta de archivo: así viaja la cita de una foto/nota de voz/GIF troceados.
+        val meta = MessageEnvelope.decode(
+            MessageEnvelope.encodeReply(
+                "citado-3",
+                MessageEnvelope.encodeFileMeta("fid", "nota.m4a", "audio/mp4", 1234L, 3),
+            ),
+        ) as MessageEnvelope.Decoded.Reply
+        assertEquals("citado-3", meta.replyTo)
+        assertEquals("nota.m4a", (meta.inner as MessageEnvelope.Decoded.FileMeta).name)
+    }
+
+    @Test
+    fun `wrapReply only wraps when there is a quoted id`() {
+        val plain = MessageEnvelope.encodeText("m1", "hola".toByteArray())
+        assertArrayEquals(plain, MessageEnvelope.wrapReply(null, plain))
+        assertArrayEquals(plain, MessageEnvelope.wrapReply("", plain))
+        val wrapped = MessageEnvelope.decode(MessageEnvelope.wrapReply("q", plain))
+        assertEquals("q", (wrapped as MessageEnvelope.Decoded.Reply).replyTo)
+    }
+
+    @Test
+    fun `malformed or nested replies decode to null`() {
+        // Sin id citado, sin sobre interior, o con un interior ilegible.
+        assertNull(MessageEnvelope.decode("Y\n\nT\nm1\nhola".toByteArray()))
+        assertNull(MessageEnvelope.decode("Y\ncitado".toByteArray()))
+        assertNull(MessageEnvelope.decode("Y\ncitado\nesto no es un sobre".toByteArray()))
+        // Una respuesta no puede envolver a otra: la recursión no tendría fondo.
+        assertNull(
+            MessageEnvelope.decode(
+                MessageEnvelope.encodeReply(
+                    "a",
+                    MessageEnvelope.encodeReply("b", MessageEnvelope.encodeText("m", "x".toByteArray())),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `unknown envelope type decodes as unsupported, not as legacy text`() {
+        // Un tipo de una versión futura: se reconoce como sobre (no se pinta su cabecera
+        // cruda como si fuera texto de un mensaje antiguo).
+        assertEquals(
+            MessageEnvelope.Decoded.Unsupported,
+            MessageEnvelope.decode("Z\nalgo nuevo".toByteArray()),
+        )
+    }
+
+    @Test
     fun `decode returns null for non-enveloped (legacy) bytes`() {
         assertNull(MessageEnvelope.decode("mensaje viejo sin sobre".toByteArray()))
         assertNull(MessageEnvelope.decode(ByteArray(0)))
