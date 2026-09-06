@@ -702,6 +702,46 @@ Verified live on the TECNO with a throwaway contact (in-app ⋮ capture, since `
 black in a chat): a short and a long own bubble in the same run, the tall one visibly rounder
 and still reading as a bubble, the 4dp tail intact and the two consecutive bubbles still
 separable.
+**Bounded read on the inbound message stream (6 Sep 2026)**: the Go handler for
+`/krypta/msg/1.0.0` did `io.ReadAll(s)` with no cap — and **any** peer that can dial the phone
+can open that stream, because who sent it is not checked in Go but later in Kotlin
+(`ChatService.onReceived` resolves the contact by PeerID and drops the unknown one). So a
+stranger could make the app allocate as much memory as they cared to write. Now it reads
+`io.LimitReader(s, maxIncomingMessage+1)` and resets the stream past `maxIncomingMessage`
+(**1 MiB**) — a safety cap, not a product limit: the mailbox refuses blobs over 64 KiB, a file
+chunk is 48 KiB and an inline photo ≤58 KiB, so no legitimate send comes near it. The `+1` is
+what separates "exactly at the cap" from "went over": with a plain `LimitReader` the two are
+indistinguishable and a truncated message would be handed up as if complete (AES-GCM would
+reject it, but as "unreadable message", not as what it is). Same one-line fix in
+[infra/node/main.go](infra/node/main.go), whose handler had the same unbounded read on a
+**public** box (it only logs the bytes, but it is shared infrastructure) — that side takes
+effect on the next node redeploy. Covered by Go `TestIncomingMessageIsBounded`, which pins both
+edges (exactly at the cap is delivered whole; one byte over delivers nothing) and was checked
+to **fail** against the old handler. Note this is about *memory*, not about text length: a
+message has no length limit in the UI, and over the mailbox the real ceiling is ~65 KB of text
+(64 KiB blob minus the envelope and the GCM nonce+tag). **The two line-based readers were
+bounded in the same pass**: `MailboxFetch` and the wake session read the node's answer with
+`bufio.ReadBytes('\n')`, which grows without limit if the far end never sends the newline. A
+`LimitReader` is the wrong tool there — a legitimate fetch can carry 200 envelopes (several MB)
+and would be cut in half — so they now use a **fixed-size buffer + `ReadSlice`**
+(`bufio.ErrBufferFull` when a single line overflows it): `mbxMaxLine` 128 KiB, sized for the
+largest possible envelope (64 KiB blob → ~87 KiB of base64 plus JSON and the sender's PeerID,
+and the same cap the node uses when reading a deposit) and `wakeMaxLine` 4 KiB for the tiny
+wake/keepalive lines. Note `ReadSlice`'s slice is only valid until the next read: it is consumed
+right there by `json.Unmarshal`, which copies the strings into the struct. An overflow resets
+the stream — the unread envelopes stay unacked at the node and come back on the next fetch,
+which is the same behaviour as any other interruption. Severity here is lower than the message
+handler (the counterparty is a node from your own bootstrap list, not any peer on the internet),
+which is why it was worth re-testing rather than skipping. **The AAR was regenerated** twice for
+this (`build-aar.sh`; 16 KB pages re-verified on the four ABIs each time). Verified: Go suites
+green on both sides; live probes against **all three** nodes (fetch on VPS/Mac/Windows, wake and
+a full mailbox round trip on the VPS); and on the TECNO the diagnostics show `DHT: conectado` /
+`relay: OK` / `rendezvous: anunciando` / `wake activo`, i.e. both bounded readers work against
+production. **The VPS node was redeployed on 6 Sep 2026** (`deploy-vps.sh`, after 29 days of
+uptime) so its half of the fix is live: same PeerID (`node.key` untouched), listening again on
+`tcp/4001` + `udp/4001` + `ws/8081`, probes green and latency p50 = 104 ms from La Paz. **The two
+home nodes (Mac/Windows) still run the older binary** — their `io.ReadAll` is unbounded until
+someone runs `deploy-catalina.sh` / copies the new `.exe` on those machines.
 **Block a contact (6 Sep 2026)**: the last code-level item Play's user-generated-content
 policy asked for (block *or* report; there is no server to receive a report, since Krypta is
 E2EE and account-less, so blocking is the measure that can actually be enforced on the

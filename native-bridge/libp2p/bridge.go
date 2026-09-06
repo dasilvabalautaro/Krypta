@@ -48,6 +48,26 @@ const BootstrapDialTimeout = 20 * time.Second
 // ProtocolID is the libp2p protocol for Krypta one-shot E2EE message streams.
 const ProtocolID = protocol.ID("/krypta/msg/1.0.0")
 
+// mbxMaxLine acota **una línea** (un sobre) de la respuesta del buzón. No vale acotar el
+// total del stream: una retirada legítima puede traer hasta 200 sobres (varios MB) y un
+// `io.LimitReader` la cortaría por la mitad. Lo que hay que impedir es que un nodo que nunca
+// mande el salto de línea haga crecer el buffer sin fin, y eso se consigue con un buffer de
+// tamaño fijo + `ReadSlice`, que devuelve `bufio.ErrBufferFull` al llenarse. 128 KiB deja
+// sitio de sobra para el sobre más grande posible (blob de 64 KiB → ~87 KiB en base64, más el
+// JSON y el PeerID del remitente) y es el mismo tope que usa el nodo al leer un depósito.
+const mbxMaxLine = 128 << 10
+
+// wakeMaxLine acota una línea del stream de wake, que solo trae avisos diminutos
+// (`{"wake":true}` y los keepalive). Al pasarse, la sesión muere y el bucle reconecta.
+const wakeMaxLine = 4 << 10
+
+// maxIncomingMessage acota lo que se acepta por un stream entrante de mensajes. Es un tope de
+// seguridad, no un límite de producto: 1 MiB queda muy por encima de todo lo que viaja por
+// aquí —el buzón no admite blobs de más de 64 KiB, un trozo de archivo son 48 KiB y una foto
+// en línea ≤58 KiB—, así que ningún envío legítimo lo roza. Lo que corta es a un peer que
+// abra el stream y escriba sin fin.
+const maxIncomingMessage = 1 << 20
+
 // --- Spike sanity checks (JNI marshalling) -----------------------------------
 
 func Ping() string     { return "pong from krypta go-libp2p bridge" }
@@ -285,8 +305,20 @@ func (m *mdnsNotifee) HandlePeerFound(pi peer.AddrInfo) {
 func (n *Node) SetMessageHandler(h MessageHandler) {
 	n.h.SetStreamHandler(ProtocolID, func(s network.Stream) {
 		defer s.Close()
-		data, err := io.ReadAll(s)
+		// Lectura **acotada**: este stream lo puede abrir CUALQUIER peer que sepa marcarnos
+		// —quién envía no se comprueba aquí, sino después en Kotlin (`ChatService.onReceived`
+		// resuelve el contacto por PeerID y descarta al desconocido)—, así que un `io.ReadAll`
+		// a pelo dejaba que un extraño hiciera reservar a la app tanta memoria como quisiera
+		// mandar. Se lee un byte de más que el tope para poder distinguir "justo el tope" de
+		// "se pasó": con `io.LimitReader` a secas ambos casos son indistinguibles y un mensaje
+		// cortado llegaría como si estuviera entero (el AES-GCM lo rechazaría, pero como
+		// "mensaje ilegible", no como lo que es).
+		data, err := io.ReadAll(io.LimitReader(s, maxIncomingMessage+1))
 		if err != nil && err != io.EOF {
+			_ = s.Reset()
+			return
+		}
+		if len(data) > maxIncomingMessage {
 			_ = s.Reset()
 			return
 		}
@@ -820,10 +852,21 @@ func (n *Node) mailboxFetchFrom(ai peer.AddrInfo) (int, error) {
 		return 0, err
 	}
 	defer s.Close()
-	r := bufio.NewReader(s)
+	// Buffer de tamaño fijo + ReadSlice (y no ReadBytes, que crece sin límite): un nodo que
+	// no mandara nunca el '\n' hacía que el buffer creciera hasta donde él quisiera escribir.
+	// Aquí el interlocutor es un nodo de la propia lista de bootstrap, no un peer cualquiera,
+	// pero el coste de acotarlo es nulo. Lo no leído queda sin ack'ear en el nodo y se
+	// reentrega en la próxima retirada, que es el comportamiento de siempre ante un corte.
+	r := bufio.NewReaderSize(s, mbxMaxLine)
 	var envs []mbxEnvelope
 	for {
-		line, err := r.ReadBytes('\n')
+		// OJO: `line` solo es válido hasta la siguiente lectura. Se consume aquí mismo con
+		// json.Unmarshal, que copia las cadenas al struct, así que `envs` no apunta al buffer.
+		line, err := r.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			_ = s.Reset()
+			return 0, fmt.Errorf("buzón: sobre de más de %d KiB, se corta", mbxMaxLine>>10)
+		}
 		if err != nil {
 			return 0, fmt.Errorf("buzón interrumpido: %w", err)
 		}
@@ -977,9 +1020,12 @@ func (n *Node) wakeSession(ctx context.Context, ai peer.AddrInfo, h WakeHandler)
 	// (Re)conectados: retirar una vez, por si hubo avisos durante la desconexión.
 	h.OnWake()
 
-	r := bufio.NewReader(s)
+	// Igual que en el buzón: buffer fijo + ReadSlice. Una línea que se pase (o un nodo que no
+	// mande nunca el '\n') termina la sesión con error, y el bucle de arriba reconecta a los
+	// 5 s en vez de quedarse acumulando memoria.
+	r := bufio.NewReaderSize(s, wakeMaxLine)
 	for {
-		line, err := r.ReadBytes('\n')
+		line, err := r.ReadSlice('\n')
 		if err != nil {
 			return err
 		}

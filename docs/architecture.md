@@ -513,6 +513,25 @@ desacoplados y testeables.
   (`/krypta/msg/1.0.0`, con `network.WithAllowLimitedConn` para poder abrirlo sobre conexiones
   de relay, que son "limited") y entrega el blob; los mensajes entrantes llegan vía
   `MessageHandler` y se reemiten como `NodeEvent.StreamData` en el `Flow` de eventos.
+  **La lectura del stream entrante está acotada** (6 sep 2026): `io.LimitReader(s,
+  maxIncomingMessage+1)` y corte por encima de **1 MiB**. Ese stream lo puede abrir cualquier
+  peer que sepa marcar al móvil —quién envía no se comprueba en Go, sino en Kotlin
+  (`ChatService.onReceived` resuelve el contacto y descarta al desconocido)—, así que el
+  `io.ReadAll` sin tope que había dejaba a un extraño reservar memoria sin fin en la app. El
+  `+1` distingue "justo en el tope" de "se pasó"; sin él un mensaje cortado subiría como si
+  estuviera entero. Es un tope de **seguridad**, no de producto: el buzón no admite blobs de
+  más de 64 KiB, un trozo de archivo son 48 KiB y una foto en línea ≤58 KiB. Mismo arreglo en
+  el handler del nodo ([infra/node/main.go](../infra/node/main.go)), que es público. Cubierto
+  por `TestIncomingMessageIsBounded` (las dos orillas del límite).
+  **Y las dos lecturas por líneas** (`MailboxFetch` y la sesión de wake) pasaron de
+  `bufio.ReadBytes('\n')` —que crece sin límite si el otro extremo nunca manda el salto— a
+  **buffer de tamaño fijo + `ReadSlice`**, que devuelve `bufio.ErrBufferFull` al llenarse:
+  `mbxMaxLine` 128 KiB (cabe el sobre más grande: blob de 64 KiB → ~87 KiB en base64 + JSON +
+  PeerID; es el mismo tope que usa el nodo al leer un depósito) y `wakeMaxLine` 4 KiB. Un
+  `io.LimitReader` no sirve aquí: acotaría el **total** del stream y una retirada legítima de
+  200 sobres son varios MB. La rebanada de `ReadSlice` solo vale hasta la siguiente lectura, y
+  se consume en el acto con `json.Unmarshal` (que copia las cadenas al struct). Al desbordar se
+  resetea el stream: lo no leído queda sin ack'ear y se reentrega, como en cualquier corte.
   **Relay v2 + DCUtR (gate de NAT) — funcionando**: el host del móvil trae `EnableRelay` +
   `EnableHolePunching`, anuncia su propia dirección `/p2p-circuit` (`AddrsFactory` con la addr del
   nodo de infra) y hace `ReserveRelay` explícito cada 30 s. Así dos móviles tras NAT se envían

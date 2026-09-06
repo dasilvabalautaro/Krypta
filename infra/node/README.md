@@ -196,6 +196,16 @@ cat ~/krypta/node.log     # ver el PeerID
 > Francisco, Toronto, Atlanta, Richmond, Kansas City, Amsterdam, Londres, Fráncfort,
 > Singapur, Bangalore, Sídney): para un relay de voz/vídeo la región manda sobre la marca.
 >
+> **Redesplegado el 6 sep 2026** (`bash infra/node/deploy-vps.sh root@216.128.169.83`), tras
+> 29 días de uptime sin reinicios, para llevar una corrección de seguridad: el handler de
+> `/krypta/msg/1.0.0` leía con `io.ReadAll` **sin tope**, así que cualquier peer de internet
+> podía hacerle reservar memoria sin fin; ahora se acota a 1 MiB (`maxInboundMessage`). El
+> despliegue **conservó el PeerID** (`node.key` intacta, del 7 ago) y el buzón. Revalidado en
+> caliente: buzón, wake, ciclo completo y latencia **p50 = 104 ms / p95 = 114 ms**.
+> ⚠️ **Los dos nodos domésticos (Mac Catalina y PC Windows) siguen con el binario anterior**,
+> sin ese tope: hay que redesplegarlos a mano en sus máquinas (`deploy-catalina.sh` y copiar
+> el `.exe` nuevo, ver más abajo).
+>
 > Copia de seguridad de la identidad **hecha (8 ago)**: `node.key` está respaldada en
 > `~/keystores/krypta/krypta-node-saopaulo.key` en la Mac del autor (`600`, fuera del repo).
 > Verificada de verdad: mismo SHA-256 que la del VPS y, al deserializarla, deriva el PeerID

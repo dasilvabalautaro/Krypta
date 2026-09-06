@@ -35,6 +35,11 @@ import (
 
 const kryptaProtocol = protocol.ID("/krypta/msg/1.0.0")
 
+// maxInboundMessage acota lo que este nodo lee de un stream de mensajes entrante. El nodo es
+// público: cualquier peer de internet puede abrirlo. 1 MiB va muy por encima de lo legítimo
+// (el propio buzón rechaza blobs de más de 64 KiB).
+const maxInboundMessage = 1 << 20
+
 func main() {
 	listen := flag.String("listen", "/ip4/0.0.0.0/tcp/4001", "listen multiaddr")
 	keyPath := flag.String("key", "node.key", "path to persist the Ed25519 identity (stable PeerID)")
@@ -82,10 +87,13 @@ func main() {
 	defer h.Close()
 
 	// Print any inbound Krypta message (lets on-device tests verify the phone can dial
-	// this node and deliver a message over a libp2p stream).
+	// this node and deliver a message over a libp2p stream). Bounded read: see below.
 	h.SetStreamHandler(kryptaProtocol, func(s network.Stream) {
 		defer s.Close()
-		data, _ := io.ReadAll(s)
+		// Acotado por lo mismo que en el puente del móvil: este nodo es público y cualquiera
+		// puede abrirle este stream, así que sin tope un extraño le hace reservar memoria sin
+		// fin. Aquí el mensaje solo se imprime, pero el nodo es infraestructura compartida.
+		data, _ := io.ReadAll(io.LimitReader(s, maxInboundMessage))
 		// Print as hex: payloads are E2EE, so this node sees only opaque ciphertext.
 		fmt.Printf("message from %s: %d bytes (ciphertext, hex): %x\n",
 			s.Conn().RemotePeer(), len(data), data)
