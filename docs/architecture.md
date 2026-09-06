@@ -52,7 +52,8 @@ desacoplados y testeables.
   `ContactRepository.findByPeerId` resuelve mensajes entrantes.
 - Modelos: `Message` (contenido siempre como `ByteArray` cifrado), `Contact`
   (con `peerId` libp2p + `sharedSecret` semilla del rendezvous y del cifrado + `verified`,
-  flag anti-MITM tras cotejar el número de seguridad),
+  flag anti-MITM tras cotejar el número de seguridad, + `blocked`, bloqueo local del
+  contacto),
   `MessageStatus` (`PENDING→SENT→READ`/`FAILED`; la burbuja propia muestra "enviando…/
   enviado/leído/no enviado", y un mensaje **no enviado** es tocable para **reintentar**).
 
@@ -156,6 +157,14 @@ desacoplados y testeables.
     contacto**, cada una con confirmación destructiva (`ConfirmDeleteDialog`); las mismas
     acciones viven en el menú **⋮** de la barra del chat (eliminar navega atrás). Todo es
     **local** (sin cambio de protocolo): ver `ChatService.clearConversation`/`deleteContact`.
+    Desde el 6 sep 2026 ese mismo diálogo y ese mismo ⋮ llevan **Bloquear / Desbloquear**
+    (`ChatService.setBlocked`), **sin** confirmación destructiva porque es reversible y no
+    borra nada. Un bloqueado se marca con un 🚫 en `error` junto al nombre de la lista y
+    **nunca se pinta "en línea"** (su rendezvous ya no se anuncia); en su chat, la barra de
+    escribir se sustituye por `BlockedInputBar` ("Has bloqueado a X…" + **Desbloquear**), el
+    botón de llamar queda deshabilitado con el tooltip "Contacto bloqueado" y una grabación
+    fijada en curso se cancela sola al bloquear (si no, el micro se quedaría tomado sin
+    ningún control en pantalla para soltarlo).
   - **Ajustes** (`ui/SettingsScreen.kt`): tarjetas de identidad (**PeerID** con
     Copiar/Compartir), **copia de seguridad** (exportar/importar la identidad + contactos a
     un archivo `.krbk` cifrado con frase-clave, vía SAF; al importar, un diálogo muestra el
@@ -253,11 +262,29 @@ desacoplados y testeables.
   matemática; este número sirve para cotejar fuera de banda que nadie **sustituyó el PeerID**
   en el canal por el que se compartió. `ChatService.safetyNumber(contact)` +
   `setVerified(contact, bool)` → `Contact.verified` (Room). Cubierto por `SafetyNumberTest`.
+- **Bloqueo de contacto** (6 sep 2026, requisito de la política de contenido de Play):
+  `ChatService.setBlocked(contact, bool)` → `Contact.blocked` (Room, **v5**). Todo local y
+  **sin cambio de protocolo**, en cuatro puntos: (a) `announceAndFind` filtra a los
+  bloqueados, así que se deja de anunciar el rendezvous compartido con ellos; (b)
+  `onReceived` los descarta **antes de descifrar** — no persiste, no avisa y no llega a
+  `CallService` (ni timbre ni fila de "llamada perdida"); devolver `null` es además lo que
+  **ack'ea el sobre en el buzón**, así que el nodo lo borra en vez de reentregarlo cada ciclo
+  ocupando el cupo del destinatario; (c) `requireNotBlocked` corta **todos** los caminos de
+  salida (`send`/`sendImage`/`sendFile`/`sendRaw`/`retry`, y con `sendRaw` las señales de
+  llamada y los trozos de archivo); (d) `markConversationRead` limpia el badge local pero **no manda el
+  acuse**: un ✓✓ le diría que sigues leyéndole. El bloqueado no recibe **ninguna** señal —
+  sus envíos le quedan como enviados, igual que si el móvil estuviera apagado. El historial
+  se conserva (para borrarlo están `clearConversation` / `deleteContact`). Cubierto por
+  `ChatServiceTest` (descarte + ack, nada sale, sin acuse, fuera del rendezvous, desbloquear
+  restaura) y verificado en vivo en el TECNO.
 - `Hkdf` — util HKDF-SHA256 (RFC 5869) compartido por rendezvous y cifrado.
 - `IdentityBackup` + `BackupManager` — **respaldo de identidad** (archivo `.krbk`):
   `"KRBK1" ‖ salt(16) ‖ nonce(12) ‖ AES-256-GCM(payload)` con el magic como AAD; clave por
   PBKDF2-HMAC-SHA256 (310k iteraciones) de la frase-clave del usuario. El payload lleva la
-  identidad Ed25519 en base64 y una línea por contacto (nombre b64 | PeerID | verificado);
+  identidad Ed25519 en base64, una línea por contacto (nombre b64 | PeerID | verificado) y
+  una línea `b=<peerId>` por contacto **bloqueado** — aparte, y no como cuarto campo de la
+  línea del contacto, para que un Krypta anterior siga leyendo el archivo (su parser exige
+  3 campos e ignora las líneas que no conoce);
   los **secretos compartidos no viajan** — `BackupManager.import` los re-deriva por ECDH de
   la identidad importada (`Libp2pNode.sharedSecretFor(identityBytes, peerId)`) y upserta
   los contactos. `Libp2pNode.importIdentityBytes` valida con `Bridge.peerIDForIdentity` y
@@ -491,15 +518,16 @@ desacoplados y testeables.
 
 ### `:data`
 - Room: `MessageEntity` + `ContactEntity` (BLOB para `ciphertext`/claves), `MessageDao` /
-  `ContactDao` (Flow + suspend), `KryptaDatabase` (**v4**, `exportSchema=true` →
+  `ContactDao` (Flow + suspend), `KryptaDatabase` (**v5**, `exportSchema=true` →
   `data/schemas/`), `Converters` (enum `MessageStatus` ↔ String).
 - **Migraciones reales** (`Migrations.kt`): preservan contactos + mensajes al subir de
   versión (antes `fallbackToDestructiveMigration` los borraba). `MIGRATION_2_3` (columna
   `verified`), `MIGRATION_3_4` (índice compuesto `messages(conversationId, timestamp)` que
-  cubre el WHERE+ORDER BY de `observeConversation`). `DatabaseModule` usa `addMigrations(...)`
+  cubre el WHERE+ORDER BY de `observeConversation`), `MIGRATION_4_5` (columna `blocked`). `DatabaseModule` usa `addMigrations(...)`
   + `fallbackToDestructiveMigrationFrom(1)` (red de seguridad solo para la v1 antigua). **A
   partir de aquí: cada cambio de esquema = nueva `Migration` + subir la versión.** Verificado
-  en dispositivo: un contacto (con su flag `verified`) sobrevive al salto v3→v4.
+  en dispositivo: un contacto (con su flag `verified`) sobrevive al salto v3→v4, y los dos
+  contactos reales del TECNO al v4→v5 (`user_version = 5`, `verified` intacto, `blocked = 0`).
 - `RoomMessageRepository` / `RoomContactRepository` implementan los repos del dominio.
 - `DataModule`: provee DB/DAOs y enlaza ambos repositorios.
 

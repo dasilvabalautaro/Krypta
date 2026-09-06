@@ -397,10 +397,13 @@ class ChatService @Inject constructor(
     @Volatile
     private var lastReserveResult: String? = null
 
-    private suspend fun announceAndFind() {
+    /** Interno (no privado) para poder ejercitarlo desde los tests del módulo. */
+    internal suspend fun announceAndFind() {
         val targets = runCatching { contacts.observeAll().first() }
             .getOrDefault(emptyList())
-            .filter { it.sharedSecret != null }
+            // El bloqueado se cae del rendezvous: se deja de anunciar el punto de cita
+            // compartido con él, así que ni siquiera puede localizar a este dispositivo.
+            .filter { it.sharedSecret != null && !it.blocked }
         if (targets.isNotEmpty()) logLine("rendezvous: anunciando a ${targets.size} contacto(s)")
         for (contact in targets) {
             val rdv = rendezvous.rendezvousFor(contact.sharedSecret!!)
@@ -443,12 +446,22 @@ class ChatService @Inject constructor(
     private var lastMailboxError: String? = null
 
     /**
+     * Salvaguarda de dominio: a un contacto bloqueado no se le envía **nada** (mensajes,
+     * trozos de archivo o señales de llamada). La UI ya lo impide, pero el corte vive aquí
+     * para que ningún camino de envío se lo salte.
+     */
+    private fun requireNotBlocked(contact: Contact) {
+        require(!contact.blocked) { "${contact.displayName} está bloqueado" }
+    }
+
+    /**
      * Cifra [plaintext] para [contact], lo persiste (PENDING) y lo envía. Si el envío
      * directo falla (peer offline / NAT sin ruta), cae al **buzón** store-and-forward del
      * nodo (entrega offline) → `SENT`. Solo si el buzón también falla queda **FAILED** —
      * nunca se propaga la excepción, para no tumbar la app. Devuelve el estado final.
      */
     suspend fun send(contact: Contact, plaintext: ByteArray, replyTo: String? = null): Message {
+        requireNotBlocked(contact)
         val secret = requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
         // El ciphertext cifra un SOBRE que lleva el id del mensaje, para que el receptor
         // pueda acusar su lectura citándolo (marca de leído). Si es una respuesta, ese sobre
@@ -475,6 +488,7 @@ class ChatService @Inject constructor(
      * [send] pero el sobre es de tipo imagen; viaja por el mismo camino (directo → buzón).
      */
     suspend fun sendImage(contact: Contact, jpeg: ByteArray, replyTo: String? = null): Message {
+        requireNotBlocked(contact)
         val secret = requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
         val msgId = UUID.randomUUID().toString()
         val ciphertext = cipher.encrypt(
@@ -508,6 +522,7 @@ class ChatService @Inject constructor(
         localPath: String? = null,
         replyTo: String? = null,
     ): Message {
+        requireNotBlocked(contact)
         val secret = requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
         val fileId = UUID.randomUUID().toString()
         val total = (bytes.size + CHUNK_SIZE - 1) / CHUNK_SIZE
@@ -578,6 +593,7 @@ class ChatService @Inject constructor(
 
     /** Cifra y envía un sobre "en crudo" (meta/trozo) sin crear un Message: directo → buzón. */
     private suspend fun sendRaw(contact: Contact, envelope: ByteArray) {
+        requireNotBlocked(contact)
         val ciphertext = cipher.encrypt(requireNotNull(contact.sharedSecret), envelope)
         try {
             signaling.send(contact, ciphertext)
@@ -606,6 +622,7 @@ class ChatService @Inject constructor(
      * sin duplicar). Devuelve el mensaje con su estado final, o null si no existe.
      */
     suspend fun retry(contact: Contact, messageId: String): Message? {
+        requireNotBlocked(contact)
         val message = messages.findById(messageId) ?: return null
         messages.updateStatus(messageId, MessageStatus.PENDING)
         logLine("↻ reintentando a ${short(contact.peerId)}")
@@ -671,6 +688,12 @@ class ChatService @Inject constructor(
         ts: Long? = null,
     ): Message? {
         val contact = contacts.findByPeerId(peerId) ?: return null
+        // Bloqueado: se descarta **antes de descifrar**, así que no se persiste, no avisa y
+        // no llega a CallService (nada de timbre ni de "llamada perdida"). Devolver null es
+        // además lo que ack'ea el sobre en el buzón: se borra del nodo en vez de reentregarse
+        // en cada ciclo ocupando el cupo del destinatario. El bloqueado no se entera: sus
+        // envíos le quedan como enviados, igual que si estuvieras desconectado.
+        if (contact.blocked) return null
         val secret = contact.sharedSecret ?: return null
         val envelope = runCatching { MessageEnvelope.decode(cipher.decrypt(secret, ciphertext)) }.getOrNull()
         // La cita es un envoltorio: se abre aquí para que el resto ramifique por el contenido
@@ -771,6 +794,9 @@ class ChatService @Inject constructor(
     suspend fun markConversationRead(contact: Contact) {
         // Vista local: limpia el badge de no leídos aunque el acuse de red falle.
         runCatching { messages.markIncomingRead(contact.id) }
+        // A un bloqueado no se le acusa nada: el historial se puede seguir leyendo aquí, pero
+        // él no debe recibir ninguna señal (ni siquiera un ✓✓) de este dispositivo.
+        if (contact.blocked) return
         val secret = contact.sharedSecret ?: return
         val received = runCatching { messages.observeConversation(contact.id).first() }
             .getOrDefault(emptyList())
@@ -832,6 +858,25 @@ class ChatService @Inject constructor(
     /** Marca (o desmarca) [contact] como verificado tras cotejar el número de seguridad. */
     suspend fun setVerified(contact: Contact, verified: Boolean) {
         contacts.upsert(contact.copy(verified = verified))
+    }
+
+    /**
+     * Bloquea (o desbloquea) a [contact]. Todo local y sin cambio de protocolo: se deja de
+     * anunciar su rendezvous ([announceAndFind]), lo que llegue de él se descarta sin
+     * persistir ni avisar ([onReceived]) y no se le envía nada ([requireNotBlocked]). El
+     * bloqueado **no recibe ninguna señal**: sus mensajes le quedan como enviados, igual que
+     * si este dispositivo estuviera apagado. El chat y el contacto se conservan — para
+     * borrarlos están [clearConversation] y [deleteContact].
+     */
+    suspend fun setBlocked(contact: Contact, blocked: Boolean) {
+        contacts.upsert(contact.copy(blocked = blocked))
+        if (blocked) {
+            // Sin rendezvous ya no se le va a ver: que el punto verde no se quede pegado.
+            lastFound.remove(contact.peerId)
+            _onlinePeers.update { it - contact.peerId }
+        }
+        val what = if (blocked) "🚫 contacto bloqueado" else "contacto desbloqueado"
+        logLine("$what: ${short(contact.peerId)}")
     }
 
     /**

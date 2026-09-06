@@ -74,6 +74,7 @@ fun ConversationsScreen(
     onClearError: () -> Unit,
     onClearChat: (Contact) -> Unit,
     onDeleteContact: (Contact) -> Unit,
+    onSetBlocked: (Contact, Boolean) -> Unit,
 ) {
     var showAdd by remember { mutableStateOf(false) }
     // Pulsación larga sobre una conversación → menú de acciones → confirmación destructiva.
@@ -128,7 +129,9 @@ fun ConversationsScreen(
                     items(conversations, key = { it.contact.id }) { item ->
                         ConversationRow(
                             item = item,
-                            isOnline = item.contact.peerId in online,
+                            // Un bloqueado no se anuncia ni se busca: aunque quedara en
+                            // el set de conectados, pintarlo "en línea" sería mentira.
+                            isOnline = item.contact.peerId in online && !item.contact.blocked,
                             onClick = { onOpen(item.contact) },
                             onLongClick = { actionsFor = item.contact },
                         )
@@ -157,6 +160,12 @@ fun ConversationsScreen(
                     DialogOption("Vaciar chat") {
                         actionsFor = null
                         confirmClear = contact
+                    }
+                    // Bloquear es reversible y no destruye nada, así que no pide confirmación
+                    // (a diferencia de vaciar/eliminar).
+                    DialogOption(if (contact.blocked) "Desbloquear" else "Bloquear") {
+                        actionsFor = null
+                        onSetBlocked(contact, !contact.blocked)
                     }
                     DialogOption("Eliminar contacto", color = MaterialTheme.colorScheme.error) {
                         actionsFor = null
@@ -277,6 +286,14 @@ private fun ConversationRow(
                             KryptaShieldIcon,
                             contentDescription = "Identidad verificada",
                             tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(start = 4.dp).size(15.dp),
+                        )
+                    }
+                    if (contact.blocked) {
+                        Icon(
+                            KryptaBlockIcon,
+                            contentDescription = "Contacto bloqueado",
+                            tint = MaterialTheme.colorScheme.error,
                             modifier = Modifier.padding(start = 4.dp).size(15.dp),
                         )
                     }

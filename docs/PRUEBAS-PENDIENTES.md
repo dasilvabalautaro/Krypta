@@ -608,6 +608,44 @@ tres cosas a la vez: sin push de terceros, sin aviso permanente y con entrega in
 
 ---
 
+## 15. Bloquear un contacto entre 2 móviles — **PENDIENTE**
+
+Implementado y cubierto por tests JVM (`ChatServiceTest`: descartado y ack'eado, no sale nada
+por ningún camino, sin acuse de lectura, fuera del rendezvous, desbloquear restaura) y
+verificado en 1 móvil con un contacto desechable (insignia 🚫, aviso en el chat con
+"Desbloquear", botón de llamar deshabilitado, migración v4→v5 con los contactos intactos).
+Lo que **solo se puede comprobar con el segundo móvil** es la propiedad que de verdad
+importa: que el bloqueado **no se entera**.
+
+Usar un contacto desechable, no uno real.
+
+1. - [ ] **El mensaje no llega ni suena.** Bloquear a B en el móvil A. Enviar desde B un
+     texto, una foto y una nota de voz. **Esperado en A**: no aparece nada en el chat, no
+     suena ninguna notificación y el badge de no leídos no cambia — ni con la app abierta ni
+     con la app cerrada (probar ambas).
+2. - [ ] **B no se entera.** En el móvil B, esos envíos quedan con el estado normal de
+     "enviado" (✓), **nunca** con error, y B no recibe el ✓✓ aunque A abra el chat. Es la
+     diferencia con eliminar el contacto, y es lo que hace que el bloqueo sea silencioso.
+3. - [ ] **El sobre no se queda dando vueltas en el buzón.** Con A bloqueando y B enviando
+     3–4 mensajes, dejar pasar dos ciclos de WAN y mirar el panel de Diagnóstico de A: debe
+     aparecer la retirada del buzón (`buzón: N mensaje(s) recogido(s)`) **una sola vez** por
+     ráfaga; si los mismos sobres reaparecen ciclo tras ciclo es que no se están ack'eando y
+     acabarían llenando el cupo de 5 MiB del destinatario.
+4. - [ ] **Llamada bloqueada.** B llama a A. **Esperado en A**: no timbra, no sale
+     notificación de llamada y **no** aparece la fila "📞 Llamada perdida". En B, la llamada
+     se queda sonando hasta que expira, igual que si A estuviera sin cobertura.
+5. - [ ] **A no puede escribir ni llamar.** En el chat de B (bloqueado), A no tiene barra de
+     escribir —sale el aviso con "Desbloquear"— y el botón de llamar está deshabilitado.
+6. - [ ] **Desbloquear restaura la entrega.** A desbloquea a B. **Esperado**: los mensajes
+     **nuevos** de B llegan con normalidad. Los enviados **durante** el bloqueo no vuelven
+     (se descartaron y se borraron del buzón): confirmarlo explícitamente, es el
+     comportamiento pretendido, no un fallo.
+7. - [ ] **El bloqueo sobrevive al respaldo.** En A: bloquear a B, exportar un `.krbk`,
+     importarlo en un móvil de repuesto (o tras reinstalar) y comprobar que B sigue
+     **bloqueado**, no desbloqueado.
+
+---
+
 ## 10. DCUtR directo en celular (gate de NAT) — **BLOQUEADO por hardware**
 Requiere **2 SIMs de operadoras distintas** (CGNAT real). Medir si la conexión sube a
 directa (DCUtR) o se queda en relay.
@@ -619,6 +657,20 @@ directa (DCUtR) o se queda en relay.
 ---
 
 ## Verificado en 1 móvil (no requiere el segundo)
+- **Bloquear contacto (6 sep)**: en el TECNO, con un contacto de usar y tirar (creado con el
+  PeerID del nodo de São Paulo, borrado al terminar; los dos contactos reales no se tocaron).
+  La **pulsación larga** en la lista ofrece "Vaciar chat / Bloquear / Eliminar contacto" y el
+  bloqueo se aplica sin confirmación (es reversible). Tras bloquear: 🚫 en rojo junto al
+  nombre de la lista; dentro del chat, la barra de escribir se sustituye por "Has bloqueado a
+  X. No recibirás sus mensajes ni sus llamadas." con **Desbloquear**, y el botón de llamar
+  pasa a estar deshabilitado con `content-desc` "Contacto bloqueado" (leído con `uiautomator
+  dump`, porque `screencap` sale negro en el chat). ⋮ → **Desbloquear** devuelve la barra de
+  entrada, el clip, el micro y el botón de llamar. **Migración v4→v5 en el móvil real**:
+  `PRAGMA user_version` = 5 y los dos contactos reales siguen ahí con su `verified` intacto y
+  `blocked = 0`.
+  - [ ] **Pendiente con 2 móviles**: §15 (que el bloqueado no se entere: sus envíos le quedan
+    en ✓, sin ✓✓; que a este lado no llegue nada ni suene; que los sobres del buzón se
+    ack'een en vez de reentregarse; y que el bloqueo sobreviva a un `.krbk`).
 - **Responder citando (3 sep)**: en el TECNO, con un contacto de usar y tirar. **Mantener
   pulsada** una burbuja abre la píldora con "Responder a este mensaje" + "Copiar mensaje";
   **deslizarla a la derecha** abre directamente la barra de cita (autor + resumen + ✕ sobre el

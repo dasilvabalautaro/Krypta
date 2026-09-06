@@ -15,6 +15,7 @@ data class ContactEntity(
     val publicKey: ByteArray,
     val sharedSecret: ByteArray?,
     val verified: Boolean = false,
+    val blocked: Boolean = false,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -24,7 +25,8 @@ data class ContactEntity(
             peerId == other.peerId &&
             publicKey.contentEquals(other.publicKey) &&
             (sharedSecret?.contentEquals(other.sharedSecret) ?: (other.sharedSecret == null)) &&
-            verified == other.verified
+            verified == other.verified &&
+            blocked == other.blocked
     }
 
     override fun hashCode(): Int {
@@ -34,6 +36,7 @@ data class ContactEntity(
         result = 31 * result + publicKey.contentHashCode()
         result = 31 * result + (sharedSecret?.contentHashCode() ?: 0)
         result = 31 * result + verified.hashCode()
+        result = 31 * result + blocked.hashCode()
         return result
     }
 }

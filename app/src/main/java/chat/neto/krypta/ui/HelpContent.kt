@@ -141,6 +141,16 @@ object HelpContent {
                 "mensaje es delicado, cópialo solo cuando de verdad lo necesites.",
         ),
         HelpItem(
+            category = "Privacidad y seguridad",
+            question = "¿Puedo bloquear a alguien?",
+            answer = "Sí. Mantén pulsada la conversación en la lista, o entra en el chat y usa " +
+                "⋮ → Bloquear. Desde ese momento no recibes sus mensajes ni sus llamadas: se " +
+                "descartan sin avisarte y sin guardarse en el móvil. La otra persona no sabe " +
+                "que la has bloqueado; sus envíos le siguen apareciendo como enviados, igual " +
+                "que si tuvieras el móvil apagado. El historial se conserva y puedes " +
+                "desbloquearla cuando quieras desde el mismo sitio.",
+        ),
+        HelpItem(
             category = "Problemas frecuentes",
             question = "Uso “Cerrar todo” en aplicaciones recientes, ¿afecta a Krypta?",
             answer = "Sí, y es distinto de ocultar el aviso: “Cerrar todo” cierra Krypta de " +

@@ -31,6 +31,7 @@ class RoomContactRepository @Inject constructor(
         publicKey = e.publicKey,
         sharedSecret = e.sharedSecret,
         verified = e.verified,
+        blocked = e.blocked,
     )
 
     private fun Contact.toEntity() = ContactEntity(
@@ -40,5 +41,6 @@ class RoomContactRepository @Inject constructor(
         publicKey = publicKey,
         sharedSecret = sharedSecret,
         verified = verified,
+        blocked = blocked,
     )
 }

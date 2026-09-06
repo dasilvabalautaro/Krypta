@@ -684,6 +684,37 @@ border read fine on a short bubble, but on a tall multi-line one the same corner
 tiny fraction of the silhouette and the edge stops reading as a bubble; the 1.5dp shadow
 disappears at that size too. To revisit: corner radius and/or border weight that scale with
 the bubble, rather than the fixed values that were tuned on short messages.
+**Block a contact (6 Sep 2026)**: the last code-level item Play's user-generated-content
+policy asked for (block *or* report; there is no server to receive a report, since Krypta is
+E2EE and account-less, so blocking is the measure that can actually be enforced on the
+device). All **local, no protocol change**: `Contact.blocked` (Room **v5** + `MIGRATION_4_5`)
+and `ChatService.setBlocked`, enforced at four points — (a) `announceAndFind` filters blocked
+contacts out, so the rendezvous shared with them stops being advertised and they can no longer
+even locate the device; (b) `onReceived` drops them **before decrypting**: nothing is
+persisted, no notifier fires, and it never reaches `CallService` (no ring, no "missed call"
+row) — returning `null` is also what **acks the mailbox envelope**, so the node deletes it
+instead of redelivering it every cycle and eating the recipient's quota; (c) a single
+`requireNotBlocked` guard covers **every** outgoing path (`send`/`sendImage`/`sendFile`/
+`sendRaw`/`retry` — and through `sendRaw` the call signals and file chunks, through `retry`
+the tap on an old FAILED bubble); (d)
+`markConversationRead` still clears the local badge but **skips the receipt** — a ✓✓ would
+tell them you are still reading. The blocked peer gets **no signal at all**: their messages
+stay "sent" for them, exactly as if the phone were off. History is kept (clearing/deleting are
+still separate actions). The flag rides in the `.krbk` backup as its own `b=<peerId>` lines
+rather than a 4th field of the contact line, so a **previous** Krypta can still read the file
+(its parser requires exactly 3 fields and ignores lines it doesn't know) — restoring on a new
+phone must not quietly bring a blocked person back unblocked. UI: **long-press a
+conversation** and **⋮ in the chat**, both without a destructive confirmation (it's
+reversible); a 🚫 badge in `error` next to the name, never "en línea", and in the chat the
+input strip is replaced by `BlockedInputBar` ("Has bloqueado a X…" + **Desbloquear**) with the
+call button disabled ("Contacto bloqueado"). A pinned voice recording is cancelled when
+blocking, or the mic would stay held with no on-screen control left to release it. Covered by
+`ChatServiceTest` (dropped + acked, nothing sent by any path, no receipt, out of the
+rendezvous, unblocking restores delivery), `IdentityBackupTest` (round-trip + an old backup
+still reads) and `HelpContentTest`; verified live on the TECNO with a throwaway contact
+(block → 🚫 badge, chat shows the notice and the disabled call button, ⋮ → Desbloquear brings
+the input bar back, contact deleted afterwards) — and the **v4→v5 migration on the real
+device**: `user_version = 5`, both real contacts intact with `verified` preserved.
 **Screenshot/screen-recording block (13 Aug 2026; scoped to the chat screen 21 Aug 2026)**:
 **`FLAG_SECURE`** is now set **per screen**, not app-wide — `SecureScreenEffect` in
 `ui/ChatScreens.kt` calls `ScreenSecurity.setSecure(activity, true)` from a `DisposableEffect`

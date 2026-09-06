@@ -574,4 +574,17 @@ class ChatViewModel @Inject constructor(
     fun setVerified(contact: Contact, verified: Boolean) {
         viewModelScope.launch { runCatching { chat.setVerified(contact, verified) } }
     }
+
+    /**
+     * Bloquea/desbloquea a [contact]. Al bloquear se retira además su notificación pendiente:
+     * a partir de ese momento no vuelve a sonar nada suyo, y dejar la anterior en la bandeja
+     * sería contradictorio.
+     */
+    fun setBlocked(contact: Contact, blocked: Boolean) {
+        viewModelScope.launch {
+            runCatching { chat.setBlocked(contact, blocked) }
+                .onFailure { _error.value = "No se pudo cambiar el bloqueo" }
+            if (blocked) KryptaNotifications.cancel(context, contact.id)
+        }
+    }
 }

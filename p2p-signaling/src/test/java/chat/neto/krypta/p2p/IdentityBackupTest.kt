@@ -25,6 +25,39 @@ class IdentityBackupTest {
         assertEquals(contacts, out.contacts)
     }
 
+    /**
+     * El bloqueo viaja en el respaldo: restaurar en un móvil nuevo no debe traer de vuelta,
+     * desbloqueado, a alguien de quien el usuario se quitó de encima.
+     */
+    @Test
+    fun `round-trip conserva el bloqueo`() {
+        val conBloqueado = contacts +
+            IdentityBackup.BackupContact("Spam", "12D3KooWSpam", verified = false, blocked = true)
+        val blob = IdentityBackup.encode(
+            "passphrase".toCharArray(),
+            IdentityBackup.Data(identity, conBloqueado),
+        )
+        val out = IdentityBackup.decode("passphrase".toCharArray(), blob)
+        assertEquals(conBloqueado, out.contacts)
+        assertEquals(listOf("12D3KooWSpam"), out.contacts.filter { it.blocked }.map { it.peerId })
+    }
+
+    /**
+     * Un respaldo de una versión anterior (sin ninguna línea `b=`) se lee igual y sus
+     * contactos quedan **desbloqueados**: el bloqueo se añadió en líneas propias, no como un
+     * cuarto campo de `c=`, para no romper la compatibilidad en ninguno de los dos sentidos.
+     */
+    @Test
+    fun `un respaldo sin lineas de bloqueo se lee con todos desbloqueados`() {
+        val blob = IdentityBackup.encode(
+            "passphrase".toCharArray(),
+            IdentityBackup.Data(identity, contacts), // ninguno bloqueado → payload sin `b=`
+        )
+        val out = IdentityBackup.decode("passphrase".toCharArray(), blob)
+        assertTrue(out.contacts.none { it.blocked })
+        assertEquals(contacts, out.contacts)
+    }
+
     @Test
     fun `passphrase incorrecta falla, no devuelve basura`() {
         val blob = IdentityBackup.encode(

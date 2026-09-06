@@ -43,7 +43,8 @@ class ChatServiceTest {
             if (failOnStart) error("mDNS no disponible (sin interfaz multicast)")
         }
         override suspend fun stop() = Unit
-        override suspend fun announce(rendezvous: ByteArray) = Unit
+        val announced = mutableListOf<ByteArray>()
+        override suspend fun announce(rendezvous: ByteArray) { announced.add(rendezvous) }
         override suspend fun findPeers(rendezvous: ByteArray): List<String> = emptyList()
         override suspend fun bootstrap(): String? = bootstrapAddr
         override suspend fun setBootstrap(addr: String) { lastSetBootstrap = addr }
@@ -904,5 +905,108 @@ class ChatServiceTest {
 
         assertTrue(messages.saved.isEmpty())
         assertTrue(contacts.store.isEmpty()) // announceAndFind ya no lo verá (relee de Room)
+    }
+
+    // --- Bloqueo de contacto ---------------------------------------------------------------
+
+    private val blockedContact = contact.copy(blocked = true)
+
+    /**
+     * Lo que llega de un bloqueado se descarta: ni se persiste, ni avisa, ni sale por el flujo
+     * de señales de llamada. Y `onReceived` devuelve null **sin lanzar**, que es lo que ack'ea
+     * el sobre en el buzón: si lanzara, el nodo se lo reentregaría en cada ciclo para siempre.
+     */
+    @Test
+    fun `incoming from a blocked contact is dropped, not persisted and not notified`() = runTest {
+        val signaling = FakeSignaling()
+        val messages = FakeMessages()
+        val contacts = FakeContacts(listOf(blockedContact))
+        val chat = ChatService(signaling, cipher, messages, contacts, FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+        var notified = 0
+        chat.setIncomingNotifier { _, _ -> notified++ }
+
+        val text = cipher.encrypt(secret, MessageEnvelope.encodeText("m1", "hola".toByteArray()))
+        assertNull(chat.onReceived(contact.peerId, text, mailboxId = "env-1", ts = 1L))
+        val invite = cipher.encrypt(secret, MessageEnvelope.encodeCall("invite", "call-1", 1L))
+        assertNull(chat.onReceived(contact.peerId, invite, mailboxId = "env-2", ts = 2L))
+
+        assertTrue(messages.saved.isEmpty())
+        assertEquals(0, notified)
+        // El procesador del buzón lo da por procesado → el nodo borra el sobre en vez de
+        // reentregarlo (si no, un bloqueado llenaría el cupo del destinatario indefinidamente).
+        val processor = signaling.registeredMailboxProcessor!!
+        assertTrue(processor(contact.peerId, text, "env-3", 3L))
+    }
+
+    /** Desbloquear devuelve el camino normal: lo siguiente que llega sí se guarda. */
+    @Test
+    fun `unblocking restores delivery`() = runTest {
+        val messages = FakeMessages()
+        val contacts = FakeContacts(listOf(blockedContact))
+        val chat = ChatService(FakeSignaling(), cipher, messages, contacts, FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        chat.setBlocked(blockedContact, false)
+        assertFalse(contacts.store.getValue(contact.id).blocked)
+
+        val text = cipher.encrypt(secret, MessageEnvelope.encodeText("m1", "hola".toByteArray()))
+        assertEquals(MessageStatus.DELIVERED, chat.onReceived(contact.peerId, text)!!.status)
+    }
+
+    /** A un bloqueado no se le envía nada por ningún camino (mensaje, archivo o llamada). */
+    @Test
+    fun `nothing is sent to a blocked contact`() = runTest {
+        val signaling = FakeSignaling()
+        val messages = FakeMessages()
+        val chat = ChatService(signaling, cipher, messages, FakeContacts(listOf(blockedContact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        for (send in listOf<suspend () -> Unit>(
+            { chat.send(blockedContact, "hola".toByteArray()) },
+            { chat.sendImage(blockedContact, ByteArray(16)) },
+            { chat.sendFile(blockedContact, "f.bin", "application/octet-stream", ByteArray(16)) },
+            { chat.sendCallSignal(blockedContact, "invite", "call-1") },
+            // Tocar una burbuja FALLIDA de antes del bloqueo tampoco puede reenviarla.
+            { chat.retry(blockedContact, "cualquier-id") },
+        )) {
+            runCatching { send() }.let { assertTrue("debería rechazarse", it.isFailure) }
+        }
+        assertTrue(signaling.sentAll.isEmpty())
+        assertTrue(signaling.mailboxDeposits.isEmpty())
+        assertTrue(messages.saved.isEmpty()) // ni siquiera queda una burbuja propia FAILED
+    }
+
+    /**
+     * Abrir el chat de un bloqueado limpia el badge local pero **no** manda acuse de lectura:
+     * un ✓✓ le diría que sigues ahí leyéndole, que es justo la señal que no debe recibir.
+     */
+    @Test
+    fun `reading a blocked conversation clears the badge without sending a receipt`() = runTest {
+        val signaling = FakeSignaling()
+        val messages = FakeMessages()
+        val chat = ChatService(signaling, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+        val text = cipher.encrypt(secret, MessageEnvelope.encodeText("m1", "hola".toByteArray()))
+        chat.onReceived(contact.peerId, text)
+
+        chat.markConversationRead(blockedContact)
+
+        assertEquals(MessageStatus.READ, messages.saved.single().status) // solo vista local
+        assertTrue(signaling.sentAll.isEmpty())
+        assertTrue(signaling.mailboxDeposits.isEmpty())
+    }
+
+    /** El bloqueado sale del rendezvous: se deja de anunciar el punto de cita compartido. */
+    @Test
+    fun `a blocked contact is not announced in the rendezvous`() = runTest {
+        val other = Contact(
+            id = "c2", displayName = "Ana", peerId = "12D3KooWAna",
+            publicKey = ByteArray(0), sharedSecret = ByteArray(32) { 9 },
+        )
+        val signaling = FakeSignaling()
+        val rendezvous = RendezvousService()
+        val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(blockedContact, other)), FakeKeyExchange(), rendezvous, FakeFileStore(), backgroundScope)
+
+        chat.announceAndFind()
+
+        assertEquals(1, signaling.announced.size)
+        assertArrayEquals(rendezvous.rendezvousFor(other.sharedSecret!!), signaling.announced.single())
     }
 }

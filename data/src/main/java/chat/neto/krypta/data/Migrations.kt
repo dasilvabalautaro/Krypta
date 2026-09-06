@@ -30,3 +30,15 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         )
     }
 }
+
+/**
+ * v4→v5: bloqueo de contacto. `blocked = 1` = no se anuncia su rendezvous, lo que llegue de
+ * él se descarta sin persistir ni avisar, y la UI impide escribirle o llamarle. Es local: el
+ * bloqueado no recibe ninguna señal de que lo está (sus envíos le quedan como enviados, igual
+ * que si estuvieras desconectado).
+ */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE contacts ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0")
+    }
+}

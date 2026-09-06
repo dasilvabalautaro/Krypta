@@ -20,10 +20,19 @@ import javax.crypto.spec.SecretKeySpec
  * para un archivo que se descifra una vez). El payload es texto por líneas:
  * `v=1`, `id=<base64 identidad>`, y una `c=<base64 nombre>|<peerId>|<0/1>` por contacto
  * (el secreto compartido NO viaja: se re-deriva por ECDH de la identidad al importar).
+ * Los **bloqueados** van en líneas aparte `b=<peerId>` en vez de en un cuarto campo de `c=`:
+ * así un respaldo nuevo sigue siendo legible por una versión anterior de Krypta (su parser
+ * exige exactamente 3 campos en `c=` e **ignora** las líneas que no conoce), que es justo lo
+ * que hace falta en un archivo pensado para migrar de móvil.
  */
 object IdentityBackup {
 
-    data class BackupContact(val displayName: String, val peerId: String, val verified: Boolean)
+    data class BackupContact(
+        val displayName: String,
+        val peerId: String,
+        val verified: Boolean,
+        val blocked: Boolean = false,
+    )
 
     class Data(val identity: ByteArray, val contacts: List<BackupContact>)
 
@@ -76,14 +85,19 @@ object IdentityBackup {
                 .append('|').append(if (c.verified) '1' else '0')
                 .append('\n')
         }
+        for (c in data.contacts.filter { it.blocked }) {
+            append("b=").append(c.peerId).append('\n')
+        }
     }.toByteArray(Charsets.UTF_8)
 
     private fun parse(plain: ByteArray): Data {
         var identity: ByteArray? = null
         val contacts = mutableListOf<BackupContact>()
+        val blocked = mutableSetOf<String>()
         for (line in String(plain, Charsets.UTF_8).lineSequence()) {
             when {
                 line.startsWith("id=") -> identity = decoder.decode(line.removePrefix("id="))
+                line.startsWith("b=") -> blocked += line.removePrefix("b=")
                 line.startsWith("c=") -> {
                     val parts = line.removePrefix("c=").split('|')
                     if (parts.size != 3) throw InvalidBackup("contacto malformado")
@@ -95,7 +109,10 @@ object IdentityBackup {
                 }
             }
         }
-        return Data(identity ?: throw InvalidBackup("respaldo sin identidad"), contacts)
+        return Data(
+            identity ?: throw InvalidBackup("respaldo sin identidad"),
+            contacts.map { if (it.peerId in blocked) it.copy(blocked = true) else it },
+        )
     }
 
     private fun deriveKey(passphrase: CharArray, salt: ByteArray): ByteArray =

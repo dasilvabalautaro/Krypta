@@ -202,7 +202,7 @@ fun KryptaApp(
             ChatScreen(
                 viewModel = viewModel,
                 contact = openContact,
-                online = openContact.peerId in online,
+                online = openContact.peerId in online && !openContact.blocked,
                 onBack = { current = null },
             )
         }
@@ -248,6 +248,7 @@ fun KryptaApp(
                 onClearError = viewModel::clearError,
                 onClearChat = viewModel::clearChat,
                 onDeleteContact = viewModel::deleteContact,
+                onSetBlocked = viewModel::setBlocked,
             )
         }
     }
@@ -469,6 +470,16 @@ private fun ChatScreen(
     // Salir del chat a media grabación la cancela (y libera el micro).
     DisposableEffect(Unit) { onDispose { recorder.cancel() } }
 
+    // Bloquear con una grabación fijada en curso (toque corto en el micro → ⋮ → Bloquear):
+    // la barra de entrada desaparece, así que sin esto el micro se quedaría tomado sin
+    // ningún control en pantalla para soltarlo.
+    LaunchedEffect(contact.blocked) {
+        if (contact.blocked) {
+            if (recordMode != RecordMode.NONE) finishRecording(false)
+            replyingTo = null // la cita en curso ya no se puede enviar a nadie
+        }
+    }
+
     // Declara qué conversación se está mirando: limpia su notificación (aunque hayas entrado
     // por el icono de la app) y silencia SOLO los mensajes de este contacto mientras el chat
     // esté delante — los de cualquier otro sí avisan. Al salir se vuelve a avisar de todo.
@@ -569,9 +580,14 @@ private fun ChatScreen(
                     }
                 },
                 actions = {
-                    TooltipIconButton("Llamar", KryptaPhoneIcon, enabled = true) {
-                        startCall()
-                    }
+                    // A un bloqueado no se le llama (ChatService lo cortaría igualmente al
+                    // enviar el invite; aquí se ve por qué el botón no responde).
+                    TooltipIconButton(
+                        tooltip = if (contact.blocked) "Contacto bloqueado" else "Llamar",
+                        icon = KryptaPhoneIcon,
+                        enabled = !contact.blocked,
+                        onClick = { startCall() },
+                    )
                     TooltipIconButton(
                         tooltip = if (contact.verified) "Identidad verificada" else "Verificar identidad",
                         icon = KryptaShieldIcon,
@@ -594,6 +610,14 @@ private fun ChatScreen(
                                 text = { Text("Capturar pantalla") },
                                 leadingIcon = { Icon(KryptaImageIcon, contentDescription = null) },
                                 onClick = { showMenu = false; captureRequested = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (contact.blocked) "Desbloquear" else "Bloquear") },
+                                leadingIcon = { Icon(KryptaBlockIcon, contentDescription = null) },
+                                onClick = {
+                                    showMenu = false
+                                    viewModel.setBlocked(contact, !contact.blocked)
+                                },
                             )
                             DropdownMenuItem(
                                 text = { Text("Vaciar chat") },
@@ -676,137 +700,148 @@ private fun ChatScreen(
                     }
                 }
             }
-            // Barra de entrada. OJO: mientras se graba en modo MANTENIDO el dedo sigue sobre
-            // el micro, así que el Box del micro debe **permanecer en composición** (si se
-            // sustituyera por otra barra, su pointerInput se cancela y la soltada — el
-            // "enviar" — nunca llega; visto en vivo el 12 jul). Por eso la fila cambia sus
-            // tramos izquierdos pero el micro es siempre el mismo nodo.
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (recordMode == RecordMode.NONE) {
-                    TooltipIconButton("Adjuntar", KryptaAttachIcon, enabled = true) {
-                        showAttach = true
-                    }
-                    // Campo con relleno propio y esquinas redondeadas a juego con las
-                    // burbujas (antes un OutlinedTextField transparente, con solo el borde
-                    // de foco como fondo, se confundía con la barra que lo rodea).
-                    TextField(
-                        state = draftState,
-                        // Contenido enriquecido del teclado: GIF, stickers y emoji grandes.
-                        // Sin este modificador el campo solo anuncia `text/*` en su EditorInfo
-                        // y el teclado responde "la app no admite insertar aquí" — era el caso.
-                        // Con él anuncia `*/*`, y Compose ya pide el permiso de lectura de la
-                        // URI (`InputContentInfoCompat.requestPermission`) antes de entregarla.
-                        modifier = Modifier
-                            .weight(1f)
-                            .contentReceiver { transferable ->
-                                // Devuelve lo NO consumido: el texto plano se deja al campo.
-                                transferable.consume { item ->
-                                    val uri = item.uri
-                                    val isImage = uri != null &&
-                                        context.contentResolver.getType(uri)
-                                            ?.startsWith("image/") == true
-                                    if (isImage) {
-                                        viewModel.sendImage(contact, uri!!, replyingTo?.id)
-                                        replyingTo = null
+            // Contacto bloqueado: no hay barra de entrada. El historial se sigue leyendo
+            // (bloquear no borra nada), pero no se le puede escribir, ni adjuntar, ni mandar
+            // una nota de voz — el corte de verdad está en ChatService; esto es lo que hace
+            // que se entienda y ofrece la salida (desbloquear) donde el usuario la busca.
+            if (contact.blocked) {
+                BlockedInputBar(
+                    name = contact.displayName,
+                    onUnblock = { viewModel.setBlocked(contact, false) },
+                )
+            } else {
+                // Barra de entrada. OJO: mientras se graba en modo MANTENIDO el dedo sigue sobre
+                // el micro, así que el Box del micro debe **permanecer en composición** (si se
+                // sustituyera por otra barra, su pointerInput se cancela y la soltada — el
+                // "enviar" — nunca llega; visto en vivo el 12 jul). Por eso la fila cambia sus
+                // tramos izquierdos pero el micro es siempre el mismo nodo.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (recordMode == RecordMode.NONE) {
+                        TooltipIconButton("Adjuntar", KryptaAttachIcon, enabled = true) {
+                            showAttach = true
+                        }
+                        // Campo con relleno propio y esquinas redondeadas a juego con las
+                        // burbujas (antes un OutlinedTextField transparente, con solo el borde
+                        // de foco como fondo, se confundía con la barra que lo rodea).
+                        TextField(
+                            state = draftState,
+                            // Contenido enriquecido del teclado: GIF, stickers y emoji grandes.
+                            // Sin este modificador el campo solo anuncia `text/*` en su EditorInfo
+                            // y el teclado responde "la app no admite insertar aquí" — era el caso.
+                            // Con él anuncia `*/*`, y Compose ya pide el permiso de lectura de la
+                            // URI (`InputContentInfoCompat.requestPermission`) antes de entregarla.
+                            modifier = Modifier
+                                .weight(1f)
+                                .contentReceiver { transferable ->
+                                    // Devuelve lo NO consumido: el texto plano se deja al campo.
+                                    transferable.consume { item ->
+                                        val uri = item.uri
+                                        val isImage = uri != null &&
+                                            context.contentResolver.getType(uri)
+                                                ?.startsWith("image/") == true
+                                        if (isImage) {
+                                            viewModel.sendImage(contact, uri!!, replyingTo?.id)
+                                            replyingTo = null
+                                        }
+                                        isImage
                                     }
-                                    isImage
-                                }
-                            },
-                        placeholder = { Text("Mensaje cifrado…") },
-                        shape = RoundedCornerShape(24.dp),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                            disabledIndicatorColor = Color.Transparent,
-                        ),
-                    )
-                } else {
-                    Icon(
-                        KryptaMicIcon,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(24.dp),
-                    )
-                    Text(
-                        "Grabando… ${formatSeconds(recordSeconds)}" +
-                            if (recordMode == RecordMode.HELD) " · suelta para enviar" else "",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f).padding(start = 8.dp),
-                    )
-                    if (recordMode == RecordMode.LOCKED) {
-                        TextButton(onClick = { finishRecording(false) }) { Text("Cancelar") }
-                        Button(
-                            onClick = { finishRecording(true) },
-                            modifier = Modifier.padding(start = 4.dp, end = 4.dp),
-                        ) { Text("Enviar") }
-                    }
-                }
-                if (draft.isBlank() || recordMode != RecordMode.NONE) {
-                    // Sin texto, el hueco de enviar es el micro (nota de voz), estilo mensajería.
-                    // Sin TooltipBox: la costumbre WhatsApp es MANTENER pulsado el micro, y el
-                    // tooltip se comía esa pulsación larga sin grabar nada (visto en vivo:
-                    // "aprieto y no pasa nada", 6 jul). Toque corto = grabación fijada (con
-                    // Cancelar/Enviar); mantener pulsado = graba y **al soltar se envía**
-                    // (<1 s se descarta como pulsación accidental).
-                    val haptics = LocalHapticFeedback.current
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .pointerInput(contact.id) {
-                                detectTapGestures(
-                                    onTap = {
-                                        if (recordMode == RecordMode.NONE) startRecording(RecordMode.LOCKED)
-                                    },
-                                    onLongPress = {
-                                        if (recordMode == RecordMode.NONE) {
-                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            startRecording(RecordMode.HELD)
-                                        }
-                                    },
-                                    onPress = {
-                                        tryAwaitRelease()
-                                        if (recordMode == RecordMode.HELD) {
-                                            val longEnough =
-                                                System.currentTimeMillis() - recordStartedAt >= 1_000
-                                            if (!longEnough) {
-                                                Toast.makeText(
-                                                    context,
-                                                    "Mantén pulsado para grabar y suelta para enviar",
-                                                    Toast.LENGTH_SHORT,
-                                                ).show()
-                                            }
-                                            finishRecording(longEnough)
-                                        }
-                                    },
-                                )
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
+                                },
+                            placeholder = { Text("Mensaje cifrado…") },
+                            shape = RoundedCornerShape(24.dp),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                disabledIndicatorColor = Color.Transparent,
+                            ),
+                        )
+                    } else {
                         Icon(
                             KryptaMicIcon,
-                            contentDescription = "Grabar nota de voz",
-                            tint = if (recordMode == RecordMode.HELD) MaterialTheme.colorScheme.primary
-                            else LocalContentColor.current,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(24.dp),
                         )
+                        Text(
+                            "Grabando… ${formatSeconds(recordSeconds)}" +
+                                if (recordMode == RecordMode.HELD) " · suelta para enviar" else "",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f).padding(start = 8.dp),
+                        )
+                        if (recordMode == RecordMode.LOCKED) {
+                            TextButton(onClick = { finishRecording(false) }) { Text("Cancelar") }
+                            Button(
+                                onClick = { finishRecording(true) },
+                                modifier = Modifier.padding(start = 4.dp, end = 4.dp),
+                            ) { Text("Enviar") }
+                        }
                     }
-                } else Button(
-                    onClick = {
-                        viewModel.send(contact, draft, replyingTo?.id)
-                        draftState.clearText()
-                        replyingTo = null
-                    },
-                    modifier = Modifier.padding(start = 8.dp),
-                ) { Text("Enviar") }
+                    if (draft.isBlank() || recordMode != RecordMode.NONE) {
+                        // Sin texto, el hueco de enviar es el micro (nota de voz), estilo mensajería.
+                        // Sin TooltipBox: la costumbre WhatsApp es MANTENER pulsado el micro, y el
+                        // tooltip se comía esa pulsación larga sin grabar nada (visto en vivo:
+                        // "aprieto y no pasa nada", 6 jul). Toque corto = grabación fijada (con
+                        // Cancelar/Enviar); mantener pulsado = graba y **al soltar se envía**
+                        // (<1 s se descarta como pulsación accidental).
+                        val haptics = LocalHapticFeedback.current
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .pointerInput(contact.id) {
+                                    detectTapGestures(
+                                        onTap = {
+                                            if (recordMode == RecordMode.NONE) startRecording(RecordMode.LOCKED)
+                                        },
+                                        onLongPress = {
+                                            if (recordMode == RecordMode.NONE) {
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                startRecording(RecordMode.HELD)
+                                            }
+                                        },
+                                        onPress = {
+                                            tryAwaitRelease()
+                                            if (recordMode == RecordMode.HELD) {
+                                                val longEnough =
+                                                    System.currentTimeMillis() - recordStartedAt >= 1_000
+                                                if (!longEnough) {
+                                                    Toast.makeText(
+                                                        context,
+                                                        "Mantén pulsado para grabar y suelta para enviar",
+                                                        Toast.LENGTH_SHORT,
+                                                    ).show()
+                                                }
+                                                finishRecording(longEnough)
+                                            }
+                                        },
+                                    )
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                KryptaMicIcon,
+                                contentDescription = "Grabar nota de voz",
+                                tint = if (recordMode == RecordMode.HELD) MaterialTheme.colorScheme.primary
+                                else LocalContentColor.current,
+                            )
+                        }
+                    } else Button(
+                        onClick = {
+                            viewModel.send(contact, draft, replyingTo?.id)
+                            draftState.clearText()
+                            replyingTo = null
+                        },
+                        modifier = Modifier.padding(start = 8.dp),
+                    ) { Text("Enviar") }
+                }
             }
         }
     }
@@ -1059,6 +1094,35 @@ internal fun DiagnosticsPanel(lines: List<String>) {
  * Aviso discreto en el chat cuando el contacto **no está verificado** (anti-MITM). Empuja a
  * cotejar el número/QR; al tocarlo abre el diálogo de verificación. Desaparece al verificar.
  */
+/**
+ * Sustituye a la barra de entrada cuando el contacto está bloqueado: dice por qué no se
+ * puede escribir y ofrece deshacerlo ahí mismo (la otra vía es ⋮ → Desbloquear).
+ */
+@Composable
+private fun BlockedInputBar(name: String, onUnblock: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            KryptaBlockIcon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+        Text(
+            "Has bloqueado a $name. No recibirás sus mensajes ni sus llamadas.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f).padding(start = 10.dp),
+        )
+        TextButton(onClick = onUnblock) { Text("Desbloquear") }
+    }
+}
+
 @Composable
 private fun UnverifiedBanner(onClick: () -> Unit) {
     Row(

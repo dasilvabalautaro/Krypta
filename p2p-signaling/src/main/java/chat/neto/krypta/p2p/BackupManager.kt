@@ -28,7 +28,7 @@ class BackupManager @Inject constructor(
             IdentityBackup.Data(
                 identity = node.exportIdentityBytes(),
                 contacts = all.map {
-                    IdentityBackup.BackupContact(it.displayName, it.peerId, it.verified)
+                    IdentityBackup.BackupContact(it.displayName, it.peerId, it.verified, it.blocked)
                 },
             ),
         )
@@ -54,6 +54,7 @@ class BackupManager @Inject constructor(
                     publicKey = ByteArray(0),
                     sharedSecret = secret,
                     verified = c.verified,
+                    blocked = c.blocked,
                 ),
             )
         }

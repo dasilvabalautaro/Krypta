@@ -222,7 +222,32 @@ que también puedes borrarlo selectivamente sin tener que desinstalar la app:
 - Esto solo afecta a tu copia local: la otra persona conserva su propio historial hasta
   que decida borrarlo también.
 
-### 2.11 Ajustes relevantes
+### 2.11 Bloquear un contacto
+
+Si alguien te molesta y prefieres no borrar el historial, puedes **bloquearlo**: mantén
+pulsada la conversación en la lista, o abre el menú **⋮** dentro del chat, y elige
+**"Bloquear"**.
+
+- **Deja de llegarte todo lo suyo**: mensajes, fotos, archivos, notas de voz y llamadas se
+  descartan en tu móvil sin guardarse y sin avisarte (ni notificación, ni timbre, ni fila de
+  llamada perdida).
+- **Tampoco le llega nada tuyo**: no puedes escribirle ni llamarle mientras esté bloqueado,
+  y Krypta deja incluso de mandarle el ✓✓ de leído.
+- **Él no se entera.** No recibe ningún aviso de que lo has bloqueado: sus mensajes le
+  aparecen como enviados, igual que si tuvieras el móvil apagado o sin cobertura.
+- **Tu móvil deja de anunciarse a él** en la red: ya ni siquiera puede localizar tu
+  dispositivo mientras dure el bloqueo.
+- **No borra nada.** El chat y el historial siguen ahí; para borrarlos están "Vaciar
+  conversación" y "Eliminar contacto" (§2.10). Por eso bloquear **no pide confirmación**:
+  se deshace en el mismo sitio con **"Desbloquear"**.
+- Dentro de un chat bloqueado no hay barra para escribir: en su lugar verás el aviso de que
+  lo has bloqueado, con un botón **Desbloquear**.
+
+Recuerda además que en Krypta **solo pueden escribirte tus contactos**: un PeerID que no
+tengas guardado no puede hacerte llegar nada, así que el bloqueo es para gente que ya
+añadiste.
+
+### 2.12 Ajustes relevantes
 
 - **Apariencia (tema):** elige el tema de la app entre **Sistema**, **Claro** y **Oscuro**.
   Por defecto es **Sistema**, que sigue el modo claro/oscuro del móvil (incluido el cambio
@@ -234,7 +259,7 @@ que también puedes borrarlo selectivamente sin tener que desinstalar la app:
   técnico, útil para reportar problemas.
 - **📞 Latencia:** mide el *ping* real sobre la red P2P (útil antes de una llamada).
 
-### 2.12 Preguntas frecuentes
+### 2.13 Preguntas frecuentes
 
 **¿Necesito un número de teléfono o email?** No. Solo tu identidad local y el PeerID de
 tus contactos.

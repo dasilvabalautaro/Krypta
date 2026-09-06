@@ -246,11 +246,21 @@ incumplimiento afecta a **visibilidad y capacidad de publicación**, no es un re
 
 ## Producto / política de contenido
 
-- [ ] **Bloquear contacto**. La política de contenido generado por usuarios pide bloqueo o
-      denuncia en apps de comunicación. Hoy solo hay "Eliminar contacto". Juega a favor que
-      `ChatService.onReceived` descarta a quien no es contacto (nadie desconocido puede
-      escribir), y conviene decirlo en la ficha, pero un "Bloquear" explícito evita la
-      discusión con el revisor.
+- [x] **Bloquear contacto** (6 sep 2026). La política de contenido generado por usuarios pide
+      bloqueo o denuncia en apps de comunicación; ya hay un "Bloquear" explícito además del
+      "Eliminar contacto" que existía. Se llega por **pulsación larga** en la conversación y
+      por **⋮ → Bloquear** dentro del chat. Al bloquear: se deja de anunciar su rendezvous, lo
+      que llegue de él se descarta **antes de descifrarlo** (ni se guarda, ni avisa, ni suena
+      una llamada), no se le envía nada —ni siquiera el ✓✓ de lectura— y el chat sustituye la
+      barra de escribir por un aviso con "Desbloquear". Es **local y silencioso**: el
+      bloqueado no recibe ninguna señal (sus envíos le quedan como enviados, igual que si
+      estuvieras desconectado). El historial se conserva; para borrarlo siguen estando
+      "Vaciar chat" y "Eliminar contacto". Sigue jugando a favor lo de siempre —
+      `ChatService.onReceived` descarta a quien no es contacto, así que nadie desconocido
+      puede escribir— y **conviene decir ambas cosas en la ficha**.
+      *Para la declaración ante el revisor*: no hay "denunciar" porque no hay servidor que
+      reciba la denuncia (Krypta no ve el contenido; es E2EE y sin cuentas), y el bloqueo es
+      la medida que sí puede aplicarse en el dispositivo.
 - [ ] **Textos en `strings.xml`**: hoy todo el UI está hardcodeado en Kotlin y solo en
       español. No bloquea publicar; bloquea traducir.
 
