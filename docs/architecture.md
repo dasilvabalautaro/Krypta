@@ -233,6 +233,21 @@ desacoplados y testeables.
     `BoxWithConstraints` y la burbuja se topa en `BUBBLE_MAX_WIDTH_RATIO` (0.78) del ancho
     disponible — antes no había límite y un texto largo, una imagen ancha o la cita de un
     mensaje largo la estiraban de lado a lado, con siluetas distintas en mensajes seguidos.
+    **Y lo que dibuja esa silueta escala con ella** (6 sep 2026): `BubbleShape` (un `Shape`
+    propio) + `bubbleBorderPx`/`bubbleShadowPx` interpolan esquina **18→28 dp**, borde
+    **1→1,75 dp** y sombra **1,5→3 dp** desde la altura de una burbuja de una línea
+    (`BUBBLE_SHORT_HEIGHT`, 48 dp; por debajo **nada cambia**) hasta un tope. Escala con la
+    **altura** —un mensaje largo de una sola línea sigue siendo bajo y sus 18 dp se leen
+    bien— y se calcula **al dibujar, desde el tamaño ya medido**: por eso es un `Shape`
+    (`createOutline` recibe el `size`, así que el radio correcto sale en el **primer**
+    fotograma), la sombra pasó de `Modifier.shadow` a `graphicsLayer { shadowElevation = … }`
+    y el borde de `Modifier.border` a un `drawWithCache`. Con `onSizeChanged` haría falta
+    recomponer y cada burbuja se pintaría un fotograma con los valores de burbuja corta: un
+    salto de esquina visible al desplazar la lista. El trazo del borde va al **doble** de
+    grosor porque está centrado en el contorno y el `clip(shape)` se come la mitad de fuera.
+    La esquina-cola sigue fija en 4 dp: es la identidad de quién escribe, no algo que escalar.
+    Motivo del cambio: con un mensaje largo la burbuja **perdía el contorno** — el radio era
+    una fracción mínima de la silueta y la sombra desaparecía a ese tamaño.
     **La píldora de acciones** usa `inverseSurface` + **aro** de `inverseOnSurface` (1.5 dp):
     tiene que verse sobre las dos orillas y ningún relleno plano lo consigue (en oscuro, entre
     la propia `#53DBC9` y la recibida `#303635` el óptimo equidistante es 2.84:1); con las dos

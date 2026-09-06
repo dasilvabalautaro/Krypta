@@ -7,7 +7,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -91,8 +90,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -102,6 +107,9 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.window.PopupProperties
@@ -1194,14 +1202,10 @@ private fun MessageBubble(
         label = "bubble-highlight",
     )
     // Esquina "cola" (menos redondeada) hacia el lado del emisor; en un grupo de mensajes
-    // consecutivos solo el primero abre la esquina superior de ese lado.
-    val big = 18.dp
-    val small = 4.dp
-    val shape = if (message.mine) {
-        RoundedCornerShape(big, if (first) big else small, small, big)
-    } else {
-        RoundedCornerShape(if (first) big else small, big, big, small)
-    }
+    // consecutivos solo el primero abre la esquina superior de ese lado. El radio **no es
+    // fijo**: crece con la altura de la burbuja (ver [BubbleShape]).
+    val shape = remember(message.mine, first) { BubbleShape(mine = message.mine, first = first) }
+    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
 
     // BoxWithConstraints para conocer el ancho disponible de la fila: la burbuja se topa a
     // una fracción de él (ver BUBBLE_MAX_WIDTH_RATIO). Sin tope, la **silueta la decidía el
@@ -1260,15 +1264,34 @@ private fun MessageBubble(
                 // Sombra sutil: sin ella, dos mensajes seguidos del mismo lado (mismo color
                 // exacto, solo 2dp de separación) se leían como un único bloque en vez de
                 // burbujas distintas — el propio contraste "entre ellas" que hacía falta.
-                .shadow(1.5.dp, shape, clip = false)
+                // Va por `graphicsLayer` en vez de `Modifier.shadow` porque la elevación
+                // **también escala con la altura**: dentro del bloque se lee el `size` ya
+                // medido, así que el ajuste ocurre al dibujar, sin recomponer (con
+                // `onSizeChanged` la burbuja se pintaría un fotograma con el valor corto).
+                .graphicsLayer {
+                    shadowElevation = bubbleShadowPx(size, this)
+                    this.shape = shape
+                    clip = false
+                }
                 .clip(shape)
                 .background(bubbleBg)
                 // Las burbujas recibidas son un gris neutro cercano al fondo; un borde fino
                 // les da un segundo nivel de contraste con la pantalla (mismo criterio que
-                // las tarjetas de Ajustes).
+                // las tarjetas de Ajustes). Se pinta a mano —y no con `Modifier.border`—
+                // por lo mismo que la sombra: el grosor sale del tamaño real.
                 .then(
                     if (!message.mine && !failed) {
-                        Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), shape)
+                        Modifier.drawWithCache {
+                            val outline = shape.createOutline(size, layoutDirection, this)
+                            // El trazo va **centrado** en el contorno y el `clip(shape)` de
+                            // arriba se come la mitad exterior: por eso se dibuja al doble,
+                            // para que quede visible justo el grosor pedido, por dentro.
+                            val stroke = Stroke(bubbleBorderPx(size, this) * 2f)
+                            onDrawWithContent {
+                                drawContent()
+                                drawOutline(outline, color = borderColor, style = stroke)
+                            }
+                        }
                     } else Modifier,
                 )
                 // Un toque reintenta si el mensaje falló; la pulsación larga abre las
@@ -1623,6 +1646,82 @@ private val SWIPE_REPLY_THRESHOLD = 56.dp
  * distinta. También deja siempre visible un margen del lado contrario, que es lo que hace
  * legible de un vistazo quién escribió cada mensaje.
  */
+/**
+ * Forma de una burbuja de chat: rectángulo redondeado con la esquina "cola" (la del lado del
+ * emisor) mucho menos redondeada, y —lo que la hace propia— un **radio que crece con la
+ * altura**.
+ *
+ * El porqué: los 18 dp de esquina, el borde de 1 dp y la sombra de 1,5 dp se calibraron
+ * sobre burbujas cortas, donde definen la silueta. En una burbuja alta de varias líneas ese
+ * mismo radio es una fracción mínima del contorno y la sombra desaparece a ese tamaño: el
+ * mensaje deja de leerse como una burbuja y pasa a ser un bloque de texto con un borde. La
+ * salida es que lo que dibuja la silueta **escale con ella** en vez de ser fijo (esquina,
+ * borde y sombra; ver [bubbleBorderPx] y [bubbleShadowPx]).
+ *
+ * Escala con la **altura**, no con el área ni con el ancho: una burbuja de una línea muy
+ * larga sigue siendo baja y sus esquinas de 18 dp se leen perfectamente; es al crecer hacia
+ * abajo cuando el contorno se pierde. El crecimiento es suave y va topado ([BUBBLE_CORNER_MAX]),
+ * porque pasado cierto punto redondear más convierte la burbuja en una cápsula.
+ *
+ * Es un [Shape] y no un cálculo en la composición a propósito: `createOutline` recibe el
+ * tamaño ya medido, así que el radio correcto sale **en el primer fotograma**. Midiendo con
+ * `onSizeChanged` habría que recomponer, y la burbuja se pintaría un fotograma con el radio
+ * corto — un "salto" visible al entrar en pantalla mientras se desplaza la lista.
+ *
+ * `data class` para que Compose pueda comparar dos formas iguales y saltarse el trabajo.
+ */
+private data class BubbleShape(val mine: Boolean, val first: Boolean) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        val big = bubbleCornerPx(size, density)
+        val small = with(density) { BUBBLE_TAIL_CORNER.toPx() }
+        val corners = if (mine) {
+            RoundedCornerShape(big, if (first) big else small, small, big)
+        } else {
+            RoundedCornerShape(if (first) big else small, big, big, small)
+        }
+        return corners.createOutline(size, layoutDirection, density)
+    }
+}
+
+/**
+ * Interpola linealmente entre [min] y [max] según cuánto sobrepasa la altura de la burbuja la
+ * de un mensaje corto ([BUBBLE_SHORT_HEIGHT]), a razón de [growth] por píxel de alto. Debajo
+ * de esa altura devuelve [min] exacto: las burbujas cortas se quedan **como estaban**, que es
+ * donde estos valores ya se veían bien.
+ */
+private fun scaledByHeight(heightPx: Float, density: Density, min: Dp, max: Dp, growth: Float): Float =
+    with(density) {
+        val from = BUBBLE_SHORT_HEIGHT.toPx()
+        (min.toPx() + (heightPx - from) * growth).coerceIn(min.toPx(), max.toPx())
+    }
+
+/** Radio de las esquinas redondeadas de la burbuja, topado además a la mitad de su altura. */
+private fun bubbleCornerPx(size: Size, density: Density): Float =
+    scaledByHeight(size.height, density, BUBBLE_CORNER_MIN, BUBBLE_CORNER_MAX, BUBBLE_CORNER_GROWTH)
+        .coerceAtMost(size.height / 2f)
+
+/** Grosor del borde de la burbuja recibida (px). */
+private fun bubbleBorderPx(size: Size, density: Density): Float =
+    scaledByHeight(size.height, density, BUBBLE_BORDER_MIN, BUBBLE_BORDER_MAX, BUBBLE_BORDER_GROWTH)
+
+/** Elevación de la sombra de la burbuja (px, para `graphicsLayer`). */
+private fun bubbleShadowPx(size: Size, density: Density): Float =
+    scaledByHeight(size.height, density, BUBBLE_SHADOW_MIN, BUBBLE_SHADOW_MAX, BUBBLE_SHADOW_GROWTH)
+
+/** Altura aproximada de una burbuja de una línea: por debajo, nada escala. */
+private val BUBBLE_SHORT_HEIGHT = 48.dp
+/** Esquina del lado del emisor: fija, es la "cola" que identifica quién escribe. */
+private val BUBBLE_TAIL_CORNER = 4.dp
+private val BUBBLE_CORNER_MIN = 18.dp
+private val BUBBLE_CORNER_MAX = 28.dp
+private const val BUBBLE_CORNER_GROWTH = 0.06f
+private val BUBBLE_BORDER_MIN = 1.dp
+private val BUBBLE_BORDER_MAX = 1.75.dp
+private const val BUBBLE_BORDER_GROWTH = 0.005f
+private val BUBBLE_SHADOW_MIN = 1.5.dp
+private val BUBBLE_SHADOW_MAX = 3.dp
+private const val BUBBLE_SHADOW_GROWTH = 0.01f
+
 private const val BUBBLE_MAX_WIDTH_RATIO = 0.78f
 
 /**

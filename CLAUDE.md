@@ -678,12 +678,30 @@ be screenshotted at all** — it's a `Popup`, whose `PopupProperties.securePolic
 chat's `FLAG_SECURE`, so `screencap` is black and the in-app capture only draws the decor view,
 not other windows. Its colours were verified by computing the contrast ratios from the scheme
 values in `ui/theme/Color.kt`.
-**Still open on the bubble (3 Sep 2026, deferred by the author)**: with a long message the
-bubble **loses its shape** — the contour goes. The 18dp corners and the 1dp `outlineVariant`
-border read fine on a short bubble, but on a tall multi-line one the same corner radius is a
-tiny fraction of the silhouette and the edge stops reading as a bubble; the 1.5dp shadow
-disappears at that size too. To revisit: corner radius and/or border weight that scale with
-the bubble, rather than the fixed values that were tuned on short messages.
+**The bubble's silhouette now scales with it (6 Sep 2026)** — closing the item deferred on
+3 Sep: with a long message the bubble **lost its shape**. The 18dp corners, the 1dp
+`outlineVariant` border and the 1.5dp shadow read fine on a short bubble, but on a tall
+multi-line one the same radius is a tiny fraction of the silhouette and the shadow vanishes at
+that size, so the message stopped reading as a bubble and became a block of text with a hairline
+around it. Fix: **what draws the silhouette now grows with it** — a private `BubbleShape`
+(`Shape`) plus `bubbleBorderPx`/`bubbleShadowPx`, all three interpolating from the current
+values at a one-line bubble (`BUBBLE_SHORT_HEIGHT` = 48dp, below which **nothing changes** —
+short bubbles look exactly as before) up to a cap: corner 18→28dp, border 1→1.75dp, shadow
+1.5→3dp. It scales with **height**, not area or width: a long single-line message is still
+short and its 18dp corners read fine; the contour is only lost growing downwards. Everything is
+computed **at draw time from the measured size**, which is the point of doing it as a `Shape`
+(`createOutline` receives the size, so the right radius lands on the **first frame**), of moving
+the shadow from `Modifier.shadow` to `graphicsLayer { shadowElevation = … }` (its block reads
+`size`), and of painting the received bubble's border in a `drawWithCache` instead of
+`Modifier.border` — measuring with `onSizeChanged` would need a recomposition and each bubble
+would paint one frame with the short-bubble values, a visible corner pop while scrolling. The
+border stroke is drawn at **double** width because it is centred on the outline and the
+`clip(shape)` above eats the outer half, leaving exactly the intended width inside. The tail
+corner stays a fixed 4dp — it is the identity of who wrote the message, not something to scale.
+Verified live on the TECNO with a throwaway contact (in-app ⋮ capture, since `screencap` is
+black in a chat): a short and a long own bubble in the same run, the tall one visibly rounder
+and still reading as a bubble, the 4dp tail intact and the two consecutive bubbles still
+separable.
 **Block a contact (6 Sep 2026)**: the last code-level item Play's user-generated-content
 policy asked for (block *or* report; there is no server to receive a report, since Krypta is
 E2EE and account-less, so blocking is the measure that can actually be enforced on the
