@@ -159,4 +159,65 @@ class DiskFileStoreTest {
 
         assertTrue(outside.exists())
     }
+
+    // --- Topes de recepción y limpieza del staging (hallazgo A-3) ---
+
+    @Test
+    fun `una meta que anuncia un archivo desmesurado se ignora`() = runBlocking {
+        val s = store()
+        val enorme = IncomingFileMeta("bomba.bin", "application/octet-stream", 5L * 1024 * 1024 * 1024, 100_000)
+
+        assertNull(s.onMeta("f-bomba", enorme))
+        assertFalse(
+            "una meta fuera de rango no debe dejar nada en disco",
+            File(tmp.root, "krypta_files/staging/f-bomba").exists(),
+        )
+    }
+
+    @Test
+    fun `una meta incoherente con su numero de trozos se ignora`() = runBlocking {
+        // 2 trozos no pueden traer 5 MB: el tope de un trozo es el del buzón (64 KiB).
+        val s = store()
+        assertNull(s.onMeta("f-inc", IncomingFileMeta("x.bin", "application/octet-stream", 5L * 1024 * 1024, 2)))
+        assertFalse(File(tmp.root, "krypta_files/staging/f-inc").exists())
+    }
+
+    @Test
+    fun `los trozos con indice imposible o tamano excesivo se descartan`() = runBlocking {
+        val s = store()
+        assertNull(s.onChunk("f2", -1, "x".toByteArray()))
+        assertNull(s.onChunk("f2", 10_000, "x".toByteArray()))
+        assertNull(s.onChunk("f2", 0, ByteArray(128 * 1024)))
+        assertFalse(
+            "un trozo rechazado no debe crear ni el directorio",
+            File(tmp.root, "krypta_files/staging/f2").exists(),
+        )
+    }
+
+    @Test
+    fun `un trozo fuera del total anunciado se descarta`() = runBlocking {
+        val s = store()
+        s.onMeta("f3", meta) // 3 trozos
+        assertNull(s.onChunk("f3", 7, "x".toByteArray()))
+        assertFalse(File(tmp.root, "krypta_files/staging/f3/7.chunk").exists())
+    }
+
+    @Test
+    fun `el staging abandonado se limpia y el reciente no`() = runBlocking {
+        val s = store()
+        s.onMeta("viejo", meta)
+        s.onChunk("viejo", 0, chunks[0])
+        s.onMeta("nuevo", meta)
+
+        val viejo = File(tmp.root, "krypta_files/staging/viejo")
+        val nuevo = File(tmp.root, "krypta_files/staging/nuevo")
+        val hace48h = System.currentTimeMillis() - 48L * 60 * 60 * 1000
+        viejo.listFiles()!!.forEach { it.setLastModified(hace48h) }
+        viejo.setLastModified(hace48h)
+
+        s.sweepStaging()
+
+        assertFalse("una transferencia abandonada no debe quedarse para siempre", viejo.exists())
+        assertTrue("una transferencia en curso no se toca", nuevo.exists())
+    }
 }
