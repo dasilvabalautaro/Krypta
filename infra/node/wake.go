@@ -29,6 +29,14 @@ const wakeProtocol = protocol.ID("/krypta/wake/1.0.0")
 // wakeKeepalive debe quedar por debajo del corte por inactividad de Cloudflare (~100 s).
 const wakeKeepalive = 50 * time.Second
 
+// maxWakeSubs acota cuántas suscripciones de aviso mantiene el nodo a la vez. Cualquier peer
+// de internet puede abrir este stream y cada uno cuesta un stream abierto más dos goroutines
+// (el temporizador de keepalive y el lector que detecta el cierre); sin tope, agotarlo era
+// gratis. El número va muy por encima de la base de usuarios prevista, así que un usuario
+// legítimo no lo verá nunca; si alguna vez se acercara, es señal de que toca repartir la
+// carga en más nodos.
+const maxWakeSubs = 2000
+
 type wakeRegistry struct {
 	mu   sync.Mutex
 	subs map[string]*wakeConn // PeerID → conexión de aviso activa
@@ -60,7 +68,15 @@ func (w *wakeRegistry) handle(s network.Stream) {
 	conn := &wakeConn{s: s}
 
 	w.mu.Lock()
-	if old, ok := w.subs[peerID]; ok {
+	old, replacing := w.subs[peerID]
+	// Tope de suscripciones: se aplica solo a peers NUEVOS, para que quien ya estaba suscrito
+	// pueda reconectar aunque el nodo esté al límite.
+	if !replacing && len(w.subs) >= maxWakeSubs {
+		w.mu.Unlock()
+		_ = s.Reset()
+		return
+	}
+	if replacing {
 		_ = old.s.Reset() // una suscripción por peer: la nueva sustituye a la vieja
 	}
 	w.subs[peerID] = conn

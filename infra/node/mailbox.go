@@ -13,12 +13,31 @@
 // PeerID remoto del stream, y en PUT el `from` del sobre lo fija el nodo desde el stream
 // (no se puede suplantar al remitente). Si el ack se pierde, el mensaje se reentrega y el
 // cliente deduplica por `id`.
+//
+// Anti-abuso (auditoría A-11): cualquiera que conozca un PeerID —y el PeerID se comparte
+// abiertamente para darse de alta— puede depositar en el buzón de otro. Con una cuota solo
+// global, un desconocido podía llenarla y **dejar sin entrega a los contactos de verdad**
+// (denegación de entrega, no solo spam). Por eso hay además un **reparto justo por
+// remitente**, en dos reglas que no rompen el caso legítimo:
+//
+//  1. Un remitente puede ocupar el buzón ENTERO mientras sea el único que ha depositado
+//     (es el caso del archivo troceado grande a un contacto desconectado). En cuanto hay
+//     correo de otro remitente, ninguno puede pasar de la mitad de la cuota.
+//  2. Si el buzón está lleno y algún remitente se pasa de su mitad, se desaloja su correo
+//     más antiguo para hacer sitio al que llega. Así el que se pasó de la raya pierde su
+//     exceso, en vez de bloquear a los demás.
+//
+// El nodo no aprende nada nuevo con esto: el remitente ya lo fijaba él mismo desde la
+// identidad del stream. En disco solo queda un hash corto del PeerID del remitente (en el
+// nombre del fichero), lo justo para contar cuota sin listar quién escribe a quién.
 package main
 
 import (
 	"bufio"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -46,6 +65,9 @@ type mailbox struct {
 	maxBlob  int   // bytes de ciphertext por mensaje
 	maxMsgs  int   // mensajes pendientes por destinatario
 	maxBytes int64 // bytes pendientes por destinatario
+	// Reparto justo: fracción máxima de la cuota que puede ocupar UN remitente cuando hay
+	// correo de otro (ver la cabecera del fichero). 2 = la mitad.
+	shareDiv int
 	mu       sync.Mutex
 
 	// notify (opcional) se invoca tras cada depósito con el PeerID del destinatario —
@@ -78,6 +100,7 @@ func newMailbox(dir string) *mailbox {
 		maxBlob:  64 << 10,
 		maxMsgs:  200,
 		maxBytes: 5 << 20,
+		shareDiv: 2,
 	}
 }
 
@@ -174,31 +197,152 @@ func (m *mailbox) handleGet(s network.Stream) {
 	m.delete(to, ack.Ack)
 }
 
-// store guarda el sobre en mailboxdir/<to>/<id>.json aplicando cuotas por destinatario.
+// boxFile es un sobre ya en disco, visto solo por su entrada de directorio (sin leerlo).
+type boxFile struct {
+	name string // <id>.<tag>.json  (o el antiguo <id>.json, sin remitente conocido)
+	tag  string // hash corto del PeerID del remitente, "" si es un fichero antiguo
+	size int64
+}
+
+// senderTag es el hash corto del PeerID del remitente, que va en el nombre del fichero para
+// poder contar la cuota por remitente sin abrir ni un sobre. Se usa un hash y no el PeerID
+// para que el listado del directorio no sea, de un vistazo, la lista de quién le escribe a
+// quién.
+func senderTag(from string) string {
+	sum := sha256.Sum256([]byte(from))
+	return hex.EncodeToString(sum[:6])
+}
+
+// scanBox lee las entradas del buzón de un destinatario (sin abrir los ficheros).
+// Devuelve la lista en orden cronológico (el id empieza por unix-nano con ceros).
+func scanBox(dir string) []boxFile {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := make([]boxFile, 0, len(entries))
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		// <id>.<tag>.json → tag; <id>.json (formato antiguo) → "" (remitente desconocido).
+		tag := ""
+		if parts := strings.Split(strings.TrimSuffix(name, ".json"), "."); len(parts) == 2 {
+			tag = parts[1]
+		}
+		out = append(out, boxFile{name: name, tag: tag, size: info.Size()})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	return out
+}
+
+// usage suma cuántos sobres y cuántos bytes ocupa cada remitente.
+func usage(box []boxFile) (perTag map[string]struct {
+	count int
+	bytes int64
+}, count int, bytes int64) {
+	perTag = map[string]struct {
+		count int
+		bytes int64
+	}{}
+	for _, f := range box {
+		u := perTag[f.tag]
+		u.count++
+		u.bytes += f.size
+		perTag[f.tag] = u
+		count++
+		bytes += f.size
+	}
+	return perTag, count, bytes
+}
+
+// store guarda el sobre en mailboxdir/<to>/<id>.<tag>.json aplicando la cuota global del
+// destinatario y el reparto justo entre remitentes (ver la cabecera del fichero).
 func (m *mailbox) store(to string, env mbxEnvelope) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	dir := filepath.Join(m.dir, to)
-	count, size := 0, int64(0)
-	if files, err := os.ReadDir(dir); err == nil {
-		for _, f := range files {
-			if info, err := f.Info(); err == nil {
-				count++
-				size += info.Size()
-			}
-		}
-	}
-	if count >= m.maxMsgs || size >= m.maxBytes {
-		return fmt.Errorf("buzón del destinatario lleno (%d msgs, %d bytes)", count, size)
-	}
+
 	data, err := json.Marshal(env)
 	if err != nil {
 		return err
 	}
+	incoming := int64(len(data))
+	dir := filepath.Join(m.dir, to)
+	tag := senderTag(env.From)
+	box := scanBox(dir)
+	perTag, count, size := usage(box)
+
+	shareMsgs, shareBytes := m.maxMsgs, m.maxBytes
+	if m.shareDiv > 1 {
+		shareMsgs, shareBytes = m.maxMsgs/m.shareDiv, m.maxBytes/int64(m.shareDiv)
+	}
+	mine := perTag[tag]
+
+	// Regla 1 — reparto justo, solo si hay correo de OTRO remitente. Mientras sea el único
+	// que ha depositado puede ocupar el buzón entero (archivo troceado grande a un contacto
+	// desconectado); en cuanto hay más de uno, nadie pasa de su mitad.
+	if count > mine.count {
+		if mine.count+1 > shareMsgs || mine.bytes+incoming > shareBytes {
+			return fmt.Errorf("cuota de este remitente agotada en el buzón del destinatario (reparto justo: %d msgs / %d bytes)", shareMsgs, shareBytes)
+		}
+	}
+
+	// Regla 2 — cuota global. Si está llena, se desaloja al remitente que se haya pasado de
+	// su mitad (el más antiguo primero) para hacer sitio: el que abusó pierde su exceso en
+	// vez de bloquear la entrega de los demás.
+	for count+1 > m.maxMsgs || size+incoming > m.maxBytes {
+		victim := evictionVictim(box, perTag, tag, shareMsgs, shareBytes)
+		if victim < 0 {
+			return fmt.Errorf("buzón del destinatario lleno (%d msgs, %d bytes)", count, size)
+		}
+		f := box[victim]
+		if err := os.Remove(filepath.Join(dir, f.name)); err != nil {
+			return fmt.Errorf("buzón del destinatario lleno (%d msgs, %d bytes)", count, size)
+		}
+		box = append(box[:victim], box[victim+1:]...)
+		perTag, count, size = usage(box)
+	}
+
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, env.ID+".json"), data, 0o600)
+	return os.WriteFile(filepath.Join(dir, env.ID+"."+tag+".json"), data, 0o600)
+}
+
+// evictionVictim elige qué sobre desalojar: el MÁS ANTIGUO del remitente que más se pasa de
+// su reparto, sin contar al que está depositando ahora (nadie hace sitio a costa de sí
+// mismo). Devuelve -1 si nadie se está pasando — entonces el buzón está legítimamente lleno
+// y el depósito se rechaza.
+func evictionVictim(box []boxFile, perTag map[string]struct {
+	count int
+	bytes int64
+}, depositor string, shareMsgs int, shareBytes int64) int {
+	worst, worstBytes := "", int64(-1)
+	for tag, u := range perTag {
+		if tag == depositor {
+			continue
+		}
+		if u.count <= shareMsgs && u.bytes <= shareBytes {
+			continue // este remitente está dentro de su reparto: no se le toca
+		}
+		if u.bytes > worstBytes {
+			worst, worstBytes = tag, u.bytes
+		}
+	}
+	if worst == "" {
+		return -1
+	}
+	for i, f := range box { // box viene en orden cronológico: el primero es el más antiguo
+		if f.tag == worst {
+			return i
+		}
+	}
+	return -1
 }
 
 // list devuelve los sobres pendientes de un destinatario en orden de depósito.
@@ -235,15 +379,27 @@ func (m *mailbox) list(to string) ([]mbxEnvelope, error) {
 }
 
 // delete borra los sobres ack'eados de un destinatario (nunca fuera de su directorio).
+// Acepta los dos nombres posibles: `<id>.<tag>.json` (con remitente) y `<id>.json`, el
+// formato anterior al reparto justo — un nodo que se actualiza sigue pudiendo borrar lo que
+// ya tenía guardado.
 func (m *mailbox) delete(to string, ids []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	dir := filepath.Join(m.dir, to)
+	box := scanBox(dir)
 	for _, id := range ids {
 		if id == "" || id != filepath.Base(id) || strings.Contains(id, "..") {
 			continue
 		}
-		_ = os.Remove(filepath.Join(dir, id+".json"))
+		if err := os.Remove(filepath.Join(dir, id+".json")); err == nil {
+			continue
+		}
+		for _, f := range box {
+			if strings.HasPrefix(f.name, id+".") {
+				_ = os.Remove(filepath.Join(dir, f.name))
+				break
+			}
+		}
 	}
 }
 

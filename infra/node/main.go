@@ -70,10 +70,35 @@ func main() {
 			"/ip4/0.0.0.0/tcp/"+wsPort+"/ws", // WebSocket: lo expone Cloudflare Tunnel como wss/443
 		),
 		// Circuit Relay v2: este nodo reenvía tráfico (E2EE) cuando DCUtR no perfora el NAT.
-		// Sin WithInfiniteLimits, go-libp2p corta cada conexión relayada a los 128 KiB o
-		// 2 min (por defecto) — una llamada de voz (~5-6 KB/s) moría a los ~20 s. Este nodo
-		// ES el relay de Krypta y el tráfico va E2EE, así que sin límites.
-		libp2p.EnableRelayService(relayv2.WithInfiniteLimits()),
+		//
+		// Los límites por defecto (128 KiB o 2 min por conexión relayada) mataban una llamada
+		// de voz a los ~20 s (visto en vivo el 5 jul 2026), y por eso esto era
+		// WithInfiniteLimits(). Pero "infinito" en un relay con IP pública es ancho de banda
+		// gratis e ilimitado para cualquier nodo libp2p de internet, no solo para Krypta
+		// (auditoría A-11). Ahora los topes son **finitos pero holgados**: una llamada de
+		// vídeo a 250 kbps consume ~112 MB/h, así que 8 GiB y 6 h no los alcanza ningún uso
+		// legítimo — y sí acotan a quien intente usar el nodo como proxy gratuito.
+		//
+		// Los cupos de plazas (Resources) también se suben: los de fábrica —128 reservas en
+		// total, 8 por IP y 32 por ASN— se pensaron para un relay de cortesía, y aquí una ASN
+		// es *una operadora móvil entera*, de modo que el usuario 33 del mismo operador se
+		// habría quedado sin plaza. Ojo: WithInfiniteLimits() nunca tocó esto, así que esos
+		// topes ya estaban en vigor.
+		libp2p.EnableRelayService(
+			relayv2.WithResources(relayv2.Resources{
+				ReservationTTL:         time.Hour,
+				MaxReservations:        4096,
+				MaxCircuits:            32,
+				BufferSize:             2048,
+				MaxReservationsPerPeer: 4,
+				MaxReservationsPerIP:   256,
+				MaxReservationsPerASN:  2048,
+			}),
+			relayv2.WithLimit(&relayv2.RelayLimit{
+				Duration: 6 * time.Hour,
+				Data:     8 << 30, // 8 GiB por sentido y conexión
+			}),
+		),
 		// El servicio de relay v2 solo ofrece el protocolo `hop` cuando el nodo se cree
 		// PÚBLICAMENTE alcanzable. Tras Cloudflare Tunnel (sin IP pública directa) AutoNAT no
 		// lo confirma y desactivaría el relay → los móviles no podrían reservar slot. Como este
