@@ -142,6 +142,25 @@ object HelpContent {
         ),
         HelpItem(
             category = "Privacidad y seguridad",
+            question = "¿Qué sabe de mí el nodo que ayuda a entregar los mensajes?",
+            answer = "El contenido, nada: solo maneja bloques cifrados que no puede abrir. Pero " +
+                "cuando escribes a alguien desconectado, el mensaje pasa por su buzón, y ahí el " +
+                "nodo sí ve qué PeerID deposita para qué PeerID y a qué hora, hasta que se " +
+                "recoge. Tampoco es secreto cuándo estás conectado. Si eso te importa, puedes " +
+                "cambiar el nodo por otro tuyo en Ajustes → Nodo WAN.",
+        ),
+        HelpItem(
+            category = "Privacidad y seguridad",
+            question = "Si alguien consigue mi móvil, ¿puede leer mis conversaciones?",
+            answer = "Tu clave de identidad se guarda en el almacén seguro del sistema, así que " +
+                "copiar los ficheros de la app desde fuera no basta para abrirla. Ahora bien, " +
+                "quien tenga tu móvil desbloqueado sí puede leer los chats, y Krypta todavía no " +
+                "cambia las claves con el tiempo: quien lograra sacar tu identidad podría " +
+                "descifrar el historial que tengas guardado. Activa el bloqueo de la app y el " +
+                "del móvil, y guarda bien tu copia de seguridad.",
+        ),
+        HelpItem(
+            category = "Privacidad y seguridad",
             question = "¿Puedo bloquear a alguien?",
             answer = "Sí. Mantén pulsada la conversación en la lista, o entra en el chat y usa " +
                 "⋮ → Bloquear. Desde ese momento no recibes sus mensajes ni sus llamadas: se " +

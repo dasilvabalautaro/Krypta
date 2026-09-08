@@ -130,7 +130,7 @@
   <header>
     <span class="badge">🔒 Krypta</span>
     <h1>Política de Privacidad</h1>
-    <p class="subtitle">Última actualización: 13 de agosto de 2026</p>
+    <p class="subtitle">Última actualización: 8 de septiembre de 2026</p>
   </header>
 
   <nav class="toc">
@@ -217,9 +217,17 @@
     borran automáticamente al ser recogidos o, como máximo, a los <strong>7 días</strong>.</li>
     <li>Existen límites de uso por destinatario (máx. ~200 mensajes o 5 MiB en buzón a la
     vez) para evitar abuso, aplicados sobre datos cifrados que el nodo no puede
-    interpretar.</li>
-    <li>El nodo no guarda un registro permanente de quién habla con quién más allá de lo
-    estrictamente necesario para operar el buzón y el repetidor.</li>
+    interpretar. Además, ningún remitente puede acaparar el buzón de otra persona: si hay
+    mensajes de varios remitentes, cada uno tiene su parte, de modo que un desconocido no
+    pueda dejarte sin recibir los de tus contactos.</li>
+    <li><strong>Lo que el nodo sí ve mientras entrega:</strong> para poder guardar y entregar
+    un mensaje diferido necesita saber el PeerID de quien lo deposita, el de quien lo recibe y
+    la hora, y mientras la app está conectada sabe que ese PeerID está en línea. Es decir, el
+    nodo no puede leer lo que dices, pero sí puede deducir <em>con quién</em> te escribes y
+    <em>cuándo</em>, mientras el mensaje está en el buzón o el tráfico pasa por el repetidor.
+    No se guarda ningún registro más allá de eso, y esos datos desaparecen al entregarse el
+    mensaje (o a los 7 días). Si prefieres no depender de nuestros nodos, la app permite
+    configurar los tuyos en Ajustes → Nodo WAN.</li>
   </ul>
 
   <h2 id="permisos">6. Permisos del sistema</h2>
@@ -270,6 +278,14 @@
   X25519/HKDF). Para protegerte de una posible suplantación de identidad, Krypta ofrece un
   <strong>número de seguridad</strong> y verificación por código QR que puedes comparar con
   tu contacto por otro canal para confirmar que hablas con quien crees.</p>
+  <p>Tu clave de identidad se guarda <strong>protegida por el almacén de claves del propio
+  sistema Android</strong>, en el chip seguro del teléfono cuando lo hay: copiar los ficheros
+  de la app desde fuera no basta para abrirla.</p>
+  <p><strong>Un límite que conviene conocer:</strong> Krypta usa hoy una clave fija por cada
+  contacto, no un sistema de claves que cambian con cada mensaje. Eso significa que quien
+  llegara a obtener tu clave de identidad —teniendo acceso al interior de tu teléfono— podría
+  descifrar las conversaciones que tengas guardadas. Por eso importa mantener el teléfono
+  bloqueado, activar el bloqueo de la app y custodiar tu copia de seguridad.</p>
   <p>Krypta <strong>bloquea la captura y la grabación de pantalla mientras tienes un chat
   abierto</strong>, algo que la mayoría de las apps de mensajería no hace. El bloqueo es del
   sistema operativo, no un truco de la app: el gesto de captura del teléfono se niega a

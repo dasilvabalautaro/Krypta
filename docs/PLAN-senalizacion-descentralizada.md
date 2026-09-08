@@ -274,6 +274,14 @@ por un stream libp2p.
 - `RendezvousService`: `HKDF(shared_secret_pareja, YYYY-MM-DD)` → clave de provider/topic.
   Anunciarse y buscar contactos por su rendezvous derivado (rotación diaria + ventana de
   solape al cambiar de día). Usar `javax.crypto`/Tink o BouncyCastle para HKDF.
+
+> ✅ **(8 sep 2026) Ventana de solape implementada** —era lo único que faltaba de esta fase—
+> junto con la corrección del anuncio: `Node.Advertise` usaba `dutil.Advertise`, que deja una
+> goroutine reanunciando **para siempre**, así que las claves de días pasados nunca dejaban de
+> publicarse y la rotación diaria no acotaba nada (auditoría A-1). Ahora el anuncio es de una
+> sola pasada —quien reanuncia es el bucle WAN— y `rendezvousWindow` usa las dos claves
+> contiguas 2 h a cada lado de la medianoche UTC, para que el arreglo no abra un agujero de
+> descubrimiento en el cambio de fecha.
 - `SignalingService`: intercambio de SDP/ICE para llamadas; texto/archivos directos por
   stream. Integra con repositorios Room de `:data`.
 
@@ -282,6 +290,13 @@ por un stream libp2p.
 - Estados en Room: `PENDING → SENT (en buzón) → DELIVERED (retirado) → READ`.
 - Reintento/reconciliación con **WorkManager** al recuperar conexión (alineado con §2.5 de
   la spec).
+
+> ✅ **(8 sep 2026) Reconciliación implementada, sin WorkManager**: el paso `reintentos` del
+> ciclo WAN (`ChatService.retryFailed`) reenvía hasta 10 mensajes FALLIDOS por ciclo reusando
+> su ciphertext ya persistido. WorkManager sobraba: el bucle WAN ya se despierta al cambiar de
+> red (`kickWan`) y por el latido de AlarmManager, que es más fino que las restricciones de
+> WorkManager para este caso. Hasta ahora un FAILED se quedaba así para siempre salvo que el
+> usuario tocara la burbuja (auditoría A-7).
 
 ### Fase 5 — Wake end-to-end
 - A envía con B offline → Mailbox notifica al wake-server → push silencioso (UnifiedPush)
@@ -293,6 +308,18 @@ por un stream libp2p.
 - Análisis de metadatos del wake-server y mitigaciones (constant traffic/batching).
 - Actualizar `docs/architecture.md` y `docs/security-model.md` reconciliando spec +
   cardumen + update + este plan. Marcar mDNS como descubrimiento *opcional en LAN*.
+
+> 🟡 **(8 sep 2026) Mayormente hecha.** Tras la auditoría del 7 sep:
+> - **Anti-abuso**: reparto justo del buzón por remitente con desalojo del acaparador
+>   (lo importante: un desconocido ya no puede dejarte sin entrega), límites finitos en el
+>   relay y tope de suscripciones de wake. Ver `infra/node/mailbox.go` y `wake.go`.
+>   **Requiere redesplegar los nodos para estar en producción.**
+> - **Análisis de metadatos**: escrito por fin en [security-model.md](security-model.md) §6 —
+>   el nodo ve `from`, `to` y hora de cada depósito, y la presencia por el stream de wake. La
+>   mitigación de fondo (**depósito ciego**, etiqueta derivada del secreto compartido en vez
+>   de PeerIDs en claro) queda como el siguiente trabajo de privacidad.
+> - **`docs/security-model.md`**: creado. Era el entregable más antiguo pendiente del plan.
+> - Falta: rate-limit **temporal** (hoy solo de ocupación), ACL, y monitorización de nodos.
 
 ### Fase 7 — Llamadas de voz/vídeo (diseño 4 jul 2026, pendiente de decisión)
 

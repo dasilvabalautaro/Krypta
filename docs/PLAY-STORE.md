@@ -283,14 +283,21 @@ incumplimiento afecta a **visibilidad y capacidad de publicación**, no es un re
       de PeerID y **los móviles ya instalados dejan de encontrarlo**: habría que publicar otra
       versión de la app. Para restaurar: copiarla a `/var/lib/krypta/node.key` (dueño
       `krypta:krypta`, permisos `600`) antes de arrancar el servicio.
-- [ ] **Relay abierto sin límites**: [infra/node/main.go](../infra/node/main.go) usa
-      `EnableRelayService(relayv2.WithInfiniteLimits())` — necesario para que no se cortaran
-      las llamadas (el tope por defecto es 128 KiB / 2 min), pero es ancho de banda gratis
-      para **cualquier** nodo libp2p de internet, no solo para Krypta. Poner topes generosos
-      pero finitos y/o una ACL.
-- [ ] **Depósito en buzón sin restricción de origen**: hay cuota por destinatario (200 msgs /
-      5 MiB / TTL 7 días) pero cualquiera puede depositar a cualquiera → vector de spam.
+- [x] **Relay abierto sin límites** (8 sep 2026): topes **finitos y holgados** — 8 GiB y 6 h por
+      conexión relayada (una llamada de vídeo consume ~112 MB/h, así que ningún uso legítimo se
+      acerca) — y cupos de plazas subidos a 4096 reservas / 256 por IP / 2048 por ASN. Ojo con
+      esto último: `WithInfiniteLimits()` **nunca** tocó los cupos, así que seguían los de
+      fábrica (128 / 8 / **32 por ASN**) — y una ASN es una operadora móvil entera, o sea que
+      el usuario 33 de la misma operadora se quedaba sin plaza de relay. **Pendiente de
+      redesplegar** para estar en producción.
+- [x] **Depósito en buzón sin restricción de origen** (8 sep 2026): era peor que "spam" — al
+      llenar la cuota de un destinatario, un desconocido **dejaba sin entrega a sus contactos
+      de verdad**. Ahora hay reparto justo por remitente con desalojo del acaparador, sin
+      romper el caso legítimo del archivo troceado grande (`infra/node/mailbox.go`, tests en
+      `mailbox_fairshare_test.go`). **Pendiente de redesplegar.**
 - [ ] **Monitorización/alertas** de los nodos (hoy no hay).
+- [ ] **Redesplegar los tres nodos**: acumulan ya dos tandas de cambios sin desplegar — la
+      lectura acotada del 6 sep (Mac y Windows) y todo el anti-abuso del 8 sep (los tres).
 
 ## Pruebas en vivo que no publicaría sin cerrar
 

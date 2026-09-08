@@ -2,9 +2,11 @@
 
 > Documento vivo. Refleja **lo que existe en el repo ahora**, no el diseño objetivo
 > completo (ese está en [PLAN-senalizacion-descentralizada.md](PLAN-senalizacion-descentralizada.md)).
-> Última actualización: 2 jul 2026 (wake integrado en el nodo + Foreground Service con
-> notificaciones — recibir con la app cerrada; el mismo día: buzón E2EE store-and-forward,
-> verificado en vivo).
+> Última actualización: 8 sep 2026 (implementación de la
+> [auditoría del 7 sep](AUDITORIA-2026-09-07.md): rendezvous de una sola pasada + ventana de
+> solape, identidad en el Android Keystore, reparto justo del buzón y límites finitos del
+> relay, topes de recepción de archivos, reconciliación de envíos fallidos; y el modelo de
+> seguridad por fin escrito en [security-model.md](security-model.md)).
 
 ## Resumen
 
@@ -596,6 +598,24 @@ suplantable). Archivos JSON en `-mailboxdir` (default `<dir del key>/mailbox`), 
 KiB, ≤ 200 msgs / 5 MiB por destinatario, TTL 7 días (barrido horario). Tests:
 `mailbox_test.go` (in-process, v0.38).
 
+**Reparto justo del buzón** (8 sep 2026, hallazgo A-11 de la auditoría): la cuota global no
+bastaba — como el PeerID se comparte abiertamente, cualquier desconocido podía llenar el buzón
+de otro y **dejarlo sin entrega** (denegación, no solo spam). Ahora el nombre del fichero lleva
+un hash corto del remitente (`<id>.<tag>.json`, y se siguen leyendo/borrando los `<id>.json`
+antiguos), lo que permite contar cuota por remitente sin abrir un sobre: (1) un remitente puede
+ocupar el buzón entero **mientras sea el único** que ha depositado —el caso legítimo del archivo
+troceado grande a un contacto desconectado—; (2) en cuanto hay correo de otro, ninguno pasa de
+la mitad; (3) si el buzón se llena, se desaloja lo más antiguo de quien se pasó de su reparto.
+Tests: `mailbox_fairshare_test.go`.
+
+**Otros topes del nodo** (mismo día): el **relay** pasó de `WithInfiniteLimits()` —ancho de
+banda gratis para cualquier peer de internet— a límites **finitos y holgados** (8 GiB / 6 h por
+conexión relayada, muy por encima de una llamada de vídeo, que consume ~112 MB/h), y se
+subieron los cupos de plazas, que seguían en los de fábrica y eran **demasiado bajos para
+producción**: 128 reservas totales, 8 por IP y **32 por ASN** — y una ASN es una operadora móvil
+entera. Ahora 4096 / 256 / 2048. El **wake** acepta como máximo 2000 suscripciones simultáneas
+(antes ninguna, y cada una cuesta un stream y dos goroutines).
+
 **Pinneado a go-libp2p v0.38 + Go 1.22** (no v0.48 como el bridge) **a propósito**: v0.48
 exige Go ≥1.25, cuyos binarios piden macOS ≥11, pero el host de despliegue es una **Mac
 Catalina (10.15)**. v0.38 compila con Go 1.22 → binario `minos 10.13` que corre en Catalina
@@ -720,5 +740,14 @@ dentro del WebSocket → Cloudflare no lee (E2EE) ni suplanta.
    (hoy 30 s fijos; con wake+exención de Doze podría espaciarse bastante).
 5. **QR del número de seguridad** (mejora UX de la verificación anti-MITM ya existente):
    escanear en vez de leer 60 dígitos — requiere CameraX + lector.
-6. **Ventana de solape** del rendezvous en el cambio de día (UTC).
-7. **Fase 1 (infra)**: desplegar ~5 nodos fijos (hoy hay 1: bootstrap + relay + buzón + wake).
+6. ~~**Ventana de solape** del rendezvous en el cambio de día (UTC).~~ **Hecho** (8 sep 2026):
+   `RendezvousService.rendezvousWindow` usa las dos claves contiguas durante 2 h a cada lado de
+   la medianoche UTC. Iba en el mismo cambio que la corrección del anuncio de rendezvous, que
+   hasta entonces republicaba las claves viejas para siempre y tapaba el agujero.
+7. **Fase 1 (infra)**: desplegar ~5 nodos fijos (hoy hay 3: VPS de São Paulo + Mac + Windows).
+8. **Depósito ciego en el buzón**: que el nodo deje de ver el PeerID de emisor y destinatario en
+   claro (etiqueta derivada del secreto compartido, como el rendezvous). Es el trabajo con más
+   impacto en privacidad que queda pendiente — ver [security-model.md](security-model.md) §6.
+9. **Redespliegue de los nodos**: los cambios de `infra/node` (reparto justo, límites del relay,
+   tope de wake, lectura acotada del 6 sep) **no están en producción hasta redesplegar**
+   (`deploy-vps.sh`, `deploy-catalina.sh`, copia del `.exe` en el PC).

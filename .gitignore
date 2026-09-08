@@ -36,6 +36,13 @@ local.properties
 /infra/node/node
 /infra/node/dist/
 
+# Identidad privada del nodo de infraestructura. `go run .` en infra/node la crea ahí
+# (el flag -key es relativo y vale `node.key` por defecto): es la clave con la que el nodo
+# demuestra su PeerID, o sea infraestructura de producción, y NO debe subirse jamás.
+/infra/node/*.key
+# Buzón local de pruebas: se crea junto al node.key y contiene sobres E2EE de usuarios.
+/infra/node/mailbox/
+
 # --- IDE (ficheros por usuario) ---
 /.idea/caches
 /.idea/libraries

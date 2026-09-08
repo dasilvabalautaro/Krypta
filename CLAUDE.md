@@ -803,6 +803,60 @@ in-app capture. Two trade-offs to keep in mind: casting
 /screen mirroring shows black, and a capture saved to the gallery is outside the E2EE boundary
 (said as much in the in-app help).
 
+**Audit follow-through (8 Sep 2026)** — the [7 Sep audit](docs/AUDITORIA-2026-09-07.md)'s
+action plan, implemented; tests went 116 → **136** JVM plus 4 new Go ones, and `:data` and
+`:native-bridge` got their first tests ever. Six things worth knowing:
+(a) **`Node.Advertise` was leaking, and the leak was silently breaking a privacy property.**
+It called `dutil.Advertise`, which is *not* a one-shot publish: it spawns a goroutine that
+re-announces until its context dies — and the context was `n.ctx`, the node's lifetime. Since
+`announceAndFind` calls it once per contact per WAN cycle (30–180 s), goroutines piled up
+(~8.600/day with 3 contacts) **and every past day's rendezvous kept being published forever**,
+so the daily rotation stopped bounding correlation at all — the exact thing Risk 1 of the plan
+exists to prevent. Now it's `n.disc.Advertise(ctx, key)` with a 30 s budget; the WAN loop is
+what re-announces. `TestAdvertiseIsSinglePass` counts goroutines and was checked to **fail**
+against the old code. (b) That fix would have opened a **discovery hole at UTC midnight** —
+the stale announcements had been masking it — so `RendezvousService.rendezvousWindow` landed in
+the same change: today's key plus the neighbouring day's during 2 h either side of midnight
+(the "ventana de solape" Fase 3 asked for and never got). (c) **The chat re-decrypted its whole
+history on every keystroke**: `viewModel.messages(contact)` builds a *new* Flow per call and
+`collectAsState` is keyed by instance, so each recomposition restarted collection (and blinked
+the list to empty); the mapping also ran on Main with no `flowOn`, deriving an HKDF per message.
+Fixed with `remember(contact.id)`, `flowOn(Dispatchers.Default)`, a decoded-message LRU in the
+ViewModel and a session-key cache in `AesGcmMessageCipher`. Paging the history is deliberately
+still open (it changes what the user sees; it needs a "load more"). (d) **The identity is now
+wrapped by an Android Keystore AES key** (`IdentityStore` + `KeystoreKeyWrapper` in
+`:native-bridge`): it used to sit in plaintext Base64 in SharedPreferences, and it is the root
+of every contact's shared secret. The migration is automatic and the rule is *never lose the
+identity*: the plaintext copy is deleted only after a verified wrap→unwrap round-trip, a
+Keystore failure falls back to plaintext rather than leaving the user with no identity, and an
+unreadable wrapped blob never generates a fresh one. No user auth on the key on purpose —
+delivery has to work with the phone locked; this protects cold extraction, not a running
+attacker. Covered by 6 JVM tests with a fake wrapper. (e) **The node got its anti-abuse layer**
+(Fase 6): the mailbox now enforces a *fair share* per sender — one sender may fill a box while
+it's the only one depositing (the legitimate big chunked file to an offline contact), nobody
+exceeds half once a second sender appears, and a full box evicts the oldest mail of whoever
+exceeded their share. That's the real fix for "a stranger who knows your PeerID can deny you
+delivery", which is what the quota-only design allowed. The sender is identified by a short
+hash in the filename (`<id>.<tag>.json`; the old `<id>.json` is still read and deleted), so
+quota accounting never opens an envelope. Relay limits went from `WithInfiniteLimits()` to
+finite-but-generous (8 GiB / 6 h per relayed conn) and the *reservation* caps were raised from
+the stock 128/8/**32-per-ASN** — an ASN being a whole mobile carrier, that one was a latent
+production bug `WithInfiniteLimits()` never touched — to 4096/256/2048; wake caps at 2000
+subscriptions. **None of this is live until the three nodes are redeployed.** (f) Smaller ones:
+`ChatService.retryFailed` reconciles FAILED messages each WAN cycle (Fase 4's WorkManager item,
+done without WorkManager — the loop already wakes on network change and on the alarm); incoming
+messages can no longer overwrite a row of a *different* conversation, nor can a read receipt
+mark someone else's message (the id is chosen by the sender and is the Room primary key);
+`DiskFileStore` validates incoming metas/chunk indices/chunk sizes and sweeps abandoned staging
+(a receiver had no size cap at all, and half-finished transfers stayed on disk forever);
+`Libp2pNode.dial()` (dead) removed, its stale "STUB" KDoc fixed, `findPeers` deduped and
+`ackedReceipts` bounded. **Docs**: [docs/security-model.md](docs/security-model.md) finally
+exists — the oldest outstanding deliverable in the plan — and it says plainly what the node
+learns (who deposits for whom and when, presence via the wake stream, single-operator
+concentration) and what Krypta does not protect (no PFS, unencrypted Room, traffic analysis);
+the privacy policy and the in-app help were updated to match rather than left promising more
+than the code delivers. AAR bumped to `0.0.18-rdv1pass`.
+
 ## Module structure
 
 ```
@@ -990,6 +1044,10 @@ change; when a roadmap decision changes, update
 **Play Store readiness:** the launch checklist (what's done, what's a store-listing chore,
 what's an infra risk) lives in [docs/PLAY-STORE.md](docs/PLAY-STORE.md) — update it as items
 close.
+
+**Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
+[docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a
+prioritized action plan; update it (or supersede it with a newer one) as items close.
 
 **Live-test tracking:** features that are implemented + unit/probe-tested but not yet
 confirmed with two real phones go in [docs/PRUEBAS-PENDIENTES.md](docs/PRUEBAS-PENDIENTES.md)
