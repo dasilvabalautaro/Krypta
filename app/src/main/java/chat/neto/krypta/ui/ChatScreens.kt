@@ -339,7 +339,12 @@ private fun ChatScreen(
     online: Boolean,
     onBack: () -> Unit,
 ) {
-    val messages by viewModel.messages(contact).collectAsState(initial = emptyList())
+    // `remember`: viewModel.messages(contact) construye un Flow NUEVO en cada llamada, y
+    // collectAsState está keyed por la instancia — sin esto, cada recomposición (escribir en el
+    // campo de texto recompone esta pantalla) reiniciaba la colección: la lista parpadeaba a
+    // vacío y se volvía a descifrar la conversación entera en cada pulsación de tecla.
+    val messageFlow = remember(contact.id) { viewModel.messages(contact) }
+    val messages by messageFlow.collectAsState(initial = emptyList())
     // TextFieldState (API de estado) y no `value/onValueChange`: solo el campo basado en
     // estado enchufa `Modifier.contentReceiver`, que es lo que habilita GIF/stickers/emoji
     // grandes del teclado (ver más abajo). `draft` es la vista de texto para el resto.

@@ -270,12 +270,24 @@ class ChatViewModel @Inject constructor(
      * cada mensaje, después las **citas**, que se resuelven contra los mensajes ya mapeados
      * (por la red viaja solo el id del citado). Como la fuente es un Flow de la conversación
      * entera, una cita a un mensaje que aún no había llegado se completa sola en cuanto llega.
+     *
+     * Dos cosas importantes aquí, ambas de la auditoría (A-2):
+     *  - **`flowOn(Dispatchers.Default)`**: cada mensaje son un descifrado AES-GCM y un
+     *    decodificado de sobre. Sin esto se ejecutaban en el hilo del colector, que es el
+     *    principal, y el coste crece con el historial: un chat largo bloqueaba la UI.
+     *  - **caché por mensaje** ([decodedCache]): Room reemite la conversación **entera** cada
+     *    vez que cambia algo (un mensaje nuevo, un ✓✓), así que sin caché cada cambio volvía a
+     *    descifrar todo el historial. El ciphertext de un id no cambia nunca, así que la
+     *    caché es segura y basta con la clave (id + huella del ciphertext).
+     *
+     * La llamada desde Compose debe ir dentro de un `remember`: este método construye un Flow
+     * nuevo en cada invocación y `collectAsState` reinicia la colección con cada instancia.
      */
     fun messages(contact: Contact): Flow<List<DisplayMessage>> =
         chat.observeConversation(contact.id).map { list ->
             val decoded = list.map { m ->
                 val mine = m.senderId != contact.id
-                val d = runCatching { chat.decodeMessage(contact, m) }.getOrNull()
+                val d = decodeCached(contact, m)
                 when (val c = d?.content) {
                     is MessageContent.Image ->
                         DisplayMessage(
@@ -304,6 +316,31 @@ class ChatViewModel @Inject constructor(
             decoded.map { (msg, replyTo) ->
                 if (replyTo == null) msg else msg.copy(quoted = quoteOf(contact, replyTo, byId[replyTo]))
             }
+        }.flowOn(Dispatchers.Default)
+
+    /**
+     * Descifra [m] reutilizando el resultado anterior si ya se descifró ese mismo mensaje.
+     *
+     * Solo se cachean texto y archivo: la imagen en línea lleva sus bytes dentro, y guardar
+     * cientos en memoria sería peor que volver a descifrarla. La clave incluye una huella del
+     * ciphertext para que un id reutilizado con otro contenido nunca devuelva lo anterior.
+     */
+    private fun decodeCached(
+        contact: Contact,
+        m: chat.neto.krypta.core.model.Message,
+    ): chat.neto.krypta.core.model.DecodedMessage? {
+        val key = "${m.id}:${m.ciphertext.contentHashCode()}"
+        decodedCache[key]?.let { return it }
+        val decoded = runCatching { chat.decodeMessage(contact, m) }.getOrNull() ?: return null
+        if (decoded.content !is MessageContent.Image) decodedCache[key] = decoded
+        return decoded
+    }
+
+    private val decodedCache =
+        object : LinkedHashMap<String, chat.neto.krypta.core.model.DecodedMessage>(128, 0.75f, true) {
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<String, chat.neto.krypta.core.model.DecodedMessage>?,
+            ) = size > MAX_DECODED_CACHE
         }
 
     /** Cita pintable de [target] (el mensaje citado), o el aviso de que ya no está. */
@@ -429,6 +466,8 @@ class ChatViewModel @Inject constructor(
     }
 
     private companion object {
+        /** Mensajes descifrados que se conservan en memoria por conversación abierta. */
+        const val MAX_DECODED_CACHE = 500
         const val MAX_FILE_BYTES = 8 * 1024 * 1024
         /**
          * Tope de una imagen animada. Por debajo del cupo del buzón por destinatario (5 MiB),

@@ -39,20 +39,42 @@ class AesGcmMessageCipher @Inject constructor() : MessageCipher {
         return cipher.doFinal(body)
     }
 
-    private fun sessionKey(sharedSecret: ByteArray): SecretKeySpec {
-        val key = Hkdf.derive(
-            ikm = sharedSecret,
-            salt = ByteArray(0),
-            info = "krypta-msg-key-v1".toByteArray(Charsets.UTF_8),
-            length = KEY_BYTES,
-        )
-        return SecretKeySpec(key, "AES")
+    /**
+     * Clave de sesión del contacto, **cacheada**. La derivación es determinista (mismo
+     * secreto → misma clave), pero se hacía en *cada* cifrado y descifrado: al pintar una
+     * conversación eso es una HKDF por mensaje y por repintado. La caché no amplía la
+     * exposición —la clave ya es derivable del secreto que está guardado en Room— y va
+     * acotada por si algún día hay muchos contactos.
+     */
+    private fun sessionKey(sharedSecret: ByteArray): SecretKeySpec =
+        sessionKeys.getOrPut(SecretRef(sharedSecret)) {
+            val key = Hkdf.derive(
+                ikm = sharedSecret,
+                salt = ByteArray(0),
+                info = "krypta-msg-key-v1".toByteArray(Charsets.UTF_8),
+                length = KEY_BYTES,
+            )
+            SecretKeySpec(key, "AES")
+        }
+
+    /** Clave de mapa por *contenido* del secreto (un ByteArray compara por identidad). */
+    private class SecretRef(private val bytes: ByteArray) {
+        private val hash = bytes.contentHashCode()
+        override fun hashCode() = hash
+        override fun equals(other: Any?) = other is SecretRef && bytes.contentEquals(other.bytes)
     }
+
+    private val sessionKeys = object : LinkedHashMap<SecretRef, SecretKeySpec>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<SecretRef, SecretKeySpec>?) =
+            size > MAX_CACHED_KEYS
+    }.let { java.util.Collections.synchronizedMap(it) }
 
     private companion object {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val KEY_BYTES = 32
         const val NONCE_BYTES = 12
         const val TAG_BITS = 128
+        /** Claves de sesión cacheadas (una por contacto activo). */
+        const val MAX_CACHED_KEYS = 64
     }
 }
