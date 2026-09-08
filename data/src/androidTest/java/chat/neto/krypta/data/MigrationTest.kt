@@ -17,8 +17,8 @@ import org.junit.runner.RunWith
  * exactamente la entidad **lanza en tiempo de ejecución** — con la base de datos del usuario ya
  * abierta. Esto es el hallazgo §7 de la auditoría.
  *
- * Solo se puede cubrir 4→5: los esquemas exportados empiezan en la v4 (`data/schemas/`), y
- * escribir a mano los de v2/v3 sería inventarse el patrón contra el que se compara.
+ * Se cubren 4→5 y 5→6: los esquemas exportados empiezan en la v4 (`data/schemas/`), y escribir
+ * a mano los de v2/v3 sería inventarse el patrón contra el que se compara.
  *
  * Es instrumentado a propósito (Room necesita un SQLite real), pero **no toca la app**: el APK
  * de prueba es `chat.neto.krypta.data.test`, así que —a diferencia de
@@ -64,6 +64,49 @@ class MigrationTest {
         db.query("SELECT COUNT(*) FROM messages").use { c ->
             c.moveToFirst()
             assertEquals("los mensajes no se tocan", 1, c.getInt(0))
+        }
+    }
+
+    /**
+     * v5→v6 quita `contacts.sharedSecret`, que se guardaba en claro y abría todo el historial
+     * a quien copiara el fichero. Lo que hay que comprobar es que la operación —tabla nueva,
+     * copia, borrado y renombrado— **no se lleva por delante los contactos**, y que la columna
+     * desaparece de verdad.
+     */
+    @Test
+    fun migracion5a6QuitaElSecretoYConservaLosContactos() {
+        helper.createDatabase(DB, 5).use { db ->
+            db.execSQL(
+                "INSERT INTO contacts (id, displayName, peerId, publicKey, sharedSecret, verified, blocked) " +
+                    "VALUES ('12D3KooWX', 'Ana', '12D3KooWX', X'00', X'DEADBEEF', 1, 0)",
+            )
+            db.execSQL(
+                "INSERT INTO contacts (id, displayName, peerId, publicKey, sharedSecret, verified, blocked) " +
+                    "VALUES ('12D3KooWY', 'Beto', '12D3KooWY', X'00', X'CAFE', 0, 1)",
+            )
+        }
+
+        val db = helper.runMigrationsAndValidate(DB, 6, true, MIGRATION_5_6)
+
+        db.query("SELECT id, displayName, verified, blocked FROM contacts ORDER BY id").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("12D3KooWX", c.getString(0))
+            assertEquals("Ana", c.getString(1))
+            assertEquals("la verificación se conserva", 1, c.getInt(2))
+            assertTrue(c.moveToNext())
+            assertEquals("Beto", c.getString(1))
+            assertEquals("el bloqueo se conserva", 1, c.getInt(3))
+        }
+        // La columna ya no existe: preguntar por ella tiene que fallar.
+        db.query("PRAGMA table_info(contacts)").use { c ->
+            val columnas = generateSequence { if (c.moveToNext()) c.getString(1) else null }.toList()
+            assertTrue("sharedSecret sigue en la tabla: $columnas", "sharedSecret" !in columnas)
+            assertTrue("peerId debe seguir", "peerId" in columnas)
+        }
+        // Y el índice de peerId, que se va con la tabla vieja, tiene que estar recreado.
+        db.query("PRAGMA index_list(contacts)").use { c ->
+            val indices = generateSequence { if (c.moveToNext()) c.getString(1) else null }.toList()
+            assertTrue("falta el índice de peerId: $indices", indices.any { it.contains("peerId") })
         }
     }
 

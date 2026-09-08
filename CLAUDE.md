@@ -857,6 +857,27 @@ concentration) and what Krypta does not protect (no PFS, unencrypted Room, traff
 the privacy policy and the in-app help were updated to match rather than left promising more
 than the code delivers. AAR bumped to `0.0.18-rdv1pass`.
 
+**The shared secret left the database (8 Sep 2026, DB v6).** `contacts.sharedSecret` was
+stored in the clear, and since each message's key is `HKDF(sharedSecret, "krypta-msg-key-v1")`,
+**the `krypta.db` file alone decrypted the entire history** — no identity needed, no code
+running inside the app. That made the Keystore work of the same day narrower than it looked:
+it protects impersonation and key agreement with *new* contacts, not the stored history. The
+fix is not to encrypt the column but to stop writing it: the secret is a pure function of the
+identity and the contact's PeerID (`Bridge.SharedSecretFor`, ECDH X25519), so
+`RoomContactRepository` now derives it when mapping to domain, `Libp2pKeyExchange` caches it in
+memory, and `MIGRATION_5_6` drops the column. Nothing else changed — every consumer still sees
+a populated `Contact.sharedSecret`. Two details worth keeping: the migration turns on
+`PRAGMA secure_delete` first, or SQLite would just mark the old pages free and **leave the
+secrets readable inside the file**, which is the whole point; and that pragma **returns a row**,
+so it must run as a query — `execSQL` rejects anything that returns results
+("Queries can be performed using query or rawQuery methods only") and the app crashed on launch
+on the first try. That crash is also the argument for `:data:connectedDebugAndroidTest`, which
+catches it in seconds and, unlike `:app`'s, is safe: its APK is `chat.neto.krypta.data.test`
+and cannot touch Krypta's data. Verified on the TECNO: `user_version = 6`, the string
+`sharedSecret` no longer appears in `krypta.db` **or its WAL**, contacts intact and previews
+still decrypting — which is the proof that derivation works, since the value is no longer on
+disk. `:data` also got its first JVM tests (the repository mapping) on top of the migration ones.
+
 ## Module structure
 
 ```
@@ -999,7 +1020,7 @@ compiled to an AAR with gomobile. Kotlin calls it through generated classes
 - **DI = Hilt, KSP not kapt.** Modules with Hilt/Room annotations apply both the
   `ksp` and (for Hilt) `hilt` plugins and use `ksp(...)` for the compilers. Put `@Module`
   bindings in a `di/` package. Components install in `SingletonComponent`.
-- **Room migrations, not destructive.** `KryptaDatabase` is at **v4** with real migrations
+- **Room migrations, not destructive.** `KryptaDatabase` is at **v6** with real migrations
   (`data/Migrations.kt`, wired in `DatabaseModule` via `addMigrations`); `exportSchema=true`
   writes `data/schemas/`. **Every schema change adds a `Migration` + bumps the version** —
   do not reintroduce `fallbackToDestructiveMigration` (it wipes user data). Destructive

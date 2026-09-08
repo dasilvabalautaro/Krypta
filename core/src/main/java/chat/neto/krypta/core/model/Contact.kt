@@ -1,9 +1,11 @@
 package chat.neto.krypta.core.model
 
 /**
- * Contacto. `sharedSecret` se obtiene tras intercambiar claves públicas y es la semilla
- * del rendezvous diario (HKDF(sharedSecret, fecha)) y de la clave de cifrado E2EE; es null
- * mientras no se haya completado el intercambio. `peerId` es la identidad libp2p del
+ * Contacto. `sharedSecret` es la semilla del rendezvous diario (HKDF(sharedSecret, fecha)) y
+ * de la clave de cifrado E2EE; es null mientras no se haya podido derivar. **No se guarda en
+ * disco**: se deriva por ECDH de nuestra identidad y del PeerID del contacto cada vez que se
+ * lee el contacto, porque persistirlo hacía que la base de datos por sí sola abriera todo el
+ * historial. `peerId` es la identidad libp2p del
  * contacto (a quién dirigir los streams). `verified` = el usuario cotejó el número de
  * seguridad fuera de banda (anti-MITM). `blocked` = el usuario lo bloqueó: no se anuncia su
  * rendezvous, lo que llegue de él se descarta sin persistir ni avisar, y no se le envía nada.

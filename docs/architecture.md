@@ -2,7 +2,8 @@
 
 > Documento vivo. Refleja **lo que existe en el repo ahora**, no el diseño objetivo
 > completo (ese está en [PLAN-senalizacion-descentralizada.md](PLAN-senalizacion-descentralizada.md)).
-> Última actualización: 8 sep 2026 (implementación de la
+> Última actualización: 8 sep 2026 (el secreto compartido sale de la base de datos —DB v6, se
+> deriva al leer—; e implementación de la
 > [auditoría del 7 sep](AUDITORIA-2026-09-07.md): rendezvous de una sola pasada + ventana de
 > solape, identidad en el Android Keystore, reparto justo del buzón y límites finitos del
 > relay, topes de recepción de archivos, reconciliación de envíos fallidos; y el modelo de

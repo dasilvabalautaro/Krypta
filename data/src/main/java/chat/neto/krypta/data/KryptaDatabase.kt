@@ -10,7 +10,7 @@ import chat.neto.krypta.data.entity.MessageEntity
 
 @Database(
     entities = [MessageEntity::class, ContactEntity::class],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
