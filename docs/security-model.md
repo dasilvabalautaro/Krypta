@@ -1,6 +1,8 @@
 # Modelo de seguridad de Krypta
 
-**Última actualización:** 8 de septiembre de 2026.
+**Última actualización:** 8 de septiembre de 2026 (corrección en §7: la base de datos guarda
+el secreto compartido de cada contacto en claro, así que basta ella para descifrar el
+historial; antes este documento afirmaba lo contrario).
 **Estado:** entregable pendiente de la Fase 6 del
 [plan](PLAN-senalizacion-descentralizada.md), abierto desde el inicio del proyecto y escrito
 a raíz de la [auditoría del 7 de septiembre de 2026](AUDITORIA-2026-09-07.md) (hallazgo A-6).
@@ -171,7 +173,7 @@ orientada a usuarios y no a operadores.
 | Identidad Ed25519 | `krypta_identity` (prefs) | **Envuelta con una clave AES del Android Keystore** (TEE, no exportable). Desde el 8 sep 2026; antes estaba en claro. La migración es automática y solo borra la copia en claro tras verificar que la envuelta se recupera igual (`IdentityStore`) |
 | Mensajes (ciphertext) y contactos | `krypta.db` (Room) | Almacenamiento privado de la app. **Sin cifrar** (no hay SQLCipher) |
 | Adjuntos, notas de voz, GIF | `filesDir/krypta_files/` | Almacenamiento privado. **Sin cifrar** |
-| Secreto compartido por contacto | `krypta.db` | Igual que arriba. Se **re-deriva** de la identidad, así que su valor está implícito en ella |
+| **Secreto compartido por contacto** | `krypta.db`, columna `contacts.sharedSecret` | **En claro.** 32 bytes por contacto de los que sale, por HKDF, la clave de todos sus mensajes: quien tenga el fichero puede descifrar el historial **sin necesidad de la identidad** |
 | Copia de seguridad `.krbk` | Donde el usuario elija | AES-256-GCM con clave PBKDF2-HMAC-SHA256 (310k iteraciones) de la frase-clave del usuario |
 
 Notas:
@@ -183,10 +185,23 @@ Notas:
 - **El bloqueo de app (`AppLock`) no cifra nada**: es una puerta de la interfaz, con
   `BiometricPrompt`. Útil contra quien coge el móvil un momento; inútil contra quien extrae los
   datos.
-- **Room sigue sin cifrar.** Como la clave de cada mensaje se deriva de la identidad, y la
-  identidad ya está en el TEE, quien copie solo `krypta.db` no puede leer nada; pero quien
-  ejecute código **dentro** de la app (o con root, usando el TEE en su nombre) sí. Cifrar Room
-  con una clave del Keystore es defensa en profundidad pendiente.
+- **Room sigue sin cifrar, y esto es hoy el punto débil real del dato en reposo.** Conviene no
+  equivocarse con lo que aporta el Keystore: protege la **identidad** —o sea, la suplantación y
+  la derivación de secretos con contactos *nuevos*—, pero **no** el historial, porque el
+  secreto compartido de cada contacto ya está guardado en claro en `contacts.sharedSecret`.
+  Con solo `krypta.db` se descifra toda la conversación: `HKDF(sharedSecret,
+  "krypta-msg-key-v1")` y AES-GCM sobre el `ciphertext` de cada fila. No hace falta abrir el
+  TEE ni ejecutar nada dentro de la app.
+
+  Cómo se llega a ese fichero: está en el almacenamiento privado de la app, así que hace falta
+  **root**, una extracción forense, un fallo del sistema… **o una compilación de depuración**,
+  donde `adb shell run-as chat.neto.krypta` lee el directorio entero con solo tener el móvil
+  desbloqueado y la depuración USB activa. Las compilaciones de release no son depurables y
+  ahí `run-as` no funciona — es una diferencia que importa al repartir APK de prueba.
+
+  Por eso **cifrar Room con una clave del Keystore ya no es "defensa en profundidad": es el
+  siguiente trabajo de seguridad del dispositivo.** Lo mismo vale para los adjuntos de
+  `krypta_files/`, que están en claro por definición (son la foto, el PDF o la nota de voz).
 - `android:allowBackup="false"`: nada de esto sube a Google Drive. La única copia es el `.krbk`.
 - **`FLAG_SECURE` en la pantalla de chat**: sin capturas, sin grabación, sin miniatura en
   recientes, sin proyección a pantallas no seguras. Solo en el chat, que es donde está el
@@ -222,7 +237,9 @@ proxy ilimitado.
    quién y cuándo (§6). Es el hueco más grande del modelo.
 2. **El pasado, si te roban la identidad**: sin PFS, comprometer el dispositivo descifra todo
    el historial guardado (§4).
-3. **La base de datos frente a código ejecutándose en el dispositivo** (§7).
+3. **El historial frente a quien consiga el fichero de la base de datos** (§7): `krypta.db`
+   lleva el secreto compartido de cada contacto en claro, así que basta con él para descifrar
+   las conversaciones — el Keystore protege la identidad, no el historial.
 4. **Al contacto**: nada impide que quien recibe tus mensajes los guarde, los reenvíe o los
    fotografíe con otra cámara.
 5. **La disponibilidad**: los nodos son pocos y de un solo operador; si caen todos, la entrega
@@ -238,7 +255,9 @@ proxy ilimitado.
   en claro), para que el nodo deje de aprender el grafo social. Es el trabajo con más impacto
   en privacidad que queda por hacer.
 - **PFS** (Noise/doble ratchet) para el contenido.
-- **Cifrar Room** con clave del Keystore.
+- **Cifrar Room** con clave del Keystore (y con ello `contacts.sharedSecret`, que es lo que de
+  verdad abre el historial). Subido de prioridad tras corregir el 8 sep 2026 una afirmación
+  errónea de este mismo documento, que daba por protegida la base de datos.
 - **Rate-limit temporal y monitorización** en los nodos.
 - **Diversidad de operadores**: guía de "monta tu nodo" para usuarios, y una forma cómoda de
   que dos contactos acuerden qué nodos usan.
