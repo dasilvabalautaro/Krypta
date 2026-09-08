@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Chequeo periódico de los nodos de Krypta (cada 15 min) desde la Mac de desarrollo, que es
+  donde están el repo y el toolchain de Go que necesitan las sondas.
+
+  Instalar:
+    cp infra/node/chat.neto.krypta.check.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/chat.neto.krypta.check.plist
+  Comprobar / desinstalar:
+    launchctl list | grep krypta.check
+    launchctl unload ~/Library/LaunchAgents/chat.neto.krypta.check.plist
+
+  El log se queda en /tmp/krypta-check.log; los fallos, además, saltan como aviso del sistema
+  (--notify), porque un log que solo se mira cuando ya sospechas no sirve de vigilancia.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>chat.neto.krypta.check</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/davidsilva/AndroidStudioProjects/Krypta/infra/node/check-nodes.sh</string>
+    <string>--notify</string>
+  </array>
+  <key>StartInterval</key>    <integer>900</integer>
+  <key>RunAtLoad</key>        <true/>
+  <key>StandardOutPath</key>  <string>/tmp/krypta-check.log</string>
+  <key>StandardErrorPath</key><string>/tmp/krypta-check.log</string>
+</dict>
+</plist>

@@ -402,6 +402,52 @@ Acción "Iniciar un programa" → `C:\krypta\krypta-node-windows-amd64.exe` con 
 `-key C:\krypta\node.key -wsport 8081`. En Propiedades: "Ejecutar tanto si el usuario
 inició sesión como si no" y desmarcar "Detener si se ejecuta más de…".
 
+## Vigilancia de los nodos
+
+Hasta el 8 sep 2026 no había ninguna: si un nodo se caía, o se quedaba con un binario viejo,
+nadie se enteraba. Ese día el VPS —el nodo **primario**— pasó dos días sirviendo el binario
+anterior a la capa anti-abuso, y solo se descubrió mirando a mano.
+
+```bash
+bash infra/node/check-nodes.sh        # calla si todo va bien; sale != 0 si algo falla
+bash infra/node/check-nodes.sh -v     # detalle siempre
+```
+
+Comprueba cada nodo de `DEFAULT_BOOTSTRAP` (los lee de la constante, para no desincronizarse
+de la app) en cuatro frentes:
+
+| Sonda | Qué detecta |
+|---|---|
+| `buzón` | El nodo no responde `/krypta/mbx/get` — caído, o binario sin buzón |
+| `wake` | No acepta la suscripción de aviso |
+| `relay` | Ofrece relay **sin límites** → corre un binario anterior al anti-abuso, hay que redesplegar |
+| `vuelta` | Depósito y retirada reales, byte a byte, con identidades efímeras (se limpia solo) |
+
+La del relay merece un comentario: en Circuit Relay v2 la respuesta de reserva **solo trae el
+límite cuando existe**, así que es la única forma de saber desde fuera —sin entrar en la
+máquina— si un nodo lleva ya el binario nuevo. Lo que no distingue son versiones posteriores
+entre sí (p. ej. si tiene el límite de ritmo): para eso, `sha256sum /usr/local/bin/krypta-node`
+en la máquina, contra el `shasum -a 256` del binario de `dist/`.
+
+### Que se ejecute solo
+
+En la Mac de desarrollo, que es donde están el repo y Go:
+
+```bash
+cp infra/node/chat.neto.krypta.check.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/chat.neto.krypta.check.plist
+```
+
+Cada 15 minutos, log en `/tmp/krypta-check.log` y **aviso del sistema si algo falla**
+(`--notify`), porque un log que solo se mira cuando ya sospechas no es vigilancia. Para
+desmontarlo, `launchctl unload` con la misma ruta.
+
+Con cron sería la línea equivalente:
+
+```cron
+*/15 * * * * /bin/bash /ruta/al/repo/infra/node/check-nodes.sh >> /tmp/krypta-check.log 2>&1
+```
+
 ## En la app (ambos móviles)
 
 Pega tu multiaddr `/ip4/<IP_PUBLICA>/tcp/4001/p2p/<PeerID>` en el campo **"Nodo WAN

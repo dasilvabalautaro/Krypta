@@ -4,7 +4,11 @@
 #
 #   bash infra/node/check-nodes.sh            # los nodos de DEFAULT_BOOTSTRAP
 #   bash infra/node/check-nodes.sh -v         # detalle también cuando todo va bien
+#   bash infra/node/check-nodes.sh --notify   # además, aviso del sistema si algo falla (macOS)
 #   bash infra/node/check-nodes.sh /ip4/…/p2p/…   # un nodo concreto
+#
+# Para que se ejecute solo, ver chat.neto.krypta.check.plist (launchd, cada 15 min) o, en el
+# propio VPS, una línea de cron equivalente — está en la sección "Vigilancia" del README.
 #
 # Por qué existe: hasta ahora, si un nodo se caía o se quedaba con un binario viejo, nadie se
 # enteraba. El 8 sep 2026 el VPS —el nodo primario— pasó dos días sirviendo el binario anterior
@@ -21,12 +25,14 @@ export PATH="/usr/local/bin:$HOME/go/bin:$PATH"
 cd "$(dirname "$0")/../../native-bridge/libp2p" || exit 2
 
 VERBOSE=0
+NOTIFY=0
 NODES=()
 for arg in "$@"; do
   case "$arg" in
     -v|--verbose) VERBOSE=1 ;;
+    --notify) NOTIFY=1 ;;
     /*) NODES+=("$arg") ;;
-    *) echo "uso: check-nodes.sh [-v] [multiaddr…]" >&2; exit 2 ;;
+    *) echo "uso: check-nodes.sh [-v] [--notify] [multiaddr…]" >&2; exit 2 ;;
   esac
 done
 
@@ -91,4 +97,10 @@ if [ "$FAILED" -eq 0 ]; then
   exit 0
 fi
 echo "REVISAR: al menos un nodo falla. Runbook en infra/node/README.md" >&2
+# Aviso a la vista: ejecutándose desde launchd, nadie mira el log hasta que algo va mal, que
+# es justo cuando ya es tarde. Best-effort — si no hay sesión gráfica, no pasa nada.
+if [ "$NOTIFY" -eq 1 ] && command -v osascript >/dev/null 2>&1; then
+  osascript -e 'display notification "Al menos un nodo falla el chequeo" with title "Krypta"' \
+    >/dev/null 2>&1 || true
+fi
 exit 1
