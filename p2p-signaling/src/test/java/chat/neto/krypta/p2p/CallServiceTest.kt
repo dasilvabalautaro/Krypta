@@ -118,6 +118,8 @@ class CallServiceTest {
             if (i >= 0) saved[i] = message else saved.add(message)
         }
         override suspend fun findById(id: String): Message? = saved.find { it.id == id }
+        override suspend fun findByStatus(status: MessageStatus, limit: Int): List<Message> =
+            saved.filter { it.status == status }.take(limit)
         override suspend fun updateStatus(id: String, status: MessageStatus) = Unit
         override suspend fun markIncomingRead(conversationId: String) = Unit
         override suspend fun deleteConversation(conversationId: String) {

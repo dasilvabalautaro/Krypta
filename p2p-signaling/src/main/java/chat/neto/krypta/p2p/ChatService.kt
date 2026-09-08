@@ -322,7 +322,38 @@ class ChatService @Inject constructor(
         if (connected) {
             step("relay", RELAY_BUDGET_MS) { logRelayStatus() }
             step("rendezvous", RENDEZVOUS_BUDGET_MS) { announceAndFind() }
+            step("reintentos", RETRY_BUDGET_MS) { retryFailed() }
         }
+    }
+
+    /**
+     * Reintenta los mensajes que quedaron **FALLIDOS** (fallaron el envío directo *y* el
+     * depósito en el buzón), ahora que hay conexión. Es la "reconciliación al recuperar
+     * conexión" que pedía la Fase 4 del plan: hasta ahora un FAILED se quedaba así para
+     * siempre y la única salida era que el usuario se diera cuenta y tocara la burbuja.
+     *
+     * Va al final del ciclo y con tope ([MAX_RETRIES_PER_CYCLE]) a propósito: reintentar no
+     * debe competir por el presupuesto con lo que entrega mensajes (el buzón). Reusa
+     * [transmit], así que no duplica ids ni vuelve a cifrar.
+     */
+    internal suspend fun retryFailed() {
+        val cutoff = System.currentTimeMillis() - RETRY_MAX_AGE_MS
+        val failed = runCatching { messages.findByStatus(MessageStatus.FAILED, MAX_RETRIES_PER_CYCLE) }
+            .getOrDefault(emptyList())
+            // Solo lo reciente: reenviar solo un mensaje que falló hace semanas sería una
+            // sorpresa desagradable (el usuario ya dio la conversación por cerrada). Lo viejo
+            // sigue siendo reintentable a mano tocando la burbuja.
+            .filter { it.timestamp >= cutoff }
+        if (failed.isEmpty()) return
+        var sent = 0
+        for (message in failed) {
+            val contact = contacts.findById(message.conversationId) ?: continue
+            if (contact.blocked || contact.sharedSecret == null) continue
+            messages.updateStatus(message.id, MessageStatus.PENDING)
+            val result = transmit(contact, message.copy(status = MessageStatus.PENDING), message.ciphertext)
+            if (result.status == MessageStatus.SENT) sent++
+        }
+        if (sent > 0) logLine("↻ reenviados $sent de ${failed.size} mensaje(s) pendientes")
     }
 
     /**
@@ -406,11 +437,16 @@ class ChatService @Inject constructor(
             .filter { it.sharedSecret != null && !it.blocked }
         if (targets.isNotEmpty()) logLine("rendezvous: anunciando a ${targets.size} contacto(s)")
         for (contact in targets) {
-            val rdv = rendezvous.rendezvousFor(contact.sharedSecret!!)
+            // Ventana de solape al cambiar de día (ver RendezvousService.rendezvousWindow):
+            // en el cambio de fecha UTC se anuncian y buscan las dos claves contiguas, para
+            // que dos móviles que roten con unos segundos de diferencia sigan encontrándose.
+            val keys = rendezvous.rendezvousWindow(contact.sharedSecret!!)
             runCatching {
-                signaling.announce(rdv)
-                val found = signaling.findPeers(rdv)
-                val hit = found.any { it == contact.peerId }
+                var hit = false
+                for (rdv in keys) {
+                    signaling.announce(rdv)
+                    if (!hit) hit = signaling.findPeers(rdv).any { it == contact.peerId }
+                }
                 if (hit != lastFound[contact.peerId]) {
                     lastFound[contact.peerId] = hit
                     logLine(if (hit) "rendezvous: ✓ encontrado ${short(contact.peerId)}" else "rendezvous: aún no encuentro ${short(contact.peerId)}")
@@ -704,7 +740,7 @@ class ChatService @Inject constructor(
 
         when (decoded) {
             is MessageEnvelope.Decoded.Read -> {
-                markOutgoingRead(decoded.ids)
+                markOutgoingRead(contact.id, decoded.ids)
                 return null
             }
             is MessageEnvelope.Decoded.FileMeta -> {
@@ -734,10 +770,16 @@ class ChatService @Inject constructor(
             is MessageEnvelope.Decoded.Image -> decoded.id
             else -> null
         } ?: mailboxId ?: UUID.randomUUID().toString()
-        // Eco de un mensaje propio (p. ej. un contacto que apunta a tu propio PeerID): no
-        // sobrescribas tu copia saliente con la versión entrante.
+        // El id lo elige el emisor y es la clave primaria (Room guarda con REPLACE), así que
+        // antes de escribir hay que descartar dos colisiones:
+        //  - el eco de un mensaje propio (un contacto que apunta a tu propio PeerID): no
+        //    sobrescribas tu copia saliente con la versión entrante;
+        //  - un id que ya pertenece a OTRA conversación: nadie debe poder pisar, ni por error
+        //    ni a propósito, el mensaje de un tercero (auditoría A-9).
         val existing = messages.findById(msgId)
-        if (existing != null && existing.senderId == SELF) return null
+        if (existing != null && (existing.senderId == SELF || existing.conversationId != contact.id)) {
+            return null
+        }
         val message = Message(
             id = msgId,
             conversationId = contact.id,
@@ -753,9 +795,12 @@ class ChatService @Inject constructor(
 
     /** Persiste un archivo ya reensamblado como Message (descriptor con path) y lo emite. */
     private suspend fun persistFile(contact: Contact, fileId: String, f: chat.neto.krypta.core.AssembledFile): Message? {
-        // No sobrescribas un envío propio con su eco (contacto que apunta a tu PeerID).
+        // Misma guarda que en onReceived: ni el eco de un envío propio ni un id que ya es de
+        // otra conversación pueden sobrescribir nada.
         val existing = messages.findById(fileId)
-        if (existing != null && existing.senderId == SELF) return null
+        if (existing != null && (existing.senderId == SELF || existing.conversationId != contact.id)) {
+            return null
+        }
         val descriptor = MessageEnvelope.wrapReply(
             f.replyTo,
             MessageEnvelope.encodeFileDescriptor(f.name, f.mime, f.size, f.path),
@@ -774,17 +819,33 @@ class ChatService @Inject constructor(
         return message
     }
 
-    /** Marca como READ nuestros mensajes salientes cuyo id venga en un acuse de lectura. */
-    private suspend fun markOutgoingRead(ids: List<String>) {
+    /**
+     * Marca como READ nuestros mensajes salientes **de esa conversación** cuyo id venga en el
+     * acuse. Exigir la conversación importa porque los ids del acuse los elige quien lo
+     * envía: sin esa condición, un contacto podría marcar como leídos mensajes dirigidos a
+     * otro (auditoría A-9).
+     */
+    private suspend fun markOutgoingRead(conversationId: String, ids: List<String>) {
         for (id in ids) {
             val m = messages.findById(id)
-            if (m != null && m.senderId == SELF && m.status != MessageStatus.READ) {
+            if (m != null && m.senderId == SELF && m.conversationId == conversationId &&
+                m.status != MessageStatus.READ
+            ) {
                 messages.updateStatus(id, MessageStatus.READ)
             }
         }
     }
 
-    private val ackedReceipts = mutableSetOf<String>()
+    /**
+     * Ids ya acusados, para no reenviar el mismo acuse cada vez que se abre el chat. Es una
+     * caché **acotada** (LRU): antes crecía sin techo mientras viviera el proceso. Perderla
+     * (al morir el proceso, o al desalojar una entrada) solo provoca un acuse repetido, que
+     * es inocuo: [markOutgoingRead] ignora el que ya está en READ.
+     */
+    private val ackedReceipts = object : LinkedHashMap<String, Unit>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>?) =
+            size > MAX_ACKED_RECEIPTS
+    }
 
     /**
      * Envía un **acuse de lectura** de los mensajes recibidos de [contact] que aún no se han
@@ -802,12 +863,12 @@ class ChatService @Inject constructor(
             .getOrDefault(emptyList())
             .filter { it.senderId == contact.id }
             .map { it.id }
-        val newIds = received.filter { it !in ackedReceipts }
+        val newIds = received.filter { it !in ackedReceipts.keys }
         if (newIds.isEmpty()) return
         val ciphertext = cipher.encrypt(secret, MessageEnvelope.encodeRead(newIds))
         val ok = runCatching { signaling.send(contact, ciphertext); true }.getOrDefault(false) ||
             runCatching { signaling.sendOffline(contact, ciphertext); true }.getOrDefault(false)
-        if (ok) ackedReceipts.addAll(newIds)
+        if (ok) newIds.forEach { ackedReceipts[it] = Unit }
     }
 
     fun observeContacts(): Flow<List<Contact>> = contacts.observeAll()
@@ -1004,7 +1065,15 @@ class ChatService @Inject constructor(
         const val MAILBOX_BUDGET_MS = 45_000L
         const val RELAY_BUDGET_MS = 30_000L
         const val RENDEZVOUS_BUDGET_MS = 45_000L
+        const val RETRY_BUDGET_MS = 30_000L
         const val CYCLE_BUDGET_MS = 150_000L
+        // Reintentos de FALLIDOS por ciclo: suficiente para vaciar una racha corta sin
+        // convertir el ciclo en una tormenta de envíos tras una caída larga.
+        const val MAX_RETRIES_PER_CYCLE = 10
+        // Tope de la caché de acuses ya enviados (ver ackedReceipts).
+        const val MAX_ACKED_RECEIPTS = 500
+        // Antigüedad máxima de un FALLIDO para reintentarlo solo (24 h).
+        const val RETRY_MAX_AGE_MS = 24L * 60 * 60 * 1000
         // Tamaño de trozo de archivo: deja aire bajo el límite del buzón (64 KiB) tras el
         // sobre + el cifrado (nonce 12 + tag 16 + cabecera).
         const val CHUNK_SIZE = 48 * 1024

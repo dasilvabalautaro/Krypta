@@ -27,6 +27,9 @@ class RoomMessageRepository @Inject constructor(
 
     override suspend fun findById(id: String): Message? = dao.findById(id)?.let(::toDomain)
 
+    override suspend fun findByStatus(status: MessageStatus, limit: Int): List<Message> =
+        dao.findByStatus(status, limit).map(::toDomain)
+
     override suspend fun updateStatus(id: String, status: MessageStatus) =
         dao.updateStatus(id, status)
 

@@ -125,6 +125,8 @@ class ChatServiceTest {
             if (i >= 0) saved[i] = message else saved.add(message)
         }
         override suspend fun findById(id: String): Message? = saved.find { it.id == id }
+        override suspend fun findByStatus(status: MessageStatus, limit: Int): List<Message> =
+            saved.filter { it.status == status }.sortedByDescending { it.timestamp }.take(limit)
         override suspend fun updateStatus(id: String, status: MessageStatus) {
             val i = saved.indexOfFirst { it.id == id }
             if (i >= 0) saved[i] = saved[i].copy(status = status)
@@ -1008,5 +1010,149 @@ class ChatServiceTest {
 
         assertEquals(1, signaling.announced.size)
         assertArrayEquals(rendezvous.rendezvousFor(other.sharedSecret!!), signaling.announced.single())
+    }
+
+    // --- Reconciliación de envíos fallidos (Fase 4 del plan; hallazgo A-7) ---
+
+    @Test
+    fun `retryFailed reenvia los FALLIDOS cuando vuelve la conexion`() = runTest {
+        val signaling = FakeSignaling()
+        val messages = FakeMessages()
+        val chat = ChatService(signaling, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        // Un envío que falla por las dos vías queda FAILED (antes se quedaba así para siempre).
+        signaling.failOnSend = true
+        signaling.failOnMailbox = true
+        val failed = chat.send(contact, "no salió".toByteArray())
+        assertEquals(MessageStatus.FAILED, failed.status)
+
+        // Vuelve la conexión: el ciclo WAN reintenta solo.
+        signaling.failOnSend = false
+        signaling.failOnMailbox = false
+        chat.retryFailed()
+
+        assertEquals(MessageStatus.SENT, messages.findById(failed.id)!!.status)
+        assertArrayEquals(
+            "debe reusar el ciphertext ya persistido, sin volver a cifrar",
+            failed.ciphertext,
+            signaling.sentCiphertext,
+        )
+    }
+
+    @Test
+    fun `retryFailed no resucita un fallo antiguo`() = runTest {
+        val signaling = FakeSignaling()
+        val messages = FakeMessages()
+        val chat = ChatService(signaling, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        val viejo = Message(
+            id = "hace-semanas",
+            conversationId = contact.id,
+            senderId = "self",
+            ciphertext = cipher.encrypt(secret, MessageEnvelope.encodeText("hace-semanas", "viejo".toByteArray())),
+            timestamp = System.currentTimeMillis() - 30L * 24 * 60 * 60 * 1000,
+            status = MessageStatus.FAILED,
+        )
+        messages.save(viejo)
+
+        chat.retryFailed()
+
+        assertTrue("un mensaje de hace un mes no debe salir solo", signaling.sentAll.isEmpty())
+        assertEquals(MessageStatus.FAILED, messages.findById(viejo.id)!!.status)
+    }
+
+    @Test
+    fun `retryFailed no reenvia nada a un contacto bloqueado`() = runTest {
+        val signaling = FakeSignaling()
+        val messages = FakeMessages()
+        val contacts = FakeContacts(listOf(contact))
+        val chat = ChatService(signaling, cipher, messages, contacts, FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        signaling.failOnSend = true
+        signaling.failOnMailbox = true
+        val failed = chat.send(contact, "no salió".toByteArray())
+        signaling.failOnSend = false
+        signaling.failOnMailbox = false
+
+        chat.setBlocked(contact, true)
+        chat.retryFailed()
+
+        assertEquals(MessageStatus.FAILED, messages.findById(failed.id)!!.status)
+        assertTrue("a un bloqueado no se le manda nada", signaling.sentAll.isEmpty())
+    }
+
+    // --- El id lo elige el emisor: no debe poder pisar otra conversación (hallazgo A-9) ---
+
+    @Test
+    fun `un entrante no puede sobrescribir el mensaje de otra conversacion`() = runTest {
+        val messages = FakeMessages()
+        val chat = ChatService(FakeSignaling(), cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        val ajeno = Message(
+            id = "id-en-disputa",
+            conversationId = "otra-conversacion",
+            senderId = "otra-conversacion",
+            ciphertext = "intacto".toByteArray(),
+            timestamp = 1,
+            status = MessageStatus.DELIVERED,
+        )
+        messages.save(ajeno)
+
+        val forjado = cipher.encrypt(secret, MessageEnvelope.encodeText("id-en-disputa", "pisado".toByteArray()))
+        val result = chat.onReceived(contact.peerId, forjado)
+
+        assertNull("no debe persistirse encima de un mensaje ajeno", result)
+        assertEquals(ajeno, messages.findById("id-en-disputa"))
+    }
+
+    @Test
+    fun `un acuse de lectura solo marca mensajes de quien lo envia`() = runTest {
+        val messages = FakeMessages()
+        val chat = ChatService(FakeSignaling(), cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        val paraOtro = Message(
+            id = "m-de-otro-chat",
+            conversationId = "otra-conversacion",
+            senderId = "self",
+            ciphertext = ByteArray(1),
+            timestamp = 1,
+            status = MessageStatus.SENT,
+        )
+        messages.save(paraOtro)
+
+        val acuse = cipher.encrypt(secret, MessageEnvelope.encodeRead(listOf("m-de-otro-chat")))
+        chat.onReceived(contact.peerId, acuse)
+
+        assertEquals(
+            "nadie puede marcar como leído lo que se envió a otro contacto",
+            MessageStatus.SENT,
+            messages.findById("m-de-otro-chat")!!.status,
+        )
+    }
+
+    // --- Ventana de solape del rendezvous (hallazgo A-8) ---
+
+    @Test
+    fun `el rendezvous se anuncia con la ventana de solape del dia`() = runTest {
+        val signaling = FakeSignaling()
+        val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        chat.announceAndFind()
+
+        // Sin fijar la hora: se comprueba la propiedad, no el instante — se anuncia la clave
+        // de hoy y, como mucho, una de las contiguas (la ventana de solape).
+        val rdv = RendezvousService()
+        val hoy = java.time.LocalDate.now(java.time.ZoneOffset.UTC)
+        val admisibles = listOf(hoy.minusDays(1), hoy, hoy.plusDays(1))
+            .map { rdv.rendezvousFor(secret, it) }
+        assertTrue("1 o 2 claves, nunca más", signaling.announced.size in 1..2)
+        assertTrue(
+            "la clave del día siempre se anuncia",
+            signaling.announced.any { it.contentEquals(rdv.rendezvousFor(secret, hoy)) },
+        )
+        assertTrue(
+            "no debe anunciarse ninguna clave fuera de la ventana",
+            signaling.announced.all { a -> admisibles.any { it.contentEquals(a) } },
+        )
     }
 }

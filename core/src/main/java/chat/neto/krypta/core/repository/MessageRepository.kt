@@ -18,6 +18,12 @@ interface MessageRepository {
     /** Devuelve un mensaje por su id, o null (p. ej. para reintentar uno FALLIDO). */
     suspend fun findById(id: String): Message?
 
+    /**
+     * Hasta [limit] mensajes en un estado dado, del más reciente al más antiguo. Lo usa la
+     * reconciliación del bucle WAN para reintentar los FALLIDOS al recuperar la conexión.
+     */
+    suspend fun findByStatus(status: MessageStatus, limit: Int): List<Message>
+
     suspend fun updateStatus(id: String, status: MessageStatus)
 
     /**

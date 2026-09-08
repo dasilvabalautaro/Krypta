@@ -38,6 +38,10 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :id")
     suspend fun findById(id: String): MessageEntity?
 
+    // Reconciliación: los FALLIDOS más recientes primero, para reintentarlos al reconectar.
+    @Query("SELECT * FROM messages WHERE status = :status ORDER BY timestamp DESC LIMIT :limit")
+    suspend fun findByStatus(status: MessageStatus, limit: Int): List<MessageEntity>
+
     @Query("UPDATE messages SET status = :status WHERE id = :id")
     suspend fun updateStatus(id: String, status: MessageStatus)
 
