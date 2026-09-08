@@ -224,14 +224,21 @@ El nodo es infraestructura pública: cualquiera de internet puede hablarle. Lo q
 | Depósito en buzón | Blob ≤ 64 KiB; 200 mensajes / 5 MiB por destinatario; TTL 7 días |
 | Depósito en buzón, **por remitente** | Un remitente puede llenar el buzón solo si es el único que ha depositado; en cuanto hay otro, ninguno pasa de la mitad, y si el buzón se llena se desaloja lo más antiguo de quien se pasó de su reparto (`mailbox.store`) |
 | Retirada del buzón | Solo entrega los sobres cuyo `to` es el PeerID autenticado del stream |
+| Depósito en buzón, **por ritmo** | Cubo de fichas por remitente: ráfaga de 256 depósitos y una ficha por segundo. La ráfaga cubre de sobra un archivo troceado (~110 trozos); el régimen sostenido corta la avalancha |
 | Wake | Una suscripción por peer; máximo 2000 simultáneas |
 | Relay | 8 GiB y 6 h por conexión relayada; 4096 reservas, 256 por IP, 2048 por ASN |
 | Lecturas de línea (buzón/wake en el móvil) | Búfer fijo (128 KiB / 4 KiB): un nodo que no cierre línea no puede hacer crecer la memoria |
 
-**Lo que sigue abierto**: no hay límite de tasa por tiempo (solo de ocupación), ni lista de
-control de acceso, ni monitorización o alertas de los nodos. Un atacante decidido puede seguir
-generando carga; lo que ya no puede es **dejar a un usuario sin entrega** ni usar el relay como
-proxy ilimitado.
+**Vigilancia**: [`infra/node/check-nodes.sh`](../infra/node/check-nodes.sh) comprueba los tres
+nodos —buzón, wake, relay con límites finitos e ida y vuelta real— y sale con error si alguno
+falla, pensado para cron/launchd. Existe porque hasta ahora nadie se enteraba de nada: el 8 sep
+2026 el nodo primario pasó dos días con un binario viejo y se descubrió mirando a mano.
+
+**Lo que sigue abierto**: no hay lista de control de acceso, ni límite de ritmo en la
+*retirada* del buzón (solo en el depósito), ni alertas automáticas —el chequeo hay que
+programarlo—. Un atacante decidido puede seguir generando carga; lo que ya no puede es **dejar
+a un usuario sin entrega**, usar el relay como proxy ilimitado ni machacar el nodo a
+escrituras.
 
 ---
 
@@ -262,6 +269,7 @@ proxy ilimitado.
 - **PFS** (Noise/doble ratchet) para el contenido.
 - **Cifrar Room** con clave del Keystore. Ya no protege el contenido —el secreto compartido
   salió de la base el 8 sep 2026— sino los metadatos locales: con quién habla, cuándo y cuánto.
-- **Rate-limit temporal y monitorización** en los nodos.
+- **Alertas** de verdad para el chequeo de nodos (hoy es un script que hay que programar), y
+  límite de ritmo también en la retirada del buzón.
 - **Diversidad de operadores**: guía de "monta tu nodo" para usuarios, y una forma cómoda de
   que dos contactos acuerden qué nodos usan.

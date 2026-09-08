@@ -295,7 +295,12 @@ incumplimiento afecta a **visibilidad y capacidad de publicación**, no es un re
       de verdad**. Ahora hay reparto justo por remitente con desalojo del acaparador, sin
       romper el caso legítimo del archivo troceado grande (`infra/node/mailbox.go`, tests en
       `mailbox_fairshare_test.go`). **Pendiente de redesplegar.**
-- [ ] **Monitorización/alertas** de los nodos (hoy no hay).
+- [x] **Monitorización** de los nodos (8 sep 2026): [`infra/node/check-nodes.sh`](../infra/node/check-nodes.sh)
+      sondea los tres —buzón, wake, relay con límites finitos, ida y vuelta— y sale con error
+      si alguno falla. Detecta también que un nodo se haya quedado con un binario viejo, que es
+      justo lo que pasó ese día sin que nadie lo notara.
+- [ ] **Programarlo** (cron en el VPS o launchd en la Mac) y decidir a dónde va el aviso: el
+      script está, pero mientras no se lance solo, sigue habiendo que acordarse.
 - [ ] **Redesplegar los tres nodos**: acumulan ya dos tandas de cambios sin desplegar — la
       lectura acotada del 6 sep (Mac y Windows) y todo el anti-abuso del 8 sep (los tres).
 

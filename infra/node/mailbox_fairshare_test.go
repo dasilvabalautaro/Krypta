@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // put deposita un sobre de `from` para `to` como lo haría handlePut (que es quien fija el
@@ -125,5 +127,91 @@ func TestMailboxDeleteAcceptsLegacyNames(t *testing.T) {
 	m.delete("destino", ids)
 	if got := countFor(t, m, "destino"); got != 0 {
 		t.Fatalf("los dos formatos debían borrarse, quedan %d", got)
+	}
+}
+
+// --- Límite de ritmo por remitente ---------------------------------------------------------
+
+// clock manejable a mano: el ritmo se prueba moviendo el tiempo, no durmiendo.
+type fakeClock struct{ t time.Time }
+
+func (c *fakeClock) now() time.Time      { return c.t }
+func (c *fakeClock) add(d time.Duration) { c.t = c.t.Add(d) }
+
+func newRatedMailbox(t *testing.T) (*mailbox, *fakeClock) {
+	t.Helper()
+	m := newMailbox(t.TempDir())
+	m.maxMsgs = 100000 // que el tope de ocupación no enmascare el de ritmo
+	m.maxBytes = 1 << 30
+	clock := &fakeClock{t: time.Unix(1_700_000_000, 0)}
+	m.now = clock.now
+	return m, clock
+}
+
+// TestRateLimitPermiteUnArchivoTroceado: el peor caso legítimo es una ráfaga seguida de
+// decenas de trozos. Si el límite de ritmo rompiera eso, rompería el envío de archivos.
+func TestRateLimitPermiteUnArchivoTroceado(t *testing.T) {
+	m, _ := newRatedMailbox(t)
+	// 110 trozos ≈ un archivo que llena el buzón (5 MiB en trozos de 48 KiB), sin pausa.
+	for i := 0; i < 110; i++ {
+		if err := put(m, "remitente", "destino", "trozo"); err != nil {
+			t.Fatalf("el trozo %d fue rechazado por el límite de ritmo: %v", i, err)
+		}
+	}
+}
+
+// TestRateLimitCortaLaAvalancha: agotada la ráfaga, se rechaza — y barato, sin tocar disco.
+func TestRateLimitCortaLaAvalancha(t *testing.T) {
+	m, _ := newRatedMailbox(t)
+	for i := 0; i < m.burst; i++ {
+		if err := put(m, "inundador", "destino", "x"); err != nil {
+			t.Fatalf("depósito %d dentro de la ráfaga: %v", i, err)
+		}
+	}
+	err := put(m, "inundador", "destino", "x")
+	if err == nil || !strings.Contains(err.Error(), "seguidos") {
+		t.Fatalf("pasada la ráfaga debía rechazarse, err=%v", err)
+	}
+	// Y no debe afectar a OTRO remitente: el cubo es por remitente.
+	if err := put(m, "otro", "destino", "x"); err != nil {
+		t.Fatalf("un remitente no puede consumir el ritmo de los demás: %v", err)
+	}
+}
+
+// TestRateLimitSeRepone: pasado el tiempo vuelven las fichas.
+func TestRateLimitSeRepone(t *testing.T) {
+	m, clock := newRatedMailbox(t)
+	for i := 0; i < m.burst; i++ {
+		_ = put(m, "remitente", "destino", "x")
+	}
+	if err := put(m, "remitente", "destino", "x"); err == nil {
+		t.Fatal("debía estar agotado")
+	}
+
+	clock.add(3 * time.Second) // tres fichas
+	for i := 0; i < 3; i++ {
+		if err := put(m, "remitente", "destino", "x"); err != nil {
+			t.Fatalf("ficha repuesta %d: %v", i, err)
+		}
+	}
+	if err := put(m, "remitente", "destino", "x"); err == nil {
+		t.Fatal("solo debían reponerse tres fichas")
+	}
+}
+
+// TestRateLimitOlvidaRemitentesInactivos: el mapa de cubos no puede crecer sin fin, porque
+// quién aparece en él lo decide quien deposita.
+func TestRateLimitOlvidaRemitentesInactivos(t *testing.T) {
+	m, clock := newRatedMailbox(t)
+	for i := 0; i < 50; i++ {
+		_ = put(m, fmt.Sprintf("remitente-%d", i), "destino", "x")
+	}
+	if len(m.buckets) != 50 {
+		t.Fatalf("esperaba 50 cubos, hay %d", len(m.buckets))
+	}
+	clock.add(time.Duration(m.burst)*m.refill + time.Second) // todos vuelven a estar llenos
+	m.pruneBuckets(clock.now())
+	if len(m.buckets) != 0 {
+		t.Fatalf("los cubos llenos debían olvidarse, quedan %d", len(m.buckets))
 	}
 }

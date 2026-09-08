@@ -30,6 +30,12 @@
 // El nodo no aprende nada nuevo con esto: el remitente ya lo fijaba él mismo desde la
 // identidad del stream. En disco solo queda un hash corto del PeerID del remitente (en el
 // nombre del fichero), lo justo para contar cuota sin listar quién escribe a quién.
+//
+// A la cuota (cuánto ocupas) se le suma un **límite de ritmo** (cuán rápido depositas), que es
+// lo que faltaba: la cuota sola no impide machacar el nodo a escrituras, porque los rechazos
+// salen gratis. Es un cubo de fichas por remitente, deliberadamente generoso en ráfaga —un
+// archivo troceado son ~110 depósitos seguidos y tiene que pasar sin despeinarse— y estrecho
+// en régimen sostenido.
 package main
 
 import (
@@ -39,6 +45,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -68,7 +75,14 @@ type mailbox struct {
 	// Reparto justo: fracción máxima de la cuota que puede ocupar UN remitente cuando hay
 	// correo de otro (ver la cabecera del fichero). 2 = la mitad.
 	shareDiv int
-	mu       sync.Mutex
+
+	// Límite de ritmo por remitente (cubo de fichas).
+	burst   int           // fichas acumulables: la ráfaga máxima admitida de golpe
+	refill  time.Duration // cada cuánto se repone una ficha
+	buckets map[string]*bucket
+	now     func() time.Time // inyectable en los tests
+
+	mu sync.Mutex
 
 	// notify (opcional) se invoca tras cada depósito con el PeerID del destinatario —
 	// el wake integrado (wake.go) le avisa al instante si está suscrito.
@@ -101,6 +115,13 @@ func newMailbox(dir string) *mailbox {
 		maxMsgs:  200,
 		maxBytes: 5 << 20,
 		shareDiv: 2,
+		// 256 de ráfaga cubre de sobra el peor caso legítimo (un archivo que llene el buzón son
+		// ~110 trozos de 48 KiB) y una ficha por segundo deja 3.600 depósitos/hora sostenidos,
+		// que ninguna persona alcanza escribiendo.
+		burst:   256,
+		refill:  time.Second,
+		buckets: map[string]*bucket{},
+		now:     time.Now,
 	}
 }
 
@@ -197,6 +218,53 @@ func (m *mailbox) handleGet(s network.Stream) {
 	m.delete(to, ack.Ack)
 }
 
+// bucket es el cubo de fichas de un remitente: cuántos depósitos le quedan y desde cuándo.
+type bucket struct {
+	tokens float64
+	last   time.Time
+}
+
+// allow descuenta una ficha al remitente y dice si el depósito puede seguir. Reponer se hace
+// por tiempo transcurrido, sin temporizadores: el cubo se pone al día cuando se le consulta.
+func (m *mailbox) allow(from string) bool {
+	now := m.now()
+	b, ok := m.buckets[from]
+	if !ok {
+		// Limpieza perezosa: sin esto el mapa crecería con cada PeerID que haya escrito alguna
+		// vez, y eso lo controla quien ataca, no el nodo.
+		if len(m.buckets) >= maxTrackedSenders {
+			m.pruneBuckets(now)
+		}
+		b = &bucket{tokens: float64(m.burst), last: now}
+		m.buckets[from] = b
+	}
+	if elapsed := now.Sub(b.last); elapsed > 0 {
+		b.tokens += elapsed.Seconds() / m.refill.Seconds()
+		if b.tokens > float64(m.burst) {
+			b.tokens = float64(m.burst)
+		}
+		b.last = now
+	}
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+// pruneBuckets olvida a los remitentes cuyo cubo ya está lleno (o sea, llevan sin depositar el
+// tiempo suficiente): reconstruirlo cuesta nada y no cambia lo que se les permite.
+func (m *mailbox) pruneBuckets(now time.Time) {
+	for from, b := range m.buckets {
+		if now.Sub(b.last) >= time.Duration(m.burst)*m.refill {
+			delete(m.buckets, from)
+		}
+	}
+}
+
+// maxTrackedSenders dispara la limpieza del mapa de cubos.
+const maxTrackedSenders = 10000
+
 // boxFile es un sobre ya en disco, visto solo por su entrada de directorio (sin leerlo).
 type boxFile struct {
 	name string // <id>.<tag>.json  (o el antiguo <id>.json, sin remitente conocido)
@@ -266,6 +334,12 @@ func usage(box []boxFile) (perTag map[string]struct {
 func (m *mailbox) store(to string, env mbxEnvelope) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Ritmo antes que nada: rechazar barato es justo el objetivo, para que una avalancha no se
+	// traduzca en trabajo de disco.
+	if !m.allow(env.From) {
+		return errors.New("demasiados depósitos seguidos; inténtalo en unos segundos")
+	}
 
 	data, err := json.Marshal(env)
 	if err != nil {
