@@ -47,11 +47,13 @@ func TestRendezvousDiscovery(t *testing.T) {
 	}
 
 	const rendezvous = "krypta-test-rendezvous-deadbeefcafe"
-	a.Advertise(rendezvous) // dutil.Advertise re-announces periodically in the background
-	b.Advertise(rendezvous)
 
+	// Advertise es de una sola pasada (ver advertise_test.go): quien reanuncia es el bucle
+	// WAN de la app, así que aquí el test lo imita reanunciando en cada vuelta.
 	deadline := time.Now().Add(40 * time.Second)
 	for time.Now().Before(deadline) {
+		a.Advertise(rendezvous)
+		b.Advertise(rendezvous)
 		res, err := b.FindPeers(rendezvous, 5)
 		if err != nil {
 			t.Fatalf("B FindPeers: %v", err)

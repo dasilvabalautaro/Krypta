@@ -33,7 +33,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
-	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	rcclient "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	"github.com/libp2p/go-libp2p/p2p/protocol/ping"
 	multiaddr "github.com/multiformats/go-multiaddr"
@@ -72,7 +71,7 @@ const maxIncomingMessage = 1 << 20
 
 func Ping() string     { return "pong from krypta go-libp2p bridge" }
 func Sum(a, b int) int { return a + b }
-func Version() string  { return "0.0.17-multinode" }
+func Version() string  { return "0.0.18-rdv1pass" }
 
 // --- Identidad persistente + intercambio de claves (X25519 desde la identidad libp2p) ---
 
@@ -1038,10 +1037,30 @@ func (n *Node) wakeSession(ctx context.Context, ai peer.AddrInfo, h WakeHandler)
 	}
 }
 
-// Advertise announces this node under the given rendezvous key (the daily HKDF value,
-// hex-encoded by the caller).
+// AdvertiseTimeout acota una publicación de rendezvous en la DHT.
+const AdvertiseTimeout = 30 * time.Second
+
+// Advertise publica el rendezvous (el HKDF del día, en hex, que pasa el llamante) en la DHT
+// **una sola vez**.
+//
+// Antes usaba dutil.Advertise, que NO es una publicación puntual: lanza una goroutine que
+// re-anuncia en bucle hasta que muere su contexto — y el contexto que recibía era n.ctx, el
+// de la vida del nodo. Como el bucle WAN de Kotlin llama aquí una vez por contacto y por
+// ciclo (cada 30–180 s), cada llamada dejaba una goroutine viva para siempre: miles al día,
+// tráfico de `Provide` creciendo sin techo y, lo peor, **el rendezvous de días pasados se
+// seguía publicando indefinidamente**, que es justo lo que la rotación diaria
+// (HKDF(secreto, fecha)) existe para impedir — un observador de la DHT veía acumularse
+// claves simultáneas del mismo PeerID y podía correlacionarlas a largo plazo.
+//
+// El re-anuncio periódico no se pierde: lo hace el propio bucle WAN, que ya vuelve a llamar
+// aquí en cada ciclo y además rota la clave al cambiar el día.
 func (n *Node) Advertise(rendezvous string) {
-	dutil.Advertise(n.ctx, n.disc, rendezvous)
+	if n.disc == nil {
+		return // sin DHT todavía (LAN-only o antes de StartDHT): nada que publicar
+	}
+	ctx, cancel := context.WithTimeout(n.ctx, AdvertiseTimeout)
+	defer cancel()
+	_, _ = n.disc.Advertise(ctx, rendezvous)
 }
 
 // FindPeers looks up peers advertising under rendezvous (waiting up to timeoutSec),
@@ -1055,10 +1074,12 @@ func (n *Node) FindPeers(rendezvous string, timeoutSec int) (string, error) {
 		return "", err
 	}
 	var found []string
+	seen := map[peer.ID]bool{}
 	for ai := range ch {
-		if ai.ID == n.h.ID() || ai.ID == "" {
-			continue
+		if ai.ID == n.h.ID() || ai.ID == "" || seen[ai.ID] {
+			continue // la DHT puede devolver el mismo peer en varias respuestas
 		}
+		seen[ai.ID] = true
 		if len(ai.Addrs) > 0 {
 			_ = n.h.Connect(ctx, ai)
 		}
