@@ -878,6 +878,34 @@ and cannot touch Krypta's data. Verified on the TECNO: `user_version = 6`, the s
 still decrypting — which is the proof that derivation works, since the value is no longer on
 disk. `:data` also got its first JVM tests (the repository mapping) on top of the migration ones.
 
+**The database is encrypted (9 Sep 2026, SQLCipher 4.6.1).** With the shared secret out of the
+DB, what `krypta.db` still leaked was the **local metadata** — contact names, PeerIDs,
+timestamps, who talks to whom, message sizes — and that is what this closes. The passphrase is
+32 random bytes rendered as hex (`DatabaseKey`), wrapped by an AndroidKeyStore AES key and kept
+in the `krypta_db` prefs; it is hex on purpose, because the same value has to travel both
+through `SupportOpenHelperFactory` and inside a SQL statement during the one-time conversion,
+and a binary string there is a quoting accident waiting to happen. Same "never lose it"
+discipline as the identity, one notch stricter: if the wrapped passphrase cannot be unwrapped it
+**fails loudly** instead of minting a new one, because a new one would leave the history
+encrypted under a lost key and silently start an empty database.
+
+**The conversion of the existing plaintext DB is the part that needed care**, since the message
+history has no backup of any kind (`.krbk` carries identity + contacts only). Two things are
+worth remembering. (a) **The canonical `sqlcipher_export` recipe hung on the TECNO** — process
+alive, no error, no progress, with and without WAL — so `DatabaseEncryption` reads with the
+framework SQLite and writes with SQLCipher instead: more code, but every step is observable.
+(b) It writes to a temp file and **only swaps after re-opening the copy and checking table and
+row counts match**; a first draft swapped unconditionally and an instrumented test caught it
+producing an *empty* encrypted DB that would have destroyed the user's history. `sqlcipher_export`
+also does not carry `user_version`, which Room needs — the manual copy sets it explicitly.
+Verified on the TECNO over the real database: header goes from `SQLite format 3` to random
+bytes, `grep -c Lucia databases/krypta.db` returns **0** where it previously matched, contacts
+and previews intact. Cost: about +5 MB per ABI (the arm64 debug APK went 61 → 66 MB); SQLCipher
+4.6.1 ships all four ABIs 16 KB-aligned, so the Play requirement is unaffected. **Testing gotcha:**
+running `:data`'s whole instrumented suite in one process hangs after the SQLCipher tests; each
+class passes when run on its own (`adb shell am instrument -e class <FQCN>#<method>`), and a
+stale `-journal` left by a killed run will block the next READONLY open until deleted.
+
 ## Module structure
 
 ```

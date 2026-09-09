@@ -201,11 +201,14 @@ Notas:
   desbloqueado y la depuración USB activa. Las de release no son depurables. Es una diferencia
   que importa al repartir APK de prueba.
 
-- **Room sigue sin cifrar**, y lo que eso expone ahora son **metadatos locales**: nombres de
-  contacto, PeerIDs, marcas de tiempo, quién habla con quién y el tamaño de cada mensaje. El
-  contenido ya no. Cifrar la base con una clave del Keystore (SQLCipher) sigue siendo trabajo
-  pendiente, pero ha bajado de "el punto débil" a "lo siguiente". Los adjuntos de
-  `krypta_files/` están en claro por definición: son la foto, el PDF o la nota de voz.
+- **La base ya va cifrada** (SQLCipher, 9 sep 2026). Lo que esto tapa son los **metadatos
+  locales** —nombres de contacto, PeerIDs, marcas de tiempo, quién habla con quién y el tamaño
+  de cada mensaje—; el contenido ya dependía de la identidad. La conversión de la base en claro
+  se hace una sola vez al arrancar, sobre un fichero aparte, y **solo sustituye el original tras
+  comprobar que la copia tiene las mismas tablas y las mismas filas**: el historial de mensajes
+  no tiene copia de seguridad de ninguna clase, así que ahí no vale el "casi seguro".
+  Los adjuntos de `krypta_files/` siguen en claro por definición: son la foto, el PDF o la nota
+  de voz, y el sistema necesita leerlos para mostrarlos.
 - `android:allowBackup="false"`: nada de esto sube a Google Drive. La única copia es el `.krbk`.
 - **`FLAG_SECURE` en la pantalla de chat**: sin capturas, sin grabación, sin miniatura en
   recientes, sin proyección a pantallas no seguras. Solo en el chat, que es donde está el
@@ -248,10 +251,10 @@ escrituras.
    quién y cuándo (§6). Es el hueco más grande del modelo.
 2. **El pasado, si te roban la identidad**: sin PFS, comprometer el dispositivo descifra todo
    el historial guardado (§4).
-3. **Los metadatos locales frente a quien consiga el fichero de la base de datos** (§7): el
-   contenido ya no se puede descifrar solo con `krypta.db`, pero sí se lee con quién habla,
-   cuándo y cuánto. Y nada de esto protege frente a código ejecutándose **dentro** del proceso
-   o con root: ahí el atacante le pide la clave al TEE igual que se la pide la app.
+3. **Nada protege frente a código ejecutándose *dentro* del proceso o con root** (§7): ahí el
+   atacante le pide la clave al TEE igual que se la pide la app, y el cifrado en reposo —de la
+   identidad o de la base— no cambia nada. Lo que sí queda cubierto es llevarse los ficheros.
+   Y los adjuntos siguen en claro.
 4. **Al contacto**: nada impide que quien recibe tus mensajes los guarde, los reenvíe o los
    fotografíe con otra cámara.
 5. **La disponibilidad**: los nodos son pocos y de un solo operador; si caen todos, la entrega
@@ -271,8 +274,8 @@ escrituras.
   advertencia importante: **el relay filtra ese mismo grafo** y eso no lo arregla, así que lo
   que se gana es que no quede en disco, no que el operador no pueda saberlo en vivo.
 - **PFS** (Noise/doble ratchet) para el contenido.
-- **Cifrar Room** con clave del Keystore. Ya no protege el contenido —el secreto compartido
-  salió de la base el 8 sep 2026— sino los metadatos locales: con quién habla, cuándo y cuánto.
+- **Cifrar los adjuntos** de `krypta_files/`, que es lo único que queda en claro en el
+  dispositivo. (La base ya está cifrada desde el 9 sep 2026.)
 - **Alertas** de verdad para el chequeo de nodos (hoy es un script que hay que programar), y
   límite de ritmo también en la retirada del buzón.
 - **Diversidad de operadores**: guía de "monta tu nodo" para usuarios, y una forma cómoda de
