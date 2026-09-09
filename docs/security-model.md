@@ -264,8 +264,10 @@ escrituras.
 ## 10. Cambios que este documento pide (pendientes)
 
 - **Depósito ciego en el buzón** (etiqueta derivada del secreto compartido en lugar de PeerID
-  en claro), para que el nodo deje de aprender el grafo social. Es el trabajo con más impacto
-  en privacidad que queda por hacer.
+  en claro), para que el grafo social deje de quedar escrito en el disco del nodo. Diseño
+  redactado y pendiente de decisión en [DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) — con una
+  advertencia importante: **el relay filtra ese mismo grafo** y eso no lo arregla, así que lo
+  que se gana es que no quede en disco, no que el operador no pueda saberlo en vivo.
 - **PFS** (Noise/doble ratchet) para el contenido.
 - **Cifrar Room** con clave del Keystore. Ya no protege el contenido —el secreto compartido
   salió de la base el 8 sep 2026— sino los metadatos locales: con quién habla, cuándo y cuánto.
