@@ -149,10 +149,20 @@ class ChatService @Inject constructor(
         // en el nodo) lo que persistió sin error; un fallo deja el sobre en el buzón y el
         // nodo lo reentrega (dedup por id). Es la garantía que faltaba para los trozos de
         // archivo: antes se ack'eaba antes de persistir y una muerte del proceso los perdía.
-        signaling.setMailboxProcessor { peerId, ciphertext, envelopeId, ts ->
-            val result = runCatching { onReceived(peerId, ciphertext, envelopeId, ts) }
+        signaling.setMailboxProcessor { peerId, ciphertext, envelopeId, ts, label ->
+            // Un sobre ciego no dice de quién viene: lo dice la etiqueta, que se resuelve
+            // contra el índice de contactos. Si no se resuelve NO se confirma —el sobre se
+            // queda en el nodo y vuelve— porque confirmarlo lo borraría, y un índice
+            // momentáneamente desfasado (rotación de semana, contacto recién añadido) habría
+            // destruido un mensaje bueno.
+            val contact = runCatching { resolveMailboxContact(peerId, label) }.getOrNull()
+            if (label.isNotBlank() && contact == null) {
+                logLine("buzón: etiqueta ${label.take(8)}… sin contacto conocido (se deja para el próximo ciclo)")
+                return@setMailboxProcessor false
+            }
+            val result = runCatching { onReceived(peerId, ciphertext, envelopeId, ts, contact) }
             result.onSuccess { msg ->
-                if (msg != null) logLine("← mensaje de ${short(peerId)} (buzón)")
+                if (msg != null) logLine("← mensaje de ${short(contact?.peerId ?: peerId)} (buzón)")
             }.onFailure {
                 logLine("buzón: sobre ${envelopeId.take(8)} sin persistir (reintentará): ${(it.message ?: "$it").take(60)}")
             }
@@ -244,7 +254,7 @@ class ChatService @Inject constructor(
         bootstrapAddr = bootstrap
         if (wanJob == null) wanJob = scope.launch { wanLoop() }
         // Stream ligero de wake: el nodo avisa al instante cuando hay correo en el buzón.
-        scope.launch { runCatching { signaling.startWake() } }
+        scope.launch { runCatching { signaling.startWake(inboxLabels()) } }
     }
 
     /** Detiene el bucle WAN y vuelve a DISABLED (solo LAN/mDNS). */
@@ -312,7 +322,7 @@ class ChatService @Inject constructor(
         // El wake se re-arma cada ciclo: StartWake es idempotente en Go, y si la primera
         // llamada llegó sin host o sin lista de nodos, esta lo levanta en vez de quedarse
         // sin push para siempre.
-        step("wake", CONNECT_BUDGET_MS) { signaling.startWake() }
+        step("wake", CONNECT_BUDGET_MS) { signaling.startWake(inboxLabels()) }
 
         // Aunque el DHT no haya conectado: el buzón se retira por dial directo a cada nodo,
         // y es la vía que entrega los mensajes. Antes iba dentro del `if` del DHT, así que un
@@ -428,6 +438,63 @@ class ChatService @Inject constructor(
     @Volatile
     private var lastReserveResult: String? = null
 
+    /**
+     * Índice etiqueta(hex) → id de contacto. Se rehace cada vez que se calculan las etiquetas
+     * de recepción, o sea en cada ciclo WAN, así que sigue a la rotación semanal y a las altas
+     * de contactos sin más ceremonia.
+     */
+    @Volatile
+    private var labelIndex: Map<String, String> = emptyMap()
+
+    /**
+     * Etiquetas propias de recepción (una por línea), y de paso refresca [labelIndex].
+     *
+     * Incluye a los **bloqueados** a propósito: su correo hay que retirarlo para que se borre
+     * del nodo —`onReceived` lo descarta sin persistir— en vez de dejarlo ocupando sitio hasta
+     * que caduque.
+     */
+    private suspend fun inboxLabels(): String {
+        val me = runCatching { keyExchange.localPeerId() }.getOrNull() ?: return ""
+        val all = runCatching { contacts.observeAll().first() }.getOrDefault(emptyList())
+            .filter { it.sharedSecret != null }
+        val index = HashMap<String, String>(all.size * 2)
+        for (c in all) {
+            for (label in MailboxLabel.inbox(c.sharedSecret!!, me, c.peerId)) {
+                index[MailboxLabel.toHex(label)] = c.id
+            }
+        }
+        labelIndex = index
+        return index.keys.joinToString("\n")
+    }
+
+    /** Contacto de un sobre del buzón: por etiqueta si es ciego, por PeerID si es del camino viejo. */
+    private suspend fun resolveMailboxContact(peerId: String, label: String): Contact? {
+        if (label.isBlank()) return contacts.findByPeerId(peerId)
+        labelIndex[label]?.let { id -> contacts.findById(id)?.let { return it } }
+        // Segundo intento rehaciendo el índice: puede haber rotado la semana o haberse añadido
+        // un contacto entre la petición y la respuesta.
+        inboxLabels()
+        return labelIndex[label]?.let { contacts.findById(it) }
+    }
+
+    /**
+     * Etiqueta bajo la que depositar para [contact], o cadena vacía para usar el camino
+     * antiguo (direccionado por PeerID).
+     *
+     * Hoy devuelve siempre vacío, y es deliberado. Depositar a ciegas solo sirve si **el
+     * destinatario** retira por etiquetas: un cliente que aún no lo haga jamás miraría ese
+     * buzón y el mensaje se quedaría ahí hasta caducar. Que el *nodo* hable v2 no basta —esa
+     * es la parte que el diseño original planteó mal—. Así que el orden correcto es: primero
+     * todos los clientes saben **recibir** a ciegas (esta versión), y cuando esa versión esté
+     * repartida se enciende el envío cambiando [BLIND_DEPOSIT] a true.
+     */
+    private fun outboxLabel(contact: Contact): String {
+        if (!BLIND_DEPOSIT) return ""
+        val secret = contact.sharedSecret ?: return ""
+        val me = runCatching { keyExchange.localPeerId() }.getOrNull() ?: return ""
+        return MailboxLabel.toHex(MailboxLabel.outbox(secret, me, contact.peerId))
+    }
+
     /** Interno (no privado) para poder ejercitarlo desde los tests del módulo. */
     internal suspend fun announceAndFind() {
         val targets = runCatching { contacts.observeAll().first() }
@@ -463,7 +530,7 @@ class ChatService @Inject constructor(
      * se dispara la retirada y se loguea el total.
      */
     private suspend fun fetchMailbox() {
-        runCatching { signaling.fetchMailbox() }
+        runCatching { signaling.fetchMailbox(inboxLabels()) }
             .onSuccess { n ->
                 lastMailboxError = null
                 if (n > 0) logLine("buzón: $n mensaje(s) recogido(s)")
@@ -636,7 +703,7 @@ class ChatService @Inject constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            signaling.sendOffline(contact, ciphertext) // fallback; si también falla, propaga
+            signaling.sendOffline(contact, ciphertext, outboxLabel(contact)) // fallback; si también falla, propaga
         }
     }
 
@@ -685,7 +752,7 @@ class ChatService @Inject constructor(
         ciphertext: ByteArray,
         directError: Exception,
     ): Message = try {
-        signaling.sendOffline(contact, ciphertext)
+        signaling.sendOffline(contact, ciphertext, outboxLabel(contact))
         messages.updateStatus(message.id, MessageStatus.SENT)
         logLine("→ buzón para ${short(contact.peerId)} (offline)")
         message.copy(status = MessageStatus.SENT)
@@ -722,8 +789,11 @@ class ChatService @Inject constructor(
         ciphertext: ByteArray,
         mailboxId: String? = null,
         ts: Long? = null,
+        resolved: Contact? = null,
     ): Message? {
-        val contact = contacts.findByPeerId(peerId) ?: return null
+        // `resolved` llega del buzón ciego, donde el remitente no viaja y quien identifica al
+        // contacto es la etiqueta. Por stream directo se sigue resolviendo por PeerID.
+        val contact = resolved ?: contacts.findByPeerId(peerId) ?: return null
         // Bloqueado: se descarta **antes de descifrar**, así que no se persiste, no avisa y
         // no llega a CallService (nada de timbre ni de "llamada perdida"). Devolver null es
         // además lo que ack'ea el sobre en el buzón: se borra del nodo en vez de reentregarse
@@ -867,7 +937,7 @@ class ChatService @Inject constructor(
         if (newIds.isEmpty()) return
         val ciphertext = cipher.encrypt(secret, MessageEnvelope.encodeRead(newIds))
         val ok = runCatching { signaling.send(contact, ciphertext); true }.getOrDefault(false) ||
-            runCatching { signaling.sendOffline(contact, ciphertext); true }.getOrDefault(false)
+            runCatching { signaling.sendOffline(contact, ciphertext, outboxLabel(contact)); true }.getOrDefault(false)
         if (ok) newIds.forEach { ackedReceipts[it] = Unit }
     }
 
@@ -1072,6 +1142,12 @@ class ChatService @Inject constructor(
         const val MAX_RETRIES_PER_CYCLE = 10
         // Tope de la caché de acuses ya enviados (ver ackedReceipts).
         const val MAX_ACKED_RECEIPTS = 500
+        /**
+         * Interruptor del **depósito ciego** (ver [outboxLabel]). Se enciende cuando la versión
+         * que sabe recibir por etiquetas esté repartida entre los contactos; hasta entonces,
+         * depositar a ciegas sería depositar donde el otro no mira.
+         */
+        const val BLIND_DEPOSIT = false
         // Antigüedad máxima de un FALLIDO para reintentarlo solo (24 h).
         const val RETRY_MAX_AGE_MS = 24L * 60 * 60 * 1000
         // Tamaño de trozo de archivo: deja aire bajo el límite del buzón (64 KiB) tras el

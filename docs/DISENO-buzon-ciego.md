@@ -1,9 +1,10 @@
 # Diseño: depósito ciego en el buzón (protocolo v2)
 
-**Estado:** decidido el 9 sep 2026 (rotación **semanal**) y **en construcción**. Fases 1 y 2
-hechas —etiquetas en el cliente y protocolo v2 en el nodo, conviviendo con v1— y la 3
-también (el puente Go habla v2 con caída a v1 por nodo). Falta la 4: que el cliente use las
-etiquetas, que hoy sigue en v1. Y el despliegue.
+**Estado:** decidido el 9 sep 2026 (rotación **semanal**) e **implementado de la 1 a la 4**.
+El mecanismo entero funciona: el cliente **recibe** a ciegas (retira y se suscribe al wake por
+etiquetas) y el nodo lo sirve. Lo que sigue apagado a propósito es el **envío**
+(`ChatService.BLIND_DEPOSIT = false`): ver la corrección del §6, que es lo que faltaba entender
+de la compatibilidad. Desplegado en el VPS de São Paulo; el Mac y el Windows, pendientes.
 **Fecha:** 9 de septiembre de 2026.
 **Origen:** [security-model.md](security-model.md) §6 y §10 — «que el nodo deje de ver quién
 escribe a quién» es el trabajo con más impacto en privacidad que queda pendiente.
@@ -180,6 +181,24 @@ criptográfico grande pendiente.
 
 ## 6. Compatibilidad y migración
 
+> **Corrección (9 sep 2026).** Este apartado estaba mal planteado: daba por hecho que la
+> compatibilidad dependía de la versión del **nodo**. No es así. Lo determinante es la versión
+> del **destinatario**: si A deposita bajo una etiqueta y el cliente de B todavía retira solo
+> por su PeerID, B **nunca mirará ese buzón** y el mensaje caducará ahí a los 7 días. Que el
+> nodo hable v2 no arregla eso.
+>
+> De ahí el orden real de despliegue, que es el clásico de cualquier cambio de protocolo:
+> **primero todos saben recibir, después se enciende el envío.** Por eso el depósito ciego
+> queda tras un interruptor (`ChatService.BLIND_DEPOSIT`, hoy `false`): esta versión ya retira
+> y se suscribe por etiquetas, y cuando esté repartida entre los contactos basta con cambiar
+> esa constante en una publicación posterior. Mientras tanto no se pierde nada y tampoco se
+> gana privacidad: los depósitos siguen yendo por v1.
+>
+> Un efecto secundario que casi se cuela: al suscribirse el cliente al wake **solo** por
+> etiquetas, los depósitos v1 —que hoy son todos— dejaban de despertarlo, degradando la
+> entrega instantánea a sondeo de minutos. El nodo suscribe ahora también al PeerID del propio
+> stream, que conoce igualmente por ser quien abre la conexión.
+
 Es lo más delicado, porque hay móviles instalados y tres nodos que no se actualizan a la vez.
 
 1. **El nodo habla los dos protocolos.** v1 y v2 conviven en el mismo binario; el
@@ -229,8 +248,8 @@ Es lo más delicado, porque hay móviles instalados y tres nodos que no se actua
 | 1 | ✅ Derivación de etiquetas + tests (`MailboxLabel`, 6 tests) | `:p2p-signaling` | hecho |
 | 2 | ✅ v2 en el nodo (put/get/wake + almacenamiento + topes) conviviendo con v1 (5 tests) | `infra/node` | hecho |
 | 3 | ✅ v2 en el puente Go, con caída a v1 por nodo (4 tests) | `native-bridge/libp2p` | hecho |
-| 4 | Recepción por etiqueta en el cliente y retirada doble durante la transición | `:p2p-signaling` | pequeño-medio |
-| 5 | Desplegar nodos → publicar app → observar → retirar v1 | infra + app | despliegue |
+| 4 | ✅ Recepción por etiqueta en el cliente y retirada doble durante la transición (4 tests) | `:p2p-signaling` | hecho |
+| 5 | 🟡 Nodos: VPS desplegado y verificado; Mac y Windows pendientes. Encender `BLIND_DEPOSIT` cuando la app esté repartida | infra + app | en curso |
 
 La fase 2 y la 3 son las que llevan el trabajo. Nada de esto es reversible a medias: una vez
 que hay clientes hablando v2, el nodo tiene que seguir soportándolo, así que conviene cerrar §7

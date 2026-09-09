@@ -73,7 +73,7 @@ class CallServiceTest {
             other.deliver(myPeerId, ciphertext)
         }
 
-        override suspend fun sendOffline(contact: Contact, ciphertext: ByteArray) = send(contact, ciphertext)
+        override suspend fun sendOffline(contact: Contact, ciphertext: ByteArray, label: String) = send(contact, ciphertext)
 
         override suspend fun openCallStream(contact: Contact): CallStream {
             val (mine, theirs) = MemoryCallStream.pair()
@@ -93,8 +93,8 @@ class CallServiceTest {
         override suspend fun stop() = Unit
         override suspend fun announce(rendezvous: ByteArray) = Unit
         override suspend fun findPeers(rendezvous: ByteArray): List<String> = emptyList()
-        override suspend fun fetchMailbox(): Int = 0
-        override suspend fun startWake() = Unit
+        override suspend fun fetchMailbox(labels: String): Int = 0
+        override suspend fun startWake(labels: String) = Unit
         override suspend fun stopWake() = Unit
         override suspend fun wakeConnected(): Boolean = false
         override suspend fun bootstrap(): String? = null
@@ -104,7 +104,13 @@ class CallServiceTest {
         override suspend fun reserveRelay(): String = ""
         override suspend fun pingProbe(count: Int, intervalMs: Int): String = "n=0/0"
         override fun setMailboxProcessor(
-            processor: suspend (fromPeerId: String, ciphertext: ByteArray, envelopeId: String, timestamp: Long) -> Boolean,
+            processor: suspend (
+                fromPeerId: String,
+                ciphertext: ByteArray,
+                envelopeId: String,
+                timestamp: Long,
+                label: String,
+            ) -> Boolean,
         ) = Unit
     }
 

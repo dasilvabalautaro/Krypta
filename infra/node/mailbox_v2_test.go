@@ -264,3 +264,47 @@ func envejecer(t *testing.T, dir string, cuando time.Time) {
 		}
 	}
 }
+
+// TestWakeV2SigueAvisandoDeLosDepositosV1 fija la propiedad que salva la transición: un cliente
+// que se suscribe por etiquetas tiene que seguir enterándose del correo que le llega por el
+// camino antiguo, porque mientras el depósito ciego no se encienda ese es TODO el correo.
+func TestWakeV2SigueAvisandoDeLosDepositosV1(t *testing.T) {
+	node, a, b := newTestHost(t), newTestHost(t), newTestHost(t)
+	mbx := newMailbox(t.TempDir())
+	mbx.attach(node)
+	wake := newWakeRegistry()
+	wake.attach(node)
+	mbx.notify = wake.wake
+	connect(t, a, node)
+	connect(t, b, node)
+
+	// B se suscribe con el wake NUEVO, solo con etiquetas.
+	s, err := b.NewStream(context.Background(), node.ID(), wakeProtocolV2)
+	if err != nil {
+		t.Fatalf("wake v2: %v", err)
+	}
+	defer s.Close()
+	req, _ := json.Marshal(map[string]any{"v": 2, "labels": []string{etiqueta}})
+	fmt.Fprintf(s, "%s\n", req)
+
+	avisos := make(chan string, 1)
+	go func() {
+		if line, err := bufio.NewReader(s).ReadString('\n'); err == nil {
+			avisos <- line
+		}
+	}()
+	time.Sleep(300 * time.Millisecond)
+
+	// …y A deposita por el camino VIEJO, dirigido a su PeerID.
+	if err := mbxPut(t, a, node.ID(), b.ID().String(), []byte("por v1")); err != nil {
+		t.Fatalf("put v1: %v", err)
+	}
+	select {
+	case linea := <-avisos:
+		if !strings.Contains(linea, `"wake"`) {
+			t.Fatalf("aviso inesperado: %s", linea)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("un depósito v1 debe seguir despertando a quien se suscribió con v2")
+	}
+}

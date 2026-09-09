@@ -28,15 +28,19 @@ interface ISignalingService {
     /**
      * Deposita el blob cifrado en el buzón store-and-forward del nodo para entrega
      * offline (el contacto lo retirará al conectarse). El nodo solo ve ciphertext.
+     *
+     * [label] es la dirección **ciega** del buzón (ver `MailboxLabel`): con ella el nodo
+     * guarda bajo una etiqueta derivada del secreto de la pareja y no llega a saber para
+     * quién es el mensaje. Vacía = camino antiguo, direccionado por PeerID.
      */
-    suspend fun sendOffline(contact: Contact, ciphertext: ByteArray)
+    suspend fun sendOffline(contact: Contact, ciphertext: ByteArray, label: String = "")
 
     /**
      * Retira los mensajes pendientes del buzón propio; cada uno se entrega EN EL SITIO al
      * procesador de [setMailboxProcessor] y solo los confirmados se ack'ean (borran) en el
      * nodo — los demás se reentregan en el próximo fetch. Devuelve cuántos se confirmaron.
      */
-    suspend fun fetchMailbox(): Int
+    suspend fun fetchMailbox(labels: String = ""): Int
 
     /**
      * Registra el procesador síncrono de sobres del buzón: recibe (PeerID remitente,
@@ -45,14 +49,20 @@ interface ISignalingService {
      * del proceso a mitad de proceso ya no pierde el sobre (el nodo lo reentrega).
      */
     fun setMailboxProcessor(
-        processor: suspend (fromPeerId: String, ciphertext: ByteArray, envelopeId: String, timestamp: Long) -> Boolean,
+        processor: suspend (
+            fromPeerId: String,
+            ciphertext: ByteArray,
+            envelopeId: String,
+            timestamp: Long,
+            label: String,
+        ) -> Boolean,
     )
 
     /**
      * Mantiene el stream ligero de wake al nodo: cada aviso de buzón (o reconexión) se
      * emite como [SignalingEvent.WakeReceived]. Idempotente.
      */
-    suspend fun startWake()
+    suspend fun startWake(labels: String = "")
 
     /** Corta el stream de wake (p. ej. al desactivar la WAN). */
     suspend fun stopWake()

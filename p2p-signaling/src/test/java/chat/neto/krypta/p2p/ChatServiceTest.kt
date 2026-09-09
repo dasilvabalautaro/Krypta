@@ -80,25 +80,38 @@ class ChatServiceTest {
         }
         var failOnMailbox = false
         var mailboxDeposits = mutableListOf<Pair<String, ByteArray>>()
-        override suspend fun sendOffline(contact: Contact, ciphertext: ByteArray) {
+        /** Etiquetas con las que se depositó (vacía = camino antiguo por PeerID). */
+        val depositLabels = mutableListOf<String>()
+        override suspend fun sendOffline(contact: Contact, ciphertext: ByteArray, label: String) {
             if (failOnMailbox) error("connect buzón: sin ruta al nodo")
             mailboxDeposits.add(contact.peerId to ciphertext)
+            depositLabels.add(label)
         }
         var mailboxPending = 0
         var fetchCalls = 0
-        override suspend fun fetchMailbox(): Int {
+        /** Etiquetas pedidas en la última retirada (una por línea). */
+        var fetchedLabels: String = ""
+        override suspend fun fetchMailbox(labels: String): Int {
             fetchCalls++
+            fetchedLabels = labels
             return mailboxPending.also { mailboxPending = 0 }
         }
         var wakeRunning = false
-        override suspend fun startWake() { wakeRunning = true }
+        var wakeLabels: String = ""
+        override suspend fun startWake(labels: String) { wakeRunning = true; wakeLabels = labels }
         override suspend fun stopWake() { wakeRunning = false }
         var wakeUp = false
         override suspend fun wakeConnected(): Boolean = wakeUp
         /** Procesador registrado por ChatService: los tests lo invocan como haría el fetch. */
-        var registeredMailboxProcessor: (suspend (String, ByteArray, String, Long) -> Boolean)? = null
+        var registeredMailboxProcessor: (suspend (String, ByteArray, String, Long, String) -> Boolean)? = null
         override fun setMailboxProcessor(
-            processor: suspend (fromPeerId: String, ciphertext: ByteArray, envelopeId: String, timestamp: Long) -> Boolean,
+            processor: suspend (
+                fromPeerId: String,
+                ciphertext: ByteArray,
+                envelopeId: String,
+                timestamp: Long,
+                label: String,
+            ) -> Boolean,
         ) { registeredMailboxProcessor = processor }
     }
 
@@ -364,7 +377,8 @@ class ChatServiceTest {
         val rxSig = FakeSignaling()
         val rxFileStore = FakeFileStore()
         ChatService(rxSig, cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), rxFileStore, backgroundScope)
-        val processor = rxSig.registeredMailboxProcessor!!
+        val processor: suspend (String, ByteArray, String, Long) -> Boolean =
+            { p, c, i, t -> rxSig.registeredMailboxProcessor!!(p, c, i, t, "") }
         senderSig.sentAll.forEachIndexed { i, env ->
             assertTrue(processor(contact.peerId, env, "env-$i", i.toLong()))
         }
@@ -725,7 +739,8 @@ class ChatServiceTest {
         val signaling = FakeSignaling()
         val messages = FakeMessages()
         ChatService(signaling, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
-        val processor = signaling.registeredMailboxProcessor!! // registrado en el init
+        val processor: suspend (String, ByteArray, String, Long) -> Boolean =
+            { p, c, i, t -> signaling.registeredMailboxProcessor!!(p, c, i, t, "") } // registrado en el init
 
         val ciphertext = cipher.encrypt(secret, MessageEnvelope.encodeText("mid-7", "hola".toByteArray()))
         assertTrue(processor(contact.peerId, ciphertext, "env-1", 111L))
@@ -758,7 +773,8 @@ class ChatServiceTest {
         val chat = ChatService(signaling, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
         val avisados = mutableListOf<Pair<String, String>>()
         chat.setIncomingNotifier { c, m -> avisados.add(c.id to m.id) }
-        val processor = signaling.registeredMailboxProcessor!!
+        val processor: suspend (String, ByteArray, String, Long) -> Boolean =
+            { p, c, i, t -> signaling.registeredMailboxProcessor!!(p, c, i, t, "") }
 
         // Texto por buzón, archivo troceado por buzón y llamada perdida: los tres avisan.
         val texto = cipher.encrypt(secret, MessageEnvelope.encodeText("mid-1", "hola".toByteArray()))
@@ -781,7 +797,7 @@ class ChatServiceTest {
         chat.setIncomingNotifier { _, _ -> error("NotificationManager murió") }
 
         val texto = cipher.encrypt(secret, MessageEnvelope.encodeText("mid-9", "hola".toByteArray()))
-        assertTrue(signaling.registeredMailboxProcessor!!(contact.peerId, texto, "env-9", 1L))
+        assertTrue(signaling.registeredMailboxProcessor!!(contact.peerId, texto, "env-9", 1L, ""))
         assertEquals(1, messages.saved.size)
     }
 
@@ -847,7 +863,8 @@ class ChatServiceTest {
         val rxMessages = FakeMessages()
         val rxFileStore = FakeFileStore()
         ChatService(rxSig, cipher, rxMessages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), rxFileStore, backgroundScope)
-        val processor = rxSig.registeredMailboxProcessor!!
+        val processor: suspend (String, ByteArray, String, Long) -> Boolean =
+            { p, c, i, t -> rxSig.registeredMailboxProcessor!!(p, c, i, t, "") }
 
         // 60 KiB → meta + 2 trozos, todos por buzón (como con el receptor offline).
         val fileBytes = ByteArray(60 * 1024) { (it % 251).toByte() }
@@ -936,7 +953,8 @@ class ChatServiceTest {
         assertEquals(0, notified)
         // El procesador del buzón lo da por procesado → el nodo borra el sobre en vez de
         // reentregarlo (si no, un bloqueado llenaría el cupo del destinatario indefinidamente).
-        val processor = signaling.registeredMailboxProcessor!!
+        val processor: suspend (String, ByteArray, String, Long) -> Boolean =
+            { p, c, i, t -> signaling.registeredMailboxProcessor!!(p, c, i, t, "") }
         assertTrue(processor(contact.peerId, text, "env-3", 3L))
     }
 
@@ -1153,6 +1171,79 @@ class ChatServiceTest {
         assertTrue(
             "no debe anunciarse ninguna clave fuera de la ventana",
             signaling.announced.all { a -> admisibles.any { it.contentEquals(a) } },
+        )
+    }
+
+    // --- Buzón ciego: recepción por etiqueta (docs/DISENO-buzon-ciego.md) ---
+
+    private fun etiquetaDe(c: Contact, chat: ChatService): String =
+        MailboxLabel.toHex(
+            MailboxLabel.outbox(c.sharedSecret!!, myPeerId = c.peerId, theirPeerId = chat.myPeerId()),
+        )
+
+    @Test
+    fun `la retirada pide las etiquetas de recepcion de cada contacto`() = runTest {
+        val signaling = FakeSignaling()
+        signaling.bootstrapAddr = "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooWNodo"
+        val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        chat.pollOnce() // arranca y retira el buzón
+
+        val pedidas = signaling.fetchedLabels.lines().filter { it.isNotBlank() }
+        assertEquals("dos etiquetas por contacto: la semana en curso y la anterior", 2, pedidas.size)
+        assertTrue("son las de recepción de ese contacto", pedidas.contains(etiquetaDe(contact, chat)))
+    }
+
+    @Test
+    fun `un sobre ciego se atribuye al contacto por su etiqueta`() = runTest {
+        val signaling = FakeSignaling()
+        val messages = FakeMessages()
+        signaling.bootstrapAddr = "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooWNodo"
+        val chat = ChatService(signaling, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+        chat.pollOnce() // construye el índice de etiquetas
+
+        val ciphertext = cipher.encrypt(secret, MessageEnvelope.encodeText("mid-ciego", "hola a ciegas".toByteArray()))
+        // Sin remitente: en v2 el nodo no lo manda. Quien identifica al contacto es la etiqueta.
+        val ok = signaling.registeredMailboxProcessor!!("", ciphertext, "env-c", 1L, etiquetaDe(contact, chat))
+
+        assertTrue("debía confirmarse tras persistir", ok)
+        val guardado = messages.saved.single()
+        assertEquals(contact.id, guardado.conversationId)
+        assertEquals("el mensaje es del contacto, no propio", contact.id, guardado.senderId)
+        assertEquals("hola a ciegas", String(chat.decrypt(contact, guardado)))
+    }
+
+    @Test
+    fun `una etiqueta desconocida no se confirma, para no destruir el sobre`() = runTest {
+        val signaling = FakeSignaling()
+        val messages = FakeMessages()
+        signaling.bootstrapAddr = "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooWNodo"
+        val chat = ChatService(signaling, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+        chat.pollOnce()
+
+        val ajena = "f".repeat(64)
+        val ok = signaling.registeredMailboxProcessor!!("", ByteArray(64), "env-x", 1L, ajena)
+
+        // Confirmar lo borraría del nodo. Si la etiqueta no se resuelve —índice desfasado por
+        // la rotación de semana, contacto recién añadido— más vale que vuelva en el próximo
+        // ciclo que perderlo para siempre.
+        assertFalse("no debe confirmarse lo que no se ha sabido atribuir", ok)
+        assertTrue(messages.saved.isEmpty())
+    }
+
+    @Test
+    fun `el deposito ciego sigue apagado hasta que la recepcion este repartida`() = runTest {
+        val signaling = FakeSignaling()
+        val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope)
+
+        signaling.failOnSend = true // fuerza la caída al buzón
+        chat.send(contact, "por buzón".toByteArray())
+
+        assertEquals(1, signaling.depositLabels.size)
+        assertEquals(
+            "depositar a ciegas donde el otro aún no mira perdería el mensaje",
+            "",
+            signaling.depositLabels.single(),
         )
     }
 }

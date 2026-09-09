@@ -64,14 +64,18 @@ class SignalingService @Inject constructor(
     }
 
     override fun setMailboxProcessor(
-        processor: suspend (fromPeerId: String, ciphertext: ByteArray, envelopeId: String, timestamp: Long) -> Boolean,
+        processor: suspend (
+            fromPeerId: String,
+            ciphertext: ByteArray,
+            envelopeId: String,
+            timestamp: Long,
+            label: String,
+        ) -> Boolean,
     ) {
         // El callback del bridge llega en un hilo de Go dentro de MailboxFetch; bloquearlo
         // hasta persistir es justo lo que retrasa el ack (runBlocking es correcto aquí).
-        node.mailboxProcessor = { id, from, _, ts, data ->
-            // La etiqueta (depósito ciego) todavía no se usa: el cliente sigue resolviendo el
-            // contacto por el PeerID del remitente. Se conectará al pasar el cliente a v2.
-            kotlinx.coroutines.runBlocking { processor(from, data, id, ts) }
+        node.mailboxProcessor = { id, from, label, ts, data ->
+            kotlinx.coroutines.runBlocking { processor(from, data, id, ts, label) }
         }
     }
 
@@ -120,12 +124,12 @@ class SignalingService @Inject constructor(
         node.sendMessage(contact.peerId, ciphertext)
     }
 
-    override suspend fun sendOffline(contact: Contact, ciphertext: ByteArray) =
-        node.mailboxPut(contact.peerId, ciphertext)
+    override suspend fun sendOffline(contact: Contact, ciphertext: ByteArray, label: String) =
+        node.mailboxPut(contact.peerId, ciphertext, label)
 
-    override suspend fun fetchMailbox(): Int = node.mailboxFetch().toInt()
+    override suspend fun fetchMailbox(labels: String): Int = node.mailboxFetch(labels).toInt()
 
-    override suspend fun startWake() = node.startWake()
+    override suspend fun startWake(labels: String) = node.startWake(labels)
 
     override suspend fun stopWake() = node.stopWake()
 

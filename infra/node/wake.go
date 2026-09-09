@@ -107,10 +107,12 @@ func (w *wakeRegistry) handleV2(s network.Stream) {
 			break
 		}
 	}
-	if len(keys) == 0 {
-		_ = s.Reset()
-		return
-	}
+	// Además de las etiquetas, se suscribe SIEMPRE al PeerID del propio stream. Sin esto la
+	// transición rompía el aviso: mientras el depósito ciego no esté encendido, todo el correo
+	// entra por v1 —o sea, dirigido al PeerID— y un cliente suscrito solo a etiquetas no se
+	// enteraría de nada, cayendo del push instantáneo al sondeo de minutos. El nodo conoce ese
+	// PeerID de todas formas: es quien abre la conexión.
+	keys = append(keys, s.Conn().RemotePeer().String())
 	w.serve(s, keys)
 }
 
