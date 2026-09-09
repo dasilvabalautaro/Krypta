@@ -19,6 +19,7 @@
 #   · wake    → responde /krypta/wake y manda su saludo
 #   · relay   → ofrece reserva CON límites finitos; sin límites = binario anterior al anti-abuso
 #   · vuelta  → depósito y retirada reales, byte a byte (usa identidades efímeras, se limpia solo)
+#   · ciego   → sirve el depósito ciego (v2): la etiqueta en vez del PeerID, y sin remitente
 set -uo pipefail
 
 export PATH="/usr/local/bin:$HOME/go/bin:$PATH"
@@ -72,7 +73,8 @@ for addr in "${NODES[@]}"; do
   for check in "buzón:MBX_ADDR:TestMailboxFetchAgainstLiveNode" \
                "wake:WAKE_ADDR:TestWakeAgainstLiveNode" \
                "relay:RELAY_ADDR:TestRelayLimitsAgainstLiveNode" \
-               "vuelta:MBX_ADDR:TestMailboxRoundTripAgainstLiveNode"; do
+               "vuelta:MBX_ADDR:TestMailboxRoundTripAgainstLiveNode" \
+               "ciego:MBX_ADDR:TestBlindMailboxAgainstLiveNode"; do
     name="${check%%:*}"; rest="${check#*:}"; var="${rest%%:*}"; test_name="${rest#*:}"
     if probe "$name" "$var=$addr" "$test_name"; then
       results+=("$name ok")

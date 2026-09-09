@@ -4,7 +4,7 @@
 El mecanismo entero funciona: el cliente **recibe** a ciegas (retira y se suscribe al wake por
 etiquetas) y el nodo lo sirve. Lo que sigue apagado a propósito es el **envío**
 (`ChatService.BLIND_DEPOSIT = false`): ver la corrección del §6, que es lo que faltaba entender
-de la compatibilidad. Desplegado en el VPS de São Paulo; el Mac y el Windows, pendientes.
+de la compatibilidad. Desplegado y verificado en los **tres** nodos (9 sep 2026).
 **Fecha:** 9 de septiembre de 2026.
 **Origen:** [security-model.md](security-model.md) §6 y §10 — «que el nodo deje de ver quién
 escribe a quién» es el trabajo con más impacto en privacidad que queda pendiente.
@@ -249,7 +249,7 @@ Es lo más delicado, porque hay móviles instalados y tres nodos que no se actua
 | 2 | ✅ v2 en el nodo (put/get/wake + almacenamiento + topes) conviviendo con v1 (5 tests) | `infra/node` | hecho |
 | 3 | ✅ v2 en el puente Go, con caída a v1 por nodo (4 tests) | `native-bridge/libp2p` | hecho |
 | 4 | ✅ Recepción por etiqueta en el cliente y retirada doble durante la transición (4 tests) | `:p2p-signaling` | hecho |
-| 5 | 🟡 Nodos: VPS desplegado y verificado; Mac y Windows pendientes. Encender `BLIND_DEPOSIT` cuando la app esté repartida | infra + app | en curso |
+| 5 | 🟡 Nodos: los tres desplegados y verificados. Falta repartir la app y encender `BLIND_DEPOSIT` | infra + app | en curso |
 
 La fase 2 y la 3 son las que llevan el trabajo. Nada de esto es reversible a medias: una vez
 que hay clientes hablando v2, el nodo tiene que seguir soportándolo, así que conviene cerrar §7

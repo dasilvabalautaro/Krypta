@@ -422,12 +422,14 @@ de la app) en cuatro frentes:
 | `wake` | No acepta la suscripción de aviso |
 | `relay` | Ofrece relay **sin límites** → corre un binario anterior al anti-abuso, hay que redesplegar |
 | `vuelta` | Depósito y retirada reales, byte a byte, con identidades efímeras (se limpia solo) |
+| `ciego` | Sirve el **depósito ciego** (v2): direccionado por etiqueta y sin remitente |
 
-La del relay merece un comentario: en Circuit Relay v2 la respuesta de reserva **solo trae el
-límite cuando existe**, así que es la única forma de saber desde fuera —sin entrar en la
-máquina— si un nodo lleva ya el binario nuevo. Lo que no distingue son versiones posteriores
-entre sí (p. ej. si tiene el límite de ritmo): para eso, `sha256sum /usr/local/bin/krypta-node`
-en la máquina, contra el `shasum -a 256` del binario de `dist/`.
+Dos de ellas dicen además **qué binario** corre el nodo, sin entrar en la máquina: la del
+relay separa "con anti-abuso" de "sin él" (en Circuit Relay v2 la respuesta de reserva solo
+trae el límite cuando existe), y la del depósito ciego separa v2 de v1 —contra un nodo antiguo
+el depósito cae a v1 y no queda nada bajo la etiqueta—. Lo que ninguna distingue son versiones
+posteriores entre sí: para eso, `sha256sum /usr/local/bin/krypta-node` en la máquina, contra el
+`shasum -a 256` del binario de `dist/`.
 
 ### Que se ejecute solo
 
