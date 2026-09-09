@@ -50,6 +50,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -64,14 +65,31 @@ import (
 const (
 	mbxPutProtocol = protocol.ID("/krypta/mbx/put/1.0.0")
 	mbxGetProtocol = protocol.ID("/krypta/mbx/get/1.0.0")
+
+	// v2 — depósito ciego: el buzón se direcciona por una etiqueta derivada del secreto de la
+	// pareja, no por el PeerID del destinatario, y el sobre no guarda el remitente. Ver
+	// docs/DISENO-buzon-ciego.md. Conviven con v1 mientras queden clientes sin actualizar.
+	mbxPutProtocolV2 = protocol.ID("/krypta/mbx/put/2.0.0")
+	mbxGetProtocolV2 = protocol.ID("/krypta/mbx/get/2.0.0")
 )
+
+// labelPattern acota lo que se acepta como etiqueta. Es importante que sea estricto: la
+// etiqueta acaba siendo el **nombre de un directorio**, así que cualquier cosa que no sean
+// exactamente 64 caracteres hexadecimales es un intento de salirse del almacén.
+var labelPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// maxLabelsPerRequest acota cuántas etiquetas puede consultar un cliente de una vez. Con
+// rotación semanal son 2 por contacto, así que 1024 da para 500 contactos y de paso evita que
+// una petición gigante haga al nodo recorrer el disco entero.
+const maxLabelsPerRequest = 1024
 
 type mailbox struct {
 	dir      string
 	ttl      time.Duration
 	maxBlob  int   // bytes de ciphertext por mensaje
 	maxMsgs  int   // mensajes pendientes por destinatario
-	maxBytes int64 // bytes pendientes por destinatario
+	maxBytes int64 // bytes pendientes por destinatario (o por etiqueta, en v2)
+	maxTotal int64 // tope de disco del buzón entero, para todos los destinatarios juntos
 	// Reparto justo: fracción máxima de la cuota que puede ocupar UN remitente cuando hay
 	// correo de otro (ver la cabecera del fichero). 2 = la mitad.
 	shareDiv int
@@ -96,8 +114,13 @@ type mbxPutReq struct {
 }
 
 type mbxEnvelope struct {
-	ID   string `json:"id"`
-	From string `json:"from"`
+	ID string `json:"id"`
+	// `omitempty` a propósito: en v1 el nodo siempre lo rellena desde la identidad del stream,
+	// así que el formato no cambia; en v2 **no existe remitente que guardar** y sin esto se
+	// escribía un `"from":""` en disco. Un campo vacío no filtra nada hoy, pero deja la puerta
+	// abierta a que un cambio futuro lo rellene sin que nadie se dé cuenta, que es justo lo que
+	// el depósito ciego viene a impedir.
+	From string `json:"from,omitempty"`
 	Ts   int64  `json:"ts"` // unix millis del depósito
 	Blob string `json:"blob"`
 	Done bool   `json:"done,omitempty"`
@@ -107,6 +130,32 @@ type mbxAck struct {
 	Ack []string `json:"ack"`
 }
 
+// --- v2 (depósito ciego) ---------------------------------------------------------------
+
+type mbxPutReqV2 struct {
+	V     int    `json:"v"`
+	Label string `json:"label"`
+	Blob  string `json:"blob"`
+}
+
+type mbxGetReqV2 struct {
+	V      int      `json:"v"`
+	Labels []string `json:"labels"`
+}
+
+// mbxEnvelopeV2 es lo que viaja en la retirada v2. No lleva `from`: en v1 lo ponía el nodo
+// desde la identidad del stream (y por eso no era suplantable), pero en v2 esa garantía vive
+// dentro del cifrado — solo la pareja de esa etiqueta tiene la clave con la que el blob
+// descifra, así que ya no hace falta que el nodo lo sepa ni lo escriba.
+type mbxEnvelopeV2 struct {
+	Label string `json:"label,omitempty"`
+	ID    string `json:"id,omitempty"`
+	Ts    int64  `json:"ts,omitempty"`
+	Blob  string `json:"blob,omitempty"`
+	Done  bool   `json:"done,omitempty"`
+	Err   string `json:"err,omitempty"`
+}
+
 func newMailbox(dir string) *mailbox {
 	return &mailbox{
 		dir:      dir,
@@ -114,6 +163,11 @@ func newMailbox(dir string) *mailbox {
 		maxBlob:  64 << 10,
 		maxMsgs:  200,
 		maxBytes: 5 << 20,
+		// Tope global del almacén. En v2 desaparece la cuota "por destinatario" —el nodo ya no
+		// sabe quién es— así que hace falta un techo agregado o un extraño podría inventar
+		// etiquetas al azar hasta llenar el disco. 2 GiB va muy holgado sobre el uso real
+		// (5 MiB el 9 sep 2026) y deja libre el resto del volumen.
+		maxTotal: 2 << 30,
 		shareDiv: 2,
 		// 256 de ráfaga cubre de sobra el peor caso legítimo (un archivo que llene el buzón son
 		// ~110 trozos de 48 KiB) y una ficha por segundo deja 3.600 depósitos/hora sostenidos,
@@ -129,6 +183,8 @@ func newMailbox(dir string) *mailbox {
 func (m *mailbox) attach(h host.Host) {
 	h.SetStreamHandler(mbxPutProtocol, m.handlePut)
 	h.SetStreamHandler(mbxGetProtocol, m.handleGet)
+	h.SetStreamHandler(mbxPutProtocolV2, m.handlePutV2)
+	h.SetStreamHandler(mbxGetProtocolV2, m.handleGetV2)
 }
 
 func (m *mailbox) handlePut(s network.Stream) {
@@ -329,6 +385,142 @@ func usage(box []boxFile) (perTag map[string]struct {
 	return perTag, count, bytes
 }
 
+// handlePutV2 recibe un depósito ciego: el cliente dice bajo QUÉ ETIQUETA deja el blob, y el
+// nodo no llega a saber para quién es. Lo único que sigue viendo es quién deposita (libp2p
+// autentica todos los streams), y eso se usa solo para el límite de ritmo — no se guarda.
+func (m *mailbox) handlePutV2(s network.Stream) {
+	defer s.Close()
+	reply := func(errMsg string) {
+		out, _ := json.Marshal(mbxEnvelopeV2{Err: errMsg})
+		if errMsg == "" {
+			out = []byte(`{"ok":true}`)
+		}
+		fmt.Fprintf(s, "%s\n", out)
+	}
+
+	line, err := readLine(io.LimitReader(s, 128<<10))
+	if err != nil {
+		reply("petición ilegible: " + err.Error())
+		return
+	}
+	var req mbxPutReqV2
+	if err := json.Unmarshal(line, &req); err != nil {
+		reply("JSON inválido: " + err.Error())
+		return
+	}
+	if !labelPattern.MatchString(req.Label) {
+		reply("etiqueta inválida (64 hex)")
+		return
+	}
+	blob, err := base64.StdEncoding.DecodeString(req.Blob)
+	if err != nil {
+		reply("blob no es base64: " + err.Error())
+		return
+	}
+	if len(blob) == 0 || len(blob) > m.maxBlob {
+		reply(fmt.Sprintf("blob fuera de límite (1..%d bytes)", m.maxBlob))
+		return
+	}
+
+	env := mbxEnvelope{ID: newMbxID(), Ts: time.Now().UnixMilli(), Blob: req.Blob}
+	if err := m.storeBlind(req.Label, env, s.Conn().RemotePeer().String()); err != nil {
+		reply(err.Error())
+		return
+	}
+	reply("")
+	if m.notify != nil {
+		m.notify(req.Label)
+	}
+}
+
+// handleGetV2 entrega lo que haya bajo las etiquetas que pida el cliente. La etiqueta es una
+// credencial al portador: quien la presenta, retira. Como solo la pareja puede derivarla, el
+// efecto es el mismo que autenticar por identidad de stream en v1, pero sin que el nodo tenga
+// que saber a quién está sirviendo.
+func (m *mailbox) handleGetV2(s network.Stream) {
+	defer s.Close()
+
+	line, err := readLine(io.LimitReader(s, 128<<10))
+	if err != nil {
+		return
+	}
+	var req mbxGetReqV2
+	if err := json.Unmarshal(line, &req); err != nil {
+		return
+	}
+	if len(req.Labels) > maxLabelsPerRequest {
+		req.Labels = req.Labels[:maxLabelsPerRequest]
+	}
+
+	w := bufio.NewWriter(s)
+	for _, label := range req.Labels {
+		if !labelPattern.MatchString(label) {
+			continue
+		}
+		envs, err := m.list(label)
+		if err != nil {
+			continue
+		}
+		for _, env := range envs {
+			out, err := json.Marshal(mbxEnvelopeV2{
+				Label: label, ID: env.ID, Ts: env.Ts, Blob: env.Blob,
+			})
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "%s\n", out)
+		}
+	}
+	fmt.Fprintln(w, `{"done":true}`)
+	if err := w.Flush(); err != nil {
+		return
+	}
+
+	// El ack llega como {"ack":{"<etiqueta>":["id",…]}}: hay que decir de qué buzón se borra
+	// cada id, porque en v2 el nodo no sabe cuál es "el buzón de este cliente".
+	line, err = readLine(io.LimitReader(s, 128<<10))
+	if err != nil {
+		return
+	}
+	var ack struct {
+		Ack map[string][]string `json:"ack"`
+	}
+	if err := json.Unmarshal(line, &ack); err != nil {
+		return
+	}
+	for label, ids := range ack.Ack {
+		if labelPattern.MatchString(label) {
+			m.delete(label, ids)
+		}
+	}
+}
+
+// storeBlind es el store de v2: mismo límite de ritmo y misma cuota, pero por **etiqueta** en
+// vez de por destinatario, y sin reparto entre remitentes — no hace falta, porque a una
+// etiqueta solo puede escribir quien conoce el secreto de esa pareja. Un desconocido ya no
+// puede llenarle el buzón a nadie: no sabe calcular su etiqueta.
+func (m *mailbox) storeBlind(label string, env mbxEnvelope, from string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !m.allow(from) {
+		return errors.New("demasiados depósitos seguidos; inténtalo en unos segundos")
+	}
+	data, err := json.Marshal(env)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(m.dir, label)
+	_, count, size := usage(scanBox(dir))
+	if count+1 > m.maxMsgs || size+int64(len(data)) > m.maxBytes {
+		return fmt.Errorf("buzón lleno para esa etiqueta (%d msgs, %d bytes)", count, size)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, env.ID+".json"), data, 0o600)
+}
+
 // store guarda el sobre en mailboxdir/<to>/<id>.<tag>.json aplicando la cuota global del
 // destinatario y el reparto justo entre remitentes (ver la cabecera del fichero).
 func (m *mailbox) store(to string, env mbxEnvelope) error {
@@ -477,10 +669,58 @@ func (m *mailbox) delete(to string, ids []string) {
 	}
 }
 
+// enforceTotal aplica el tope global de disco desalojando lo más antiguo. Se llama desde el
+// barrido y no en cada depósito: recorrer el almacén entero por cada mensaje sería caro, y el
+// disco no se llena de golpe.
+func (m *mailbox) enforceTotal() {
+	type item struct {
+		path string
+		mod  time.Time
+		size int64
+	}
+	var all []item
+	total := int64(0)
+	boxes, err := os.ReadDir(m.dir)
+	if err != nil {
+		return
+	}
+	for _, box := range boxes {
+		if !box.IsDir() {
+			continue
+		}
+		dir := filepath.Join(m.dir, box.Name())
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			info, err := f.Info()
+			if err != nil {
+				continue
+			}
+			all = append(all, item{filepath.Join(dir, f.Name()), info.ModTime(), info.Size()})
+			total += info.Size()
+		}
+	}
+	if total <= m.maxTotal {
+		return
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].mod.Before(all[j].mod) })
+	for _, it := range all {
+		if total <= m.maxTotal {
+			return
+		}
+		if os.Remove(it.path) == nil {
+			total -= it.size
+		}
+	}
+}
+
 // sweep borra los sobres más viejos que el TTL (por mtime) y los buzones vacíos.
 func (m *mailbox) sweep() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.enforceTotal()
 	cutoff := time.Now().Add(-m.ttl)
 	boxes, err := os.ReadDir(m.dir)
 	if err != nil {

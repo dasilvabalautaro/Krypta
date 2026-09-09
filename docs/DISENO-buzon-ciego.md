@@ -1,6 +1,8 @@
 # Diseño: depósito ciego en el buzón (protocolo v2)
 
-**Estado:** propuesta para revisión. **No implementada.**
+**Estado:** decidido el 9 sep 2026 (rotación **semanal**) y **en construcción**. Fases 1 y 2
+hechas —etiquetas en el cliente y protocolo v2 en el nodo, conviviendo con v1—; faltan el
+puente Go, el cliente y el despliegue.
 **Fecha:** 9 de septiembre de 2026.
 **Origen:** [security-model.md](security-model.md) §6 y §10 — «que el nodo deje de ver quién
 escribe a quién» es el trabajo con más impacto en privacidad que queda pendiente.
@@ -199,19 +201,17 @@ Es lo más delicado, porque hay móviles instalados y tres nodos que no se actua
 
 ## 7. Preguntas abiertas (hay que decidirlas antes de escribir código)
 
-1. **Rotación diaria vs. etiqueta estable.** Rotar obliga a pedir `contactos × 7` etiquetas en
-   cada retirada; una etiqueta estable por pareja abarata la retirada pero es un **seudónimo
-   permanente de la relación** en el disco del nodo. Tercera vía: rotar semanalmente, con
-   TTL 7 días → 2 etiquetas por contacto. **Mi recomendación: semanal.** Conserva casi todo el
-   beneficio (nada correlacionable a largo plazo) y deja la petición en 40 etiquetas con 20
-   contactos.
-2. **TTL.** Bajarlo de 7 a 3 días encoge la ventana de retirada y el disco; encarece la entrega
-   a quien se va de viaje sin cobertura. No tocarlo salvo que la rotación lo empuje.
-3. **Tope global de disco por nodo**, ahora que la cuota por destinatario deja de existir. Hay
-   que fijar un número y qué se desaloja al llegar (lo más antiguo, probablemente).
-4. **¿Se cifra la etiqueta en reposo?** Guardar el nombre de directorio tal cual permite a quien
-   se lleve el disco *contar* relaciones y ver su ritmo, aunque no sepa de quiénes. Un
-   `HMAC(clave_del_nodo, etiqueta)` no aporta nada frente a quien también se lleve la clave.
+1. ~~**Rotación diaria vs. etiqueta estable.**~~ **Decidido: semanal** (9 sep 2026). Con el TTL
+   de 7 días bastan **dos etiquetas por contacto** (la semana en curso y la anterior), o sea 40
+   con 20 contactos. El corte no cae en lunes sino en una rejilla fija de 7 días desde la
+   época: da igual dónde caiga mientras los dos extremos hagan la misma cuenta.
+2. ~~**TTL.**~~ **Decidido: sigue en 7 días.** La rotación semanal encaja con él sin forzar nada.
+3. ~~**Tope global de disco por nodo.**~~ **Decidido: 2 GiB**, desalojando lo más antiguo desde
+   el barrido horario. El VPS tiene 15 GB libres y el buzón ocupaba 5 MiB, así que sobra
+   holgura; y en v2 hace falta un techo agregado porque la cuota por destinatario desaparece.
+4. ~~**¿Se cifra la etiqueta en reposo?**~~ **Decidido: no.** Quien se lleve el disco puede
+   contar relaciones y ver su ritmo, pero no atribuirlas; cifrarlas con una clave que vive en
+   la misma máquina no cambia nada frente a quien se lleva las dos.
 5. **Qué hacer con `from` en la interfaz interna.** `MailboxHandler.OnMailboxMessage(id, from,
    ts, data)` recibe el remitente del nodo, y `ChatService.onReceived` resuelve el contacto por
    ese PeerID. En v2 habría que resolverlo **por la etiqueta** (el cliente sabe qué contacto le
@@ -225,8 +225,8 @@ Es lo más delicado, porque hay móviles instalados y tres nodos que no se actua
 | Fase | Qué | Dónde | Esfuerzo |
 |---|---|---|---|
 | 0 | Decidir §7 (rotación, TTL, topes) | — | conversación |
-| 1 | Derivación de etiquetas + tests | `:p2p-signaling` (junto a `RendezvousService`) | pequeño |
-| 2 | v2 en el nodo (put/get/wake + almacenamiento + topes) conviviendo con v1 | `infra/node` | medio |
+| 1 | ✅ Derivación de etiquetas + tests (`MailboxLabel`, 6 tests) | `:p2p-signaling` | hecho |
+| 2 | ✅ v2 en el nodo (put/get/wake + almacenamiento + topes) conviviendo con v1 (5 tests) | `infra/node` | hecho |
 | 3 | v2 en el puente Go, con caída a v1 por nodo | `native-bridge/libp2p` | medio |
 | 4 | Recepción por etiqueta en el cliente y retirada doble durante la transición | `:p2p-signaling` | pequeño-medio |
 | 5 | Desplegar nodos → publicar app → observar → retirar v1 | infra + app | despliegue |
