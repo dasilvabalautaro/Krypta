@@ -68,7 +68,9 @@ class SignalingService @Inject constructor(
     ) {
         // El callback del bridge llega en un hilo de Go dentro de MailboxFetch; bloquearlo
         // hasta persistir es justo lo que retrasa el ack (runBlocking es correcto aquí).
-        node.mailboxProcessor = { id, from, ts, data ->
+        node.mailboxProcessor = { id, from, _, ts, data ->
+            // La etiqueta (depósito ciego) todavía no se usa: el cliente sigue resolviendo el
+            // contacto por el PeerID del remitente. Se conectará al pasar el cliente a v2.
             kotlinx.coroutines.runBlocking { processor(from, data, id, ts) }
         }
     }

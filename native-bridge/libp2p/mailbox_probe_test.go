@@ -26,7 +26,7 @@ func TestMailboxPutAgainstLiveNode(t *testing.T) {
 	}
 	defer n.Close()
 
-	if err := n.MailboxPut(addr, to, []byte("sonda wake")); err != nil {
+	if err := n.MailboxPut(addr, to, "", []byte("sonda wake")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	t.Logf("OK: blob depositado para %s — el wake debería dispararlo en segundos", to)
@@ -53,7 +53,7 @@ func TestMailboxFetchAgainstLiveNode(t *testing.T) {
 	}
 	defer n.Close()
 
-	got, err := n.MailboxFetch(addr)
+	got, err := n.MailboxFetch(addr, "")
 	if err != nil {
 		t.Fatalf("el nodo no atiende el buzón: %v", err)
 	}
@@ -118,11 +118,11 @@ func TestMailboxRoundTripAgainstLiveNode(t *testing.T) {
 	nB.SetMailboxHandler(recv)
 
 	payload := fmt.Sprintf("sonda round-trip %d", time.Now().UnixNano())
-	if err := nA.MailboxPut(addr, peerB, []byte(payload)); err != nil {
+	if err := nA.MailboxPut(addr, peerB, "", []byte(payload)); err != nil {
 		t.Fatalf("A no pudo depositar para B: %v", err)
 	}
 
-	got, err := nB.MailboxFetch(addr)
+	got, err := nB.MailboxFetch(addr, "")
 	if err != nil {
 		t.Fatalf("B no pudo retirar: %v", err)
 	}

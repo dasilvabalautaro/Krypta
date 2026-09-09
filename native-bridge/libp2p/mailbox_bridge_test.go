@@ -103,7 +103,7 @@ type mbxRecv struct {
 	panicOn map[string]bool // por payload
 }
 
-func (r *mbxRecv) OnMailboxMessage(id, from string, ts int64, data []byte) bool {
+func (r *mbxRecv) OnMailboxMessage(id, from, label string, ts int64, data []byte) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.panicOn[string(data)] {
@@ -136,16 +136,16 @@ func TestMailboxPutFetch(t *testing.T) {
 	defer b.Close()
 
 	// A deposita dos mensajes para B, que no está conectado a nada.
-	if err := a.MailboxPut(mbxAddr, b.PeerID(), []byte("uno")); err != nil {
+	if err := a.MailboxPut(mbxAddr, b.PeerID(), "", []byte("uno")); err != nil {
 		t.Fatalf("put 1: %v", err)
 	}
-	if err := a.MailboxPut(mbxAddr, b.PeerID(), []byte("dos")); err != nil {
+	if err := a.MailboxPut(mbxAddr, b.PeerID(), "", []byte("dos")); err != nil {
 		t.Fatalf("put 2: %v", err)
 	}
 
 	recv := &mbxRecv{}
 	b.SetMailboxHandler(recv)
-	n, err := b.MailboxFetch(mbxAddr)
+	n, err := b.MailboxFetch(mbxAddr, "")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestMailboxPutFetch(t *testing.T) {
 	}
 
 	// Tras el ack no debe reentregarse nada.
-	if n, err := b.MailboxFetch(mbxAddr); err != nil || n != 0 {
+	if n, err := b.MailboxFetch(mbxAddr, ""); err != nil || n != 0 {
 		t.Fatalf("segundo fetch: n=%d err=%v", n, err)
 	}
 }
@@ -186,7 +186,7 @@ func TestMailboxRedeliverUnacked(t *testing.T) {
 	defer b.Close()
 
 	for _, payload := range []string{"ok", "falla-persistencia", "lanza"} {
-		if err := a.MailboxPut(mbxAddr, b.PeerID(), []byte(payload)); err != nil {
+		if err := a.MailboxPut(mbxAddr, b.PeerID(), "", []byte(payload)); err != nil {
 			t.Fatalf("put %q: %v", payload, err)
 		}
 	}
@@ -196,7 +196,7 @@ func TestMailboxRedeliverUnacked(t *testing.T) {
 		panicOn: map[string]bool{"lanza": true},
 	}
 	b.SetMailboxHandler(recv)
-	if n, err := b.MailboxFetch(mbxAddr); err != nil || n != 1 {
+	if n, err := b.MailboxFetch(mbxAddr, ""); err != nil || n != 1 {
 		t.Fatalf("primer fetch: ack'd n=%d err=%v (esperado 1)", n, err)
 	}
 
@@ -206,7 +206,7 @@ func TestMailboxRedeliverUnacked(t *testing.T) {
 	recv.panicOn = nil
 	recv.got = nil
 	recv.mu.Unlock()
-	if n, err := b.MailboxFetch(mbxAddr); err != nil || n != 2 {
+	if n, err := b.MailboxFetch(mbxAddr, ""); err != nil || n != 2 {
 		t.Fatalf("reentrega: n=%d err=%v got=%v (esperado 2)", n, err, recv.got)
 	}
 	if len(recv.got) != 2 {
@@ -214,7 +214,7 @@ func TestMailboxRedeliverUnacked(t *testing.T) {
 	}
 
 	// Y tras confirmarse, el buzón queda vacío.
-	if n, err := b.MailboxFetch(mbxAddr); err != nil || n != 0 {
+	if n, err := b.MailboxFetch(mbxAddr, ""); err != nil || n != 0 {
 		t.Fatalf("fetch final: n=%d err=%v", n, err)
 	}
 }

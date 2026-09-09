@@ -61,8 +61,8 @@ func TestWakeSubscribe(t *testing.T) {
 	defer n.Close()
 
 	recv := newWakeRecv()
-	n.StartWake(addr, recv)
-	n.StartWake(addr, recv) // idempotente: no abre una segunda sesión
+	n.StartWake(addr, "", recv)
+	n.StartWake(addr, "", recv) // idempotente: no abre una segunda sesión
 
 	// 1. Al (re)conectar llega el OnWake de cobertura.
 	select {

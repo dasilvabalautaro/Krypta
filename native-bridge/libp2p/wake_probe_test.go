@@ -27,7 +27,7 @@ func TestWakeAgainstLiveNode(t *testing.T) {
 	defer n.Close()
 
 	recv := newWakeRecv()
-	n.StartWake(addr, recv)
+	n.StartWake(addr, "", recv)
 	defer n.StopWake()
 	select {
 	case <-recv.fired:

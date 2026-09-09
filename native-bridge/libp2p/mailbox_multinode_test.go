@@ -44,11 +44,11 @@ func TestMailboxMultiNode(t *testing.T) {
 	defer recipient.Close()
 
 	// Failover: con [caído, A] el depósito debe aterrizar en A sin error.
-	if err := sender.MailboxPut(dead+"\n"+addrA, recipient.PeerID(), []byte("via-A")); err != nil {
+	if err := sender.MailboxPut(dead+"\n"+addrA, recipient.PeerID(), "", []byte("via-A")); err != nil {
 		t.Fatalf("put con failover: %v", err)
 	}
 	// Split-brain: otro emisor (o el mismo en otro momento) solo alcanza B.
-	if err := sender.MailboxPut(addrB, recipient.PeerID(), []byte("via-B")); err != nil {
+	if err := sender.MailboxPut(addrB, recipient.PeerID(), "", []byte("via-B")); err != nil {
 		t.Fatalf("put en B: %v", err)
 	}
 
@@ -56,7 +56,7 @@ func TestMailboxMultiNode(t *testing.T) {
 	// sobres y no debe haber error (solo fallaron algunos nodos, no todos).
 	recv := &mbxRecv{}
 	recipient.SetMailboxHandler(recv)
-	n, err := recipient.MailboxFetch(dead + "\n" + addrA + "\n" + addrB)
+	n, err := recipient.MailboxFetch(dead+"\n"+addrA+"\n"+addrB, "")
 	if err != nil {
 		t.Fatalf("fetch multi-nodo: %v", err)
 	}
@@ -70,10 +70,10 @@ func TestMailboxMultiNode(t *testing.T) {
 	}
 
 	// Con TODOS los nodos caídos sí es error (y n=0).
-	if n, err := recipient.MailboxFetch(dead); err == nil || n != 0 {
+	if n, err := recipient.MailboxFetch(dead, ""); err == nil || n != 0 {
 		t.Fatalf("fetch con todo caído: n=%d err=%v (esperado error)", n, err)
 	}
-	if err := sender.MailboxPut(dead, recipient.PeerID(), []byte("x")); err == nil ||
+	if err := sender.MailboxPut(dead, recipient.PeerID(), "", []byte("x")); err == nil ||
 		!strings.Contains(err.Error(), "buzón") {
 		t.Fatalf("put con todo caído: err=%v (esperado error de buzón)", err)
 	}

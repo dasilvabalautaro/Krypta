@@ -1,8 +1,9 @@
 # Diseño: depósito ciego en el buzón (protocolo v2)
 
 **Estado:** decidido el 9 sep 2026 (rotación **semanal**) y **en construcción**. Fases 1 y 2
-hechas —etiquetas en el cliente y protocolo v2 en el nodo, conviviendo con v1—; faltan el
-puente Go, el cliente y el despliegue.
+hechas —etiquetas en el cliente y protocolo v2 en el nodo, conviviendo con v1— y la 3
+también (el puente Go habla v2 con caída a v1 por nodo). Falta la 4: que el cliente use las
+etiquetas, que hoy sigue en v1. Y el despliegue.
 **Fecha:** 9 de septiembre de 2026.
 **Origen:** [security-model.md](security-model.md) §6 y §10 — «que el nodo deje de ver quién
 escribe a quién» es el trabajo con más impacto en privacidad que queda pendiente.
@@ -227,7 +228,7 @@ Es lo más delicado, porque hay móviles instalados y tres nodos que no se actua
 | 0 | Decidir §7 (rotación, TTL, topes) | — | conversación |
 | 1 | ✅ Derivación de etiquetas + tests (`MailboxLabel`, 6 tests) | `:p2p-signaling` | hecho |
 | 2 | ✅ v2 en el nodo (put/get/wake + almacenamiento + topes) conviviendo con v1 (5 tests) | `infra/node` | hecho |
-| 3 | v2 en el puente Go, con caída a v1 por nodo | `native-bridge/libp2p` | medio |
+| 3 | ✅ v2 en el puente Go, con caída a v1 por nodo (4 tests) | `native-bridge/libp2p` | hecho |
 | 4 | Recepción por etiqueta en el cliente y retirada doble durante la transición | `:p2p-signaling` | pequeño-medio |
 | 5 | Desplegar nodos → publicar app → observar → retirar v1 | infra + app | despliegue |
 

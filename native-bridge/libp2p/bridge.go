@@ -24,8 +24,8 @@ import (
 	"time"
 
 	"filippo.io/edwards25519"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -36,6 +36,7 @@ import (
 	rcclient "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	"github.com/libp2p/go-libp2p/p2p/protocol/ping"
 	multiaddr "github.com/multiformats/go-multiaddr"
+	multistream "github.com/multiformats/go-multistream"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -165,7 +166,8 @@ type Node struct {
 
 	wakeMu      sync.Mutex
 	wakeCancel  context.CancelFunc
-	wakeStreams int // nº de streams de wake abiertos (multi-nodo: uno por nodo alcanzable)
+	wakeStreams int      // nº de streams de wake abiertos (multi-nodo: uno por nodo alcanzable)
+	wakeLabels  []string // etiquetas suscritas (v2): si cambian, hay que rehacer la suscripción
 }
 
 // shortID abrevia un PeerID para los mensajes de error/diagnóstico.
@@ -710,7 +712,21 @@ func (n *Node) OpenVideoStream(peerID string) (*VideoStream, error) {
 const (
 	mbxPutProtocol = protocol.ID("/krypta/mbx/put/1.0.0")
 	mbxGetProtocol = protocol.ID("/krypta/mbx/get/1.0.0")
+
+	// v2 — depósito ciego: el buzón se direcciona por una etiqueta derivada del secreto de la
+	// pareja, no por el PeerID del destinatario (docs/DISENO-buzon-ciego.md). El cliente
+	// intenta siempre v2 y cae a v1 SOLO si el nodo no lo entiende todavía.
+	mbxPutProtocolV2 = protocol.ID("/krypta/mbx/put/2.0.0")
+	mbxGetProtocolV2 = protocol.ID("/krypta/mbx/get/2.0.0")
 )
+
+// isUnsupportedProtocol distingue "este nodo aún no habla v2" de cualquier otro fallo. Importa
+// afinarlo: caer a v1 ante un error cualquiera —una cuota, un límite de ritmo— sería degradar
+// la privacidad en silencio justo cuando el nodo sí sabía hacerlo bien.
+func isUnsupportedProtocol(err error) bool {
+	var notSupported multistream.ErrNotSupported[protocol.ID]
+	return errors.As(err, &notSupported)
+}
 
 type mbxEnvelope struct {
 	ID   string `json:"id"`
@@ -720,6 +736,9 @@ type mbxEnvelope struct {
 	Done bool   `json:"done,omitempty"`
 	Err  string `json:"err,omitempty"`
 	OK   bool   `json:"ok,omitempty"`
+	// v2: de qué etiqueta viene el sobre. En v2 no hay `from` —el nodo ya no sabe quién
+	// depositó— y es la etiqueta la que le dice al cliente de qué contacto se trata.
+	Label string `json:"label,omitempty"`
 }
 
 // MailboxHandler is implemented on the Kotlin side to receive messages fetched from the
@@ -729,7 +748,10 @@ type mbxEnvelope struct {
 // the node — the rest are redelivered on the next fetch, so a crash or a failed write
 // mid-batch no longer loses messages/chunks.
 type MailboxHandler interface {
-	OnMailboxMessage(id string, from string, ts int64, data []byte) bool
+	// `from` viene relleno en v1 (el nodo lo fija desde la identidad del stream) y `label` en
+	// v2 (depósito ciego, donde el nodo no sabe quién depositó). Nunca los dos: el cliente
+	// resuelve el contacto por el que venga.
+	OnMailboxMessage(id string, from string, label string, ts int64, data []byte) bool
 }
 
 // SetMailboxHandler registers the handler that MailboxFetch delivers messages to.
@@ -749,20 +771,71 @@ func (n *Node) connectNode(ctx context.Context, ai peer.AddrInfo) error {
 // offline. Multi-nodo: prueba los nodos EN ORDEN y deposita en el primero que acepte
 // (failover); como todo cliente retira de TODOS los nodos (MailboxFetch), da igual en
 // cuál aterrice. Devuelve error solo si ninguno lo aceptó.
-func (n *Node) MailboxPut(mailboxAddrs string, to string, data []byte) error {
+func (n *Node) MailboxPut(mailboxAddrs string, to string, label string, data []byte) error {
 	nodes := parseAddrInfos(mailboxAddrs)
 	if len(nodes) == 0 {
 		return errors.New("sin nodo de buzón configurado")
 	}
 	var errs []string
 	for _, ai := range nodes {
-		if err := n.mailboxPutTo(ai, to, data); err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", shortID(ai.ID), err))
-			continue
+		err := n.putTo(ai, to, label, data)
+		if err == nil {
+			return nil
 		}
-		return nil
+		errs = append(errs, fmt.Sprintf("%s: %v", shortID(ai.ID), err))
 	}
 	return errors.New("buzón: " + strings.Join(errs, "; "))
+}
+
+// putTo deposita en UN nodo: primero a ciegas (v2) y, solo si ese nodo todavía no entiende el
+// protocolo, por el camino antiguo. Cualquier otro error —cuota, ritmo, red— se propaga tal
+// cual: caer a v1 ante un fallo cualquiera sería renunciar a la privacidad en silencio.
+func (n *Node) putTo(ai peer.AddrInfo, to, label string, data []byte) error {
+	if label != "" {
+		err := n.mailboxPutBlindTo(ai, label, data)
+		if err == nil || !isUnsupportedProtocol(err) {
+			return err
+		}
+	}
+	return n.mailboxPutTo(ai, to, data)
+}
+
+// mailboxPutBlindTo deposita bajo una etiqueta (v2): el nodo no llega a saber para quién es.
+func (n *Node) mailboxPutBlindTo(ai peer.AddrInfo, label string, data []byte) error {
+	ctx, cancel := context.WithTimeout(n.ctx, 30*time.Second)
+	defer cancel()
+	if err := n.connectNode(ctx, ai); err != nil {
+		return err
+	}
+	s, err := n.h.NewStream(ctx, ai.ID, mbxPutProtocolV2)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	req, err := json.Marshal(map[string]any{
+		"v":     2,
+		"label": label,
+		"blob":  base64.StdEncoding.EncodeToString(data),
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(s, "%s\n", req); err != nil {
+		return err
+	}
+	_ = s.CloseWrite()
+	line, err := bufio.NewReader(io.LimitReader(s, 8<<10)).ReadBytes('\n')
+	if err != nil && len(line) == 0 {
+		return fmt.Errorf("buzón sin respuesta: %w", err)
+	}
+	var resp mbxEnvelope
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return fmt.Errorf("respuesta del buzón ilegible: %w", err)
+	}
+	if resp.Err != "" {
+		return errors.New("buzón: " + resp.Err)
+	}
+	return nil
 }
 
 func (n *Node) mailboxPutTo(ai peer.AddrInfo, to string, data []byte) error {
@@ -807,11 +880,12 @@ func (n *Node) mailboxPutTo(ai peer.AddrInfo, to string, data []byte) error {
 // ack'ea al nodo para que los borre. Multi-nodo: retira de TODOS los nodos alcanzables
 // (un depósito puede haber aterrizado en cualquiera, según qué nodo viera el emisor);
 // devuelve el total y error solo si TODOS fallaron.
-func (n *Node) MailboxFetch(mailboxAddrs string) (int, error) {
+func (n *Node) MailboxFetch(mailboxAddrs string, labelsHex string) (int, error) {
 	nodes := parseAddrInfos(mailboxAddrs)
 	if len(nodes) == 0 {
 		return 0, errors.New("sin nodo de buzón configurado")
 	}
+	labels := splitLines(labelsHex)
 	// En paralelo: cada nodo ya tenía su plazo de 60 s, pero en serie el paso podía costar
 	// hasta 180 s con tres nodos — y este es justo el paso que entrega los mensajes.
 	total := 0
@@ -824,11 +898,20 @@ func (n *Node) MailboxFetch(mailboxAddrs string) (int, error) {
 		wg.Add(1)
 		go func(ai peer.AddrInfo) {
 			defer wg.Done()
+			// Durante la transición se retira por las DOS vías: v1 por el PeerID propio (donde
+			// sigue depositando quien no haya actualizado) y v2 por las etiquetas. Sin esto,
+			// el correo de un contacto con la versión anterior se quedaría sin recoger.
 			got, err := n.mailboxFetchFrom(ai)
+			gotBlind, errBlind := n.mailboxFetchBlindFrom(ai, labels)
 			mu.Lock()
 			defer mu.Unlock()
-			total += got
-			if err != nil {
+			total += got + gotBlind
+			// El nodo cuenta como bueno si **alguna** vía funcionó. Ojo con el matiz que costó
+			// un test: sin etiquetas, la vía ciega no falla, simplemente no hace nada — y si se
+			// tomara ese "sin error" por un éxito, un nodo caído del todo pasaría por sano.
+			okV1 := err == nil
+			okV2 := len(labels) > 0 && errBlind == nil
+			if !okV1 && !okV2 {
 				errs = append(errs, fmt.Sprintf("%s: %v", shortID(ai.ID), err))
 			}
 		}(ai)
@@ -889,7 +972,7 @@ func (n *Node) mailboxFetchFrom(ai peer.AddrInfo) (int, error) {
 			ids = append(ids, env.ID)
 			continue
 		}
-		if handleMailboxEnvelope(n.mailboxHandler, env.ID, env.From, env.Ts, data) {
+		if handleMailboxEnvelope(n.mailboxHandler, env.ID, env.From, "", env.Ts, data) {
 			ids = append(ids, env.ID)
 		}
 	}
@@ -904,10 +987,93 @@ func (n *Node) mailboxFetchFrom(ai peer.AddrInfo) (int, error) {
 	return len(ids), nil
 }
 
+// splitLines parte una lista separada por saltos de línea, descartando lo vacío. Es el mismo
+// convenio que ya se usa para los multiaddr de bootstrap.
+func splitLines(s string) []string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// mailboxFetchBlindFrom retira de UN nodo por etiquetas (v2). Devuelve 0 sin error si no hay
+// etiquetas que pedir, y el error de negociación si ese nodo aún no habla v2.
+func (n *Node) mailboxFetchBlindFrom(ai peer.AddrInfo, labels []string) (int, error) {
+	if len(labels) == 0 {
+		return 0, nil
+	}
+	ctx, cancel := context.WithTimeout(n.ctx, 60*time.Second)
+	defer cancel()
+	if err := n.connectNode(ctx, ai); err != nil {
+		return 0, err
+	}
+	s, err := n.h.NewStream(ctx, ai.ID, mbxGetProtocolV2)
+	if err != nil {
+		return 0, err
+	}
+	defer s.Close()
+	req, err := json.Marshal(map[string]any{"v": 2, "labels": labels})
+	if err != nil {
+		return 0, err
+	}
+	if _, err := fmt.Fprintf(s, "%s\n", req); err != nil {
+		return 0, err
+	}
+
+	r := bufio.NewReaderSize(s, mbxMaxLine)
+	var envs []mbxEnvelope
+	for {
+		line, err := r.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			_ = s.Reset()
+			return 0, fmt.Errorf("buzón: sobre de más de %d KiB, se corta", mbxMaxLine>>10)
+		}
+		if err != nil {
+			return 0, fmt.Errorf("buzón interrumpido: %w", err)
+		}
+		var env mbxEnvelope
+		if err := json.Unmarshal(line, &env); err != nil {
+			return 0, fmt.Errorf("sobre ilegible: %w", err)
+		}
+		if env.Done {
+			break
+		}
+		envs = append(envs, env)
+	}
+
+	// Mismo ack-tras-persistir que en v1, pero el ack va agrupado por etiqueta: en v2 el nodo
+	// no sabe cuál es "el buzón de este cliente", así que hay que decirle de dónde borrar.
+	acked := map[string][]string{}
+	count := 0
+	for _, env := range envs {
+		data, err := base64.StdEncoding.DecodeString(env.Blob)
+		if err != nil {
+			acked[env.Label] = append(acked[env.Label], env.ID) // basura: borrarla, no reintentarla
+			continue
+		}
+		if handleMailboxEnvelope(n.mailboxHandler, env.ID, "", env.Label, env.Ts, data) {
+			acked[env.Label] = append(acked[env.Label], env.ID)
+			count++
+		}
+	}
+	ack, err := json.Marshal(map[string]any{"ack": acked})
+	if err != nil {
+		return count, err
+	}
+	if _, err := fmt.Fprintf(s, "%s\n", ack); err != nil {
+		return count, err
+	}
+	_ = s.CloseWrite()
+	return count, nil
+}
+
 // handleMailboxEnvelope llama al handler protegiéndose de panics: una excepción del lado
 // Kotlin dentro del callback gomobile aflora aquí como panic y debe contar como "no
 // persistido" (→ sin ack, el nodo reentrega), no tumbar el fetch entero.
-func handleMailboxEnvelope(h MailboxHandler, id, from string, ts int64, data []byte) (ok bool) {
+func handleMailboxEnvelope(h MailboxHandler, id, from, label string, ts int64, data []byte) (ok bool) {
 	if h == nil {
 		return false
 	}
@@ -916,12 +1082,15 @@ func handleMailboxEnvelope(h MailboxHandler, id, from string, ts int64, data []b
 			ok = false
 		}
 	}()
-	return h.OnMailboxMessage(id, from, ts, data)
+	return h.OnMailboxMessage(id, from, label, ts, data)
 }
 
 // --- Wake (aviso de buzón; el servidor vive integrado en infra/node) -----------------
 
-const wakeProtocol = protocol.ID("/krypta/wake/1.0.0")
+const (
+	wakeProtocol   = protocol.ID("/krypta/wake/1.0.0")
+	wakeProtocolV2 = protocol.ID("/krypta/wake/2.0.0")
+)
 
 // WakeHandler is implemented on the Kotlin side. OnWake fires when the node signals
 // there is mail in our mailbox — and also right after each (re)connection of the wake
@@ -935,11 +1104,19 @@ type WakeHandler interface {
 // reconnecting (Cloudflare Free recycles WebSockets ~every 10 min; the node sends
 // keepalives every ~50 s against the ~100 s idle cut). Idempotent: a second call while
 // running is a no-op.
-func (n *Node) StartWake(wakeAddrs string, h WakeHandler) {
+func (n *Node) StartWake(wakeAddrs string, labelsHex string, h WakeHandler) {
 	n.wakeMu.Lock()
 	defer n.wakeMu.Unlock()
+	labels := splitLines(labelsHex)
+	// Con etiquetas hay un motivo nuevo para reiniciar: rotan cada semana y cambian al añadir
+	// un contacto. Si el conjunto cambió, la suscripción vieja está pidiendo avisos de buzones
+	// que ya no son los suyos, así que se rehace. Si no cambió, sigue siendo idempotente.
 	if n.wakeCancel != nil {
-		return
+		if sameLabels(n.wakeLabels, labels) {
+			return
+		}
+		n.wakeCancel()
+		n.wakeCancel = nil
 	}
 	// Parsear ANTES de marcar el wake como arrancado. Antes se guardaba wakeCancel y solo
 	// después se miraba la lista: si StartWake llegaba sin nodos (host aún sin arrancar, o
@@ -951,9 +1128,28 @@ func (n *Node) StartWake(wakeAddrs string, h WakeHandler) {
 	}
 	ctx, cancel := context.WithCancel(n.ctx)
 	n.wakeCancel = cancel
+	n.wakeLabels = labels
 	for _, ai := range nodes {
-		go n.wakeLoop(ctx, ai, h)
+		go n.wakeLoop(ctx, ai, labels, h)
 	}
+}
+
+// sameLabels compara dos conjuntos de etiquetas sin importar el orden.
+func sameLabels(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, x := range a {
+		seen[x]++
+	}
+	for _, x := range b {
+		seen[x]--
+		if seen[x] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // StopWake tears the wake stream down (e.g., WAN disabled).
@@ -982,9 +1178,9 @@ func (n *Node) addWakeOnline(delta int) {
 	n.wakeMu.Unlock()
 }
 
-func (n *Node) wakeLoop(ctx context.Context, ai peer.AddrInfo, h WakeHandler) {
+func (n *Node) wakeLoop(ctx context.Context, ai peer.AddrInfo, labels []string, h WakeHandler) {
 	for ctx.Err() == nil {
-		_ = n.wakeSession(ctx, ai, h)
+		_ = n.wakeSession(ctx, ai, labels, h)
 		select {
 		case <-ctx.Done():
 			return
@@ -994,13 +1190,16 @@ func (n *Node) wakeLoop(ctx context.Context, ai peer.AddrInfo, h WakeHandler) {
 }
 
 // wakeSession abre el stream de wake hacia un nodo y lo lee hasta que muera.
-func (n *Node) wakeSession(ctx context.Context, ai peer.AddrInfo, h WakeHandler) error {
+func (n *Node) wakeSession(ctx context.Context, ai peer.AddrInfo, labels []string, h WakeHandler) error {
 	dialCtx, cancelDial := context.WithTimeout(ctx, 30*time.Second)
 	if err := n.connectNode(dialCtx, ai); err != nil {
 		cancelDial()
 		return err
 	}
-	s, err := n.h.NewStream(dialCtx, ai.ID, wakeProtocol)
+	// Con depósito ciego el nodo no sabe de quién es cada buzón, así que el aviso hay que
+	// pedirlo por etiquetas. Si este nodo aún no habla v2, se usa el wake de siempre: seguirá
+	// avisando de lo depositado en v1, que es lo único que le llegará.
+	s, err := n.openWakeStream(dialCtx, ai, labels)
 	cancelDial()
 	if err != nil {
 		return err
@@ -1035,6 +1234,25 @@ func (n *Node) wakeSession(ctx context.Context, ai peer.AddrInfo, h WakeHandler)
 			h.OnWake()
 		}
 	}
+}
+
+// openWakeStream abre la suscripción de aviso: v2 con etiquetas si se puede, v1 si no.
+func (n *Node) openWakeStream(ctx context.Context, ai peer.AddrInfo, labels []string) (network.Stream, error) {
+	if len(labels) > 0 {
+		s, err := n.h.NewStream(ctx, ai.ID, wakeProtocolV2)
+		if err == nil {
+			req, mErr := json.Marshal(map[string]any{"v": 2, "labels": labels})
+			if mErr == nil {
+				if _, wErr := fmt.Fprintf(s, "%s\n", req); wErr == nil {
+					return s, nil
+				}
+			}
+			_ = s.Reset()
+		} else if !isUnsupportedProtocol(err) {
+			return nil, err
+		}
+	}
+	return n.h.NewStream(ctx, ai.ID, wakeProtocol)
 }
 
 // AdvertiseTimeout acota una publicación de rendezvous en la DHT.

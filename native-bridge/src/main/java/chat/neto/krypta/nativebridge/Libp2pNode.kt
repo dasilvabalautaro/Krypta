@@ -132,13 +132,13 @@ class Libp2pNode @Inject constructor(
      * archivo nunca se pierde entre el fetch y su persistencia.
      */
     @Volatile
-    var mailboxProcessor: ((id: String, from: String, ts: Long, data: ByteArray) -> Boolean)? = null
+    var mailboxProcessor: ((id: String, from: String, label: String, ts: Long, data: ByteArray) -> Boolean)? = null
 
     // El callback llega en un hilo de Go durante MailboxFetch; procesar aquí (bloqueando)
     // es lo que retrasa el ack hasta que la capa de dominio persistió. Sin procesador
     // registrado no se confirma nada (el buzón lo reentrega cuando ya haya quien persista).
-    private val mailboxHandler = MailboxHandler { id, from, ts, data ->
-        mailboxProcessor?.let { runCatching { it(id, from, ts, data) }.getOrDefault(false) } ?: false
+    private val mailboxHandler = MailboxHandler { id, from, label, ts, data ->
+        mailboxProcessor?.let { runCatching { it(id, from, label, ts, data) }.getOrDefault(false) } ?: false
     }
 
     // Aviso de buzón: el nodo señala que hay correo (o el stream de wake se reconectó).
@@ -237,8 +237,14 @@ class Libp2pNode @Inject constructor(
      * Mantiene el stream ligero de wake al nodo bootstrap (con reconexión automática en
      * Go). Cada aviso —o reconexión— emite [NodeEvent.WakePing]. Idempotente.
      */
-    suspend fun startWake() = withContext(Dispatchers.IO) {
-        node?.startWake(savedBootstrap().orEmpty(), wakeHandler)
+    /**
+     * Mantiene el stream de aviso. Con [labels] se suscribe **por etiquetas** (v2), que es lo
+     * único que despierta ante un depósito ciego: el nodo ya no sabe a qué PeerID avisar. Si el
+     * conjunto de etiquetas cambia (rotan cada semana, o se añade un contacto), el puente
+     * rehace la suscripción.
+     */
+    suspend fun startWake(labels: String = "") = withContext(Dispatchers.IO) {
+        node?.startWake(savedBootstrap().orEmpty(), labels, wakeHandler)
         Unit
     }
 
@@ -261,8 +267,13 @@ class Libp2pNode @Inject constructor(
      * Deposita [data] (ciphertext) en el buzón del nodo bootstrap para entrega offline
      * a [to]. Lanza si el nodo no es alcanzable o rechaza el depósito (cuota/tamaño).
      */
-    suspend fun mailboxPut(to: String, data: ByteArray) = withContext(Dispatchers.IO) {
-        checkNotNull(node) { "nodo no iniciado" }.mailboxPut(savedBootstrap().orEmpty(), to, data)
+    /**
+     * Deposita [data] en el buzón para [to]. Con [label] no vacía se usa el **depósito ciego**
+     * (el nodo guarda bajo esa etiqueta y no llega a saber para quién es); el puente cae al
+     * camino de siempre solo contra los nodos que aún no entiendan v2.
+     */
+    suspend fun mailboxPut(to: String, data: ByteArray, label: String = "") = withContext(Dispatchers.IO) {
+        checkNotNull(node) { "nodo no iniciado" }.mailboxPut(savedBootstrap().orEmpty(), to, label, data)
     }
 
     /**
@@ -270,8 +281,13 @@ class Libp2pNode @Inject constructor(
      * [mailboxProcessor] y solo los que este confirma se ack'ean (borran) en el nodo.
      * Devuelve cuántos se confirmaron.
      */
-    suspend fun mailboxFetch(): Long = withContext(Dispatchers.IO) {
-        node?.mailboxFetch(savedBootstrap().orEmpty()) ?: 0L
+    /**
+     * Retira el buzón. [labels] (una etiqueta por línea) añade la retirada **a ciegas**; el
+     * puente consulta además el buzón v1 por el PeerID propio, porque durante la transición un
+     * contacto sin actualizar sigue depositando por ahí.
+     */
+    suspend fun mailboxFetch(labels: String = ""): Long = withContext(Dispatchers.IO) {
+        node?.mailboxFetch(savedBootstrap().orEmpty(), labels) ?: 0L
     }
 
     /** Anuncia este nodo bajo el rendezvous diario (bytes HKDF) en la DHT. */
