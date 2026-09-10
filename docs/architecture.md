@@ -2,12 +2,17 @@
 
 > Documento vivo. Refleja **lo que existe en el repo ahora**, no el diseño objetivo
 > completo (ese está en [PLAN-senalizacion-descentralizada.md](PLAN-senalizacion-descentralizada.md)).
-> Última actualización: 8 sep 2026 (el secreto compartido sale de la base de datos —DB v6, se
-> deriva al leer—; e implementación de la
+> Última actualización: 10 sep 2026 — **cifrado en reposo y ratchet**. La base va cifrada
+> entera (SQLCipher, DB v6→v9), los adjuntos también (`FileVault`), el historial se guarda
+> como sobre en claro dentro de esa base, y el **doble ratchet por épocas**
+> ([DISENO-ratchet.md](DISENO-ratchet.md)) está desplegado con el envío **encendido** — pero
+> solo con los contactos que lo anuncian, y **sin prueba en dos móviles todavía**
+> ([PRUEBAS-PENDIENTES §16](PRUEBAS-PENDIENTES.md)). Antes (8 sep): el secreto compartido sale
+> de la base y se deriva al leer; e implementación de la
 > [auditoría del 7 sep](AUDITORIA-2026-09-07.md): rendezvous de una sola pasada + ventana de
 > solape, identidad en el Android Keystore, reparto justo del buzón y límites finitos del
 > relay, topes de recepción de archivos, reconciliación de envíos fallidos; y el modelo de
-> seguridad por fin escrito en [security-model.md](security-model.md)).
+> seguridad por fin escrito en [security-model.md](security-model.md).
 
 ## Resumen
 
@@ -22,7 +27,7 @@ red (libp2p, DHT, relay, buzón, wake) está como `TODO` mapeado a las fases del
 |--------|-----------|-----------------|--------|
 | `:app` | `chat.neto.krypta` | UI Compose Material 3 con identidad teal (conversaciones · chat · ajustes), `ChatViewModel` (`@HiltViewModel`), `KryptaApplication`/`MainActivity`, `KryptaForegroundService` (nodo + wake vivos con la app cerrada, notificaciones) | UI rediseñada (jul 2026) |
 | `:core` | `chat.neto.krypta.core` | Dominio puro: interfaces SOLID + modelos. Sin Android components ni framework de DI | Definido |
-| `:data` | `chat.neto.krypta.data` | Persistencia Room (DB v4 con migraciones reales) + repos + `DataModule` (Hilt) | Funcional |
+| `:data` | `chat.neto.krypta.data` | Persistencia Room (**DB v9**, cifrada con SQLCipher, migraciones reales) + repos + `DataModule` (Hilt) | Funcional |
 | `:native-bridge` | `chat.neto.krypta.nativebridge` | Wrapper Kotlin/JNI sobre el AAR de go-libp2p + Foreground Service | **Host libp2p funcional** (spike) |
 | `:p2p-signaling` | `chat.neto.krypta.p2p` | Rendezvous (HKDF real) + orquestación de señalización | Parcial |
 
@@ -273,7 +278,49 @@ desacoplados y testeables.
 - `Libp2pKeyExchange` — implementa `KeyExchange` delegando en `Libp2pNode` (identidad + ECDH).
 - `AesGcmMessageCipher` — **E2EE real**: AES-256-GCM con clave de sesión
   `HKDF(sharedSecret, "krypta-msg-key-v1")`; nonce aleatorio de 12 B antepuesto
-  (`nonce || ct+tag`). v1 sin forward-secrecy (sin ratchet) — trabajo futuro.
+  (`nonce || ct+tag`). Es el camino v1, **sin secreto hacia adelante**, y sigue siendo el que
+  usa la app.
+- `Ratchet` / `RatchetState` — **secreto hacia adelante (fases 1-2, 9 sep 2026, aún sin
+  cablear)**: doble ratchet **por épocas**, donde una época es el *par* de públicas efímeras
+  X25519 vigentes y se avanza «en cuanto se tienen las dos», sin roles ni iniciador — lo que
+  evita la bifurcación de raíces cuando los dos extremos escriben a la vez, que es donde el
+  ratchet de Signal necesita un servidor de prekeys que aquí no existe. La época 0 se deriva del
+  secreto compartido (arranque sin ronda previa, y sin PFS a propósito); de ahí en adelante
+  `RK(e) = HKDF(X25519(…), salt = RK(e-1))`, cadena simétrica HMAC por mensaje, nonce derivado y
+  claves saltadas acotadas. `encrypt`/`decrypt` son **funciones puras** `estado → (estado', bytes)`
+  para poder confirmar el avance en la misma transacción que la persistencia del mensaje. El
+  X25519 efímero lo pone el puente Go (`BridgeCurve25519`; Android no trae `XDH` hasta la API 33)
+  y el JDK en los tests (`JdkCurve25519`). Diseño completo en
+  [DISENO-ratchet.md](DISENO-ratchet.md); cubierto por `RatchetTest` (17) y `TestRatchetKeyPairAgreement`.
+- `RatchetSessions` — el ratchet **con su almacén** (`RatchetStore` en `:core`, tablas
+  `ratchet_sessions` y `ratchet_seen`, base **v7**). Es donde vive la garantía de
+  atomicidad: `send`/`receive` reciben el guardado del mensaje **como lambda** y lo ejecutan
+  dentro de la misma transacción que el avance del ratchet (`TransactionRunner`), porque
+  descifrar consume la clave del mensaje y guardar el estado sin el mensaje haría que la
+  reentrega del buzón fuera indescifrable. Deduplica por huella del ciphertext **antes** de
+  descifrar (una reentrega legítima es indistinguible de una repetición) y un estado ilegible
+  reengancha la conversación en la época 0 en vez de romperla. Cubierto por `RatchetSessionsTest`.
+- **Transporte v1 + v2 conviviendo** — `ChatService.onReceived` acepta las dos formas:
+  `openRatchet` (v2) con **caída a `openLegacy`** (v1, clave estática). El byte de versión es
+  una pista y no una garantía: un ciphertext v1 empieza por un nonce aleatorio, así que ~1 de
+  cada 256 de más de 86 bytes se disfraza de v2 y hay que reintentarlo por el otro camino. Lo
+  que no se puede abrir por ninguna vía se descarta con una línea de diagnóstico (antes se
+  persistía como "texto legado" y salía una burbuja de basura).
+- **Anuncio de capacidad por contacto** — sobre `V` con la versión de protocolo que habla el
+  cliente; los clientes anteriores lo ignoran limpiamente (`Decoded.Unsupported`). Se guarda en
+  `contacts.peerProtocol` (lo que él anunció) y `contacts.announcedProtocol` (lo que le
+  anunciamos), y el paso `capacidades` del ciclo WAN lo manda **una vez por contacto y
+  versión**, marcándolo solo si el envío salió. Es lo que permite encender el ratchet contacto a
+  contacto sin esperar a que actualice todo el mundo.
+- **Envío con ratchet: encendido el 10 sep 2026** (`ChatService.RATCHET_SEND = true`). A quién
+  se le escribe así lo decide `usesRatchet(contact)` = lo que ese contacto haya anunciado, así
+  que **no cambia nada hasta que el otro extremo actualiza**. Todos los caminos de salida pasan
+  por `seal` (solo bytes: trozos, meta, señales de llamada, acuses, el propio anuncio) y
+  `sealAndPersist` (bytes + `Message` en una transacción), de modo que la decisión es una sola.
+  El estado avanzado **se guarda antes de que los bytes salgan**: al revés, un envío fallido
+  dejaría el siguiente mensaje cifrando desde el mismo estado — misma clave y mismo nonce de
+  AES-GCM. Sigue **sin prueba en dos móviles** ([PRUEBAS-PENDIENTES §16](PRUEBAS-PENDIENTES.md));
+  ese interruptor es la vuelta atrás.
 - `SafetyNumber` — **número de seguridad anti-MITM** (estilo Signal): 60 dígitos decimales
   de `SHA-256(dominio ‖ peerId_menor ‖ peerId_mayor)`, **simétrico** (ambos ven el mismo) y
   determinista. Como el PeerID *es* la clave pública, el intercambio no tiene MITM en la
@@ -333,12 +380,22 @@ desacoplados y testeables.
   `krypta_files/staging/<fileId>/` (tmp+rename atómico), así que una transferencia a medias
   **sobrevive a la muerte del proceso** y las reentregas son idempotentes; al completar se
   concatena desde disco y se borra el staging (`DiskFileStoreTest`).
+  **v3 (9 sep 2026): cifrado en reposo** — todo lo que escribe el almacén (trozos y meta del
+  staging, archivo ensamblado y la copia propia del emisor en `sent/`) va cifrado con
+  `FileVault` (AES-256-GCM, clave de 32 B envuelta por el Keystore, marca `KFV1`). La UI ya no
+  lee ficheros: pide los bytes por `FileStore.read(path)` —que descifra y **tolera los adjuntos
+  anteriores, sin marca**— a través de `LocalAttachmentReader`. Consecuencias en la UI: la nota
+  de voz se reproduce con un `MediaDataSource` sobre los bytes en memoria (`MediaPlayer` no
+  abre un fichero cifrado), el GIF se decodifica desde un `ByteBuffer`, y **abrir un adjunto con
+  otra app** deja una copia en claro en `cacheDir/krypta_abrir/` (lo único que expone hoy el
+  FileProvider), que se limpia al arrancar el proceso.
 - `ChatService` — **orquestador de dominio** (cierra el lazo): `send(contact, plaintext)`
   cifra un **sobre** (`MessageEnvelope`, que lleva el id del mensaje) → persiste `Message`
   (PENDING→SENT) → `signaling.send`; si el envío directo falla (peer offline / NAT sin ruta),
   **cae al buzón** (`signaling.sendOffline` → `SENT`, log "→ buzón"); solo si el buzón también
-  falla queda `FAILED` (nunca crashea). `retry(contact, msgId)` reintenta un FALLIDO reusando
-  su ciphertext (mismo id, sin duplicar). **Borrado local (17 jul 2026)**:
+  falla queda `FAILED` (nunca crashea). `retry(contact, msgId)` reintenta un FALLIDO con el
+  **mismo id** (por ahí deduplica el receptor): desde la v8 vuelve a cifrar el sobre guardado,
+  y una fila anterior —que aún guarda su ciphertext— se reenvía tal cual. **Borrado local (17 jul 2026)**:
   `clearConversation(contact)` vacía el chat **solo en este dispositivo** — borra los
   mensajes de Room y, para cada burbuja de archivo, pide `FileStore.deleteLocal(fileId,
   localPath)` (staging pendiente + ensamblado + copia propia, p. ej. la nota de voz en
@@ -395,7 +452,9 @@ desacoplados y testeables.
   sobres en ráfagas de trozos**; el resto de eventos del nodo va ahora por un Channel sin
   límite (`Libp2pNode`). **Notas de voz (v1)**: mismo camino troceado sin
   cambio de protocolo — `AudioRecorder` (`:app`, MediaRecorder AAC mono 48 kbps en MP4) graba en
-  `filesDir/krypta_files/sent/`; `sendVoiceNote` llama a `sendFile(..., localPath=…)` (param
+  `cacheDir/krypta_rec/` (desde el 9 sep 2026: MediaRecorder solo sabe escribir en claro, así
+  que la grabación pasa al almacén ya cifrada y el temporal se borra);
+  `sendVoiceNote` llama a `sendFile(..., localPath=…)` (param
   nuevo: el emisor conserva su copia y su burbuja también reproduce); un `File` con mime
   `audio/*` y copia local se pinta como burbuja con play/pausa+progreso (`AudioNote`,
   MediaPlayer por burbuja); el micro sustituye a "Enviar" con el borrador vacío (permiso
@@ -554,13 +613,23 @@ desacoplados y testeables.
   `ChatService` (:p2p-signaling), que este módulo no ve por el grafo de dependencias.
 
 ### `:data`
-- Room: `MessageEntity` + `ContactEntity` (BLOB para `ciphertext`/claves), `MessageDao` /
-  `ContactDao` (Flow + suspend), `KryptaDatabase` (**v5**, `exportSchema=true` →
-  `data/schemas/`), `Converters` (enum `MessageStatus` ↔ String).
+- Room: `MessageEntity` + `ContactEntity` + `RatchetSessionEntity` / `RatchetSeenEntity`,
+  `MessageDao` / `ContactDao` / `RatchetDao` (Flow + suspend), `KryptaDatabase` (**v9**,
+  `exportSchema=true` → `data/schemas/`), `Converters` (enum `MessageStatus` ↔ String).
+  Desde la **v8** `messages.payload` guarda el **sobre en claro** (con `encrypted` marcando las
+  filas anteriores, que aún son ciphertext de la clave estática y se convierten en segundo
+  plano): lo exige el secreto hacia adelante, porque una clave de un solo uso no puede volver a
+  abrir lo guardado. Lo que protege el historial es el cifrado de la base entera.
 - **Migraciones reales** (`Migrations.kt`): preservan contactos + mensajes al subir de
   versión (antes `fallbackToDestructiveMigration` los borraba). `MIGRATION_2_3` (columna
   `verified`), `MIGRATION_3_4` (índice compuesto `messages(conversationId, timestamp)` que
-  cubre el WHERE+ORDER BY de `observeConversation`), `MIGRATION_4_5` (columna `blocked`). `DatabaseModule` usa `addMigrations(...)`
+  cubre el WHERE+ORDER BY de `observeConversation`), `MIGRATION_4_5` (columna `blocked`), `MIGRATION_5_6` (**quita** `sharedSecret`, con
+  `secure_delete` para que las páginas viejas no queden legibles dentro del fichero),
+  `MIGRATION_6_7` (tablas del ratchet), `MIGRATION_7_8` (`messages.ciphertext` → `payload` +
+  bandera `encrypted`, renombrando en vez de copiar la tabla: el historial no tiene copia de
+  seguridad y no puede existir a medias) y `MIGRATION_8_9` (versiones de protocolo por
+  contacto). Las cinco últimas están **probadas en dispositivo** (`MigrationTest`, 5 casos).
+  `DatabaseModule` usa `addMigrations(...)`
   + `fallbackToDestructiveMigrationFrom(1)` (red de seguridad solo para la v1 antigua). **A
   partir de aquí: cada cambio de esquema = nueva `Migration` + subir la versión.** Verificado
   en dispositivo: un contacto (con su flag `verified`) sobrevive al salto v3→v4, y los dos

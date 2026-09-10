@@ -9,7 +9,10 @@
 > `~/Desktop/krypta-arm64-debug.apk` (`./gradlew :app:assembleDebug -PslimAbi` + copia) y lo
 > comparte el autor. **Ambos móviles deben tener la misma versión** para cada prueba.
 >
-> Última actualización: **2 sep 2026** — auditoría previa a preparar la versión de producción.
+> Última actualización: **10 sep 2026** — se añadió **§16: el ratchet ya está encendido y su
+> prueba con dos móviles se debe** (es la más importante de esta lista ahora mismo, porque un
+> mensaje enviado con ratchet que el otro extremo no pueda abrir se pierde). Antes, el 2 sep:
+> auditoría previa a preparar la versión de producción.
 > ⛔ **Hallazgo bloqueante: la entrega en segundo plano NO funciona hoy en el móvil del autor.**
 > Ver **§13**. Con la app cerrada (pero viva, en primer plano el servicio, con WiFi validado,
 > exención de batería y pantalla encendida) el móvil **no mantiene ninguna conexión con los
@@ -643,6 +646,72 @@ Usar un contacto desechable, no uno real.
 7. - [ ] **El bloqueo sobrevive al respaldo.** En A: bloquear a B, exportar un `.krbk`,
      importarlo en un móvil de repuesto (o tras reinstalar) y comprobar que B sigue
      **bloqueado**, no desbloqueado.
+
+---
+
+## 16. El ratchet, ya encendido — **PRUEBA PENDIENTE (ahora va detrás del encendido)**
+
+El secreto hacia adelante está implementado entero (`docs/DISENO-ratchet.md`, fases 1–6) y
+cubierto por tests JVM: el ratchet en sí (`RatchetTest`, 17), su persistencia y atomicidad
+(`RatchetSessionsTest`, 5) y el cableado en `ChatService` —recepción v1+v2, anuncio de
+capacidad, ida y vuelta completa entre dos clientes y un archivo troceado por ratchet—. Lo que
+falta no es código: es **la prueba con dos móviles antes de encender el envío**, que es la
+condición que puso el propio diseño (§10) y que sigue en pie.
+
+**Estado del interruptor:** `ChatService.RATCHET_SEND = **true**` desde el 10 sep 2026. Se
+encendió **antes** de esta prueba, por decisión del autor (la colaboradora no responde y eso
+tenía el trabajo parado). Lo que hay que entender: a quién se le escribe con ratchet lo decide
+cada contacto (`peerProtocol`, anunciado con el sobre `V`), así que **hasta que el segundo móvil
+no tenga este build no cambia nada**. En cuanto lo tenga, la pareja pasa a ratchet **sin haber
+pasado esta prueba**: por eso conviene hacerla con un contacto desechable **antes** de fiarle una
+conversación real, y por eso el interruptor sigue siendo `var` (ponerlo a `false` y republicar
+devuelve todo a v1).
+
+**Antes de empezar:** los dos móviles con el **mismo** build (ya trae el envío encendido); y
+**exportar un `.krbk` en los dos** (el historial no tiene copia de seguridad de ninguna clase).
+Usar contactos desechables si se puede.
+
+1. - [ ] **Se anuncian y se reconocen.** Con los dos actualizados, esperar un ciclo de WAN y
+     mirar el Diagnóstico: debe salir `↔ protocolo v2 anunciado a N contacto(s)` en cada uno, y
+     **una sola vez** — si reaparece en cada arranque, la marca no está persistiendo. En el otro
+     móvil debe aparecer `↔ …<peer> habla protocolo v2`.
+2. - [ ] **Conversación normal.** Texto en los dos sentidos, foto, nota de voz y respuesta con
+     cita. Todo debe llegar y leerse igual que antes. (Con el interruptor apagado esto ya
+     funciona; aquí lo que se prueba es que sigue funcionando **con ratchet**.)
+3. - [ ] **Reentrega del buzón.** Cerrar la app de B, enviarle 3–4 mensajes desde A, abrirla:
+     tienen que llegar **todos y una sola vez**. Después, en dos ciclos seguidos de WAN, el
+     Diagnóstico de B no debe volver a recoger los mismos sobres (si reaparecen es que no se
+     están ack'eando).
+4. - [ ] **Archivo grande cruzando un cambio de época.** A envía un archivo de ~2–4 MB (o un
+     GIF) y B **responde con un mensaje mientras se está enviando**. El archivo debe llegar
+     completo y abrirse. Es el caso que más partes toca a la vez: ráfaga de trozos, época
+     girando a mitad y reensamblado en disco.
+5. - [ ] **Pérdida de estado en un extremo.** En B: exportar `.krbk`, desinstalar, reinstalar e
+     importar. Con el estado del ratchet perdido, B escribe a A: el mensaje **tiene que llegar**
+     (arranca un linaje nuevo en la época 0, que A adopta por ser mayor). Y a la inversa: A
+     escribe a B y B lo lee. Esto es lo que hace que una sesión rota nunca sea permanente, y
+     es la propiedad que más conviene ver con los ojos.
+6. - [ ] **Los mensajes de antes se siguen leyendo.** Subir de una versión anterior (no
+     reinstalar): el historial previo debe seguir legible y el Diagnóstico debe registrar
+     `🗄 historial convertido: N mensaje(s)` una sola vez.
+7. - [ ] **Llamada.** Una llamada de voz y una de vídeo entre los dos, para confirmar que la
+     señalización (que viaja por el mismo camino) no se rompe. La clave por llamada **todavía
+     no** va dentro del ratchet: eso es la fase 7.
+8. - [ ] **Un contacto sin actualizar sigue funcionando.** Con un tercer móvil (o dejando uno
+     sin actualizar), comprobar que la conversación con él sigue en v1 y que no se rompe nada:
+     es el caso normal durante semanas.
+
+9. - [ ] **Adjuntos cifrados en reposo** (fase 8, se puede probar ya, con el ratchet apagado):
+     enviar una nota de voz y un GIF, y comprobar en el móvil emisor que
+     `run-as chat.neto.krypta head -c 4 files/krypta_files/sent/<fichero>` dice `KFV1` y no
+     `GIF8`/`ftyp`. Después: que la nota de voz **se reproduce** en su burbuja, que el GIF
+     **se anima**, y que un archivo recibido se abre con otra app (deja una copia en claro en
+     la caché a propósito). Los adjuntos que ya estaban en el móvil siguen en claro y tienen
+     que seguir funcionando: eso ya está verificado en el TECNO con un GIF anterior.
+
+Si algo falla, el interruptor vuelve a `false` y la conversación sigue en v1 sin perder nada
+—salvo lo que se hubiera enviado con ratchet y no se hubiera podido abrir—, que es justo por
+lo que esta prueba va antes del encendido.
 
 ---
 

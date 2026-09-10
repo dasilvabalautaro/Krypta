@@ -321,6 +321,21 @@ por un stream libp2p.
 > - **`docs/security-model.md`**: creado. Era el entregable más antiguo pendiente del plan.
 > - Falta: rate-limit **temporal** (hoy solo de ocupación), ACL, y monitorización de nodos.
 
+> ✅ **(9-10 sep 2026) Cerrado el hueco criptográfico que quedaba.** Tres trabajos seguidos, con
+> su propio documento cada uno:
+> - **Depósito ciego en el buzón** ([DISENO-buzon-ciego.md](DISENO-buzon-ciego.md)): el cliente
+>   ya recibe por etiqueta y los tres nodos lo sirven; el **envío** sigue tras interruptor
+>   (`BLIND_DEPOSIT`) esperando a que la versión que sabe recibir esté repartida.
+> - **Cifrado en reposo**: base entera con SQLCipher y adjuntos con `FileVault` — con esto se
+>   cierra el A-4 de la auditoría.
+> - **Secreto hacia adelante** ([DISENO-ratchet.md](DISENO-ratchet.md)): doble ratchet **por
+>   épocas** (variante propia: sin servidor de prekeys no hay forma de fijar quién inicia sin
+>   que las raíces se bifurquen si los dos escriben a la vez), historial guardado en claro
+>   dentro de la base cifrada porque una clave de un solo uso no puede reabrir lo guardado,
+>   anuncio de capacidad por contacto, clave de llamada negociada. **Envío encendido el 10 sep**,
+>   pero por pareja y **sin prueba en dos móviles** (`PRUEBAS-PENDIENTES` §16), que es lo que
+>   falta para poder contarlo como garantía de cara al usuario.
+
 ### Fase 7 — Llamadas de voz/vídeo (diseño 4 jul 2026, pendiente de decisión)
 
 **Contexto que condiciona el diseño**: el nodo infra está detrás de Cloudflare Tunnel

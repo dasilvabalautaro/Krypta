@@ -130,7 +130,7 @@
   <header>
     <span class="badge">🔒 Krypta</span>
     <h1>Política de Privacidad</h1>
-    <p class="subtitle">Última actualización: 8 de septiembre de 2026</p>
+    <p class="subtitle">Última actualización: 10 de septiembre de 2026</p>
   </header>
 
   <nav class="toc">
@@ -189,9 +189,14 @@
   <h2 id="dispositivo">4. Datos que se guardan en tu dispositivo</h2>
   <p>Toda tu información — contactos, historial de mensajes, notas de voz, archivos
   recibidos y el estado de verificación de identidad de cada contacto — se guarda
-  localmente en tu teléfono (base de datos local de la app) y nunca se envía a ningún
-  servidor. Si desinstalas la app o borras sus datos, esa información se pierde salvo que
-  hayas hecho una copia de seguridad manual.</p>
+  localmente en tu teléfono y nunca se envía a ningún servidor. Esa información está
+  <strong>cifrada en el propio dispositivo</strong>: la base de datos con las conversaciones y
+  los archivos recibidos se guardan con claves que viven en el almacén seguro de Android (ver
+  <a href="#seguridad">sección 9</a>).</p>
+  <p><strong>Si desinstalas la app o borras sus datos, el historial se pierde.</strong> Conviene
+  saber qué cubre exactamente la copia de seguridad: el archivo <code>.krbk</code> guarda tu
+  identidad y tu lista de contactos, <em>no</em> los mensajes ni los archivos recibidos. No
+  existe ninguna copia de tus conversaciones en ningún servidor que se pueda restaurar.</p>
   <p>También puedes borrar esos datos de forma selectiva sin desinstalar la app:
   <strong>vaciar una conversación</strong> (borra sus mensajes y los archivos/fotos/notas de
   voz asociados, conservando el contacto) o <strong>eliminar un contacto</strong> (además
@@ -200,7 +205,8 @@
   <table>
     <tr><th>Dato</th><th>Dónde se guarda</th><th>Quién lo ve</th></tr>
     <tr><td>Nombre y PeerID de tus contactos</td><td>Solo tu dispositivo</td><td>Solo tú</td></tr>
-    <tr><td>Historial de conversaciones</td><td>Solo tu dispositivo</td><td>Solo tú y tu contacto (extremo a extremo)</td></tr>
+    <tr><td>Historial de conversaciones</td><td>Solo tu dispositivo (base de datos cifrada)</td><td>Solo tú y tu contacto (extremo a extremo)</td></tr>
+    <tr><td>Fotos, notas de voz y archivos recibidos</td><td>Solo tu dispositivo (cifrados)</td><td>Solo tú y tu contacto</td></tr>
     <tr><td>Estado de verificación (número de seguridad / QR)</td><td>Solo tu dispositivo</td><td>Solo tú</td></tr>
   </table>
 
@@ -265,6 +271,9 @@
   nube personal, etc.) — Krypta no lo envía a ningún servidor. Sin tu contraseña, el
   archivo es ilegible. Las claves compartidas con cada contacto no se incluyen en la copia:
   se vuelven a derivar automáticamente al restaurar.</p>
+  <p><strong>Lo que la copia no incluye:</strong> los mensajes, las fotos, las notas de voz ni
+  los archivos recibidos. Restaurarla en un teléfono nuevo te devuelve tu identidad y tus
+  contactos —para que nadie tenga que volver a añadirte— pero no tus conversaciones.</p>
 
   <h2 id="terceros">8. Terceros, anuncios y analítica</h2>
   <p>Krypta no incluye bibliotecas de analítica, rastreo publicitario ni reporte de
@@ -280,12 +289,24 @@
   tu contacto por otro canal para confirmar que hablas con quien crees.</p>
   <p>Tu clave de identidad se guarda <strong>protegida por el almacén de claves del propio
   sistema Android</strong>, en el chip seguro del teléfono cuando lo hay: copiar los ficheros
-  de la app desde fuera no basta para abrirla.</p>
-  <p><strong>Un límite que conviene conocer:</strong> Krypta usa hoy una clave fija por cada
-  contacto, no un sistema de claves que cambian con cada mensaje. Eso significa que quien
-  llegara a obtener tu clave de identidad —teniendo acceso al interior de tu teléfono— podría
-  descifrar las conversaciones que tengas guardadas. Por eso importa mantener el teléfono
-  bloqueado, activar el bloqueo de la app y custodiar tu copia de seguridad.</p>
+  de la app desde fuera no basta para abrirla. Lo mismo vale para lo que Krypta guarda en tu
+  teléfono: la <strong>base de datos de las conversaciones</strong> y los
+  <strong>archivos que recibes</strong> (fotos, notas de voz, documentos) están cifrados con
+  claves que viven en ese mismo almacén seguro. Dos matices honestos: los archivos que ya
+  tenías en el teléfono antes de esta versión siguen guardados tal cual, y si eliges
+  <em>abrir</em> un archivo con otra aplicación, esa aplicación recibe una copia sin cifrar
+  que ya no controla Krypta.</p>
+  <p>Cada llamada usa además una <strong>clave propia, generada al azar para esa llamada</strong>
+  y acordada entre los dos teléfonos, en vez de derivarse de tu identidad.</p>
+  <p><strong>Claves que cambian con cada mensaje, y hasta dónde llegan hoy.</strong> Krypta
+  está incorporando un sistema en el que la clave de cifrado <strong>cambia con cada
+  mensaje</strong> en lugar de ser fija para cada contacto. Se activa por sí solo, y solo, con
+  los contactos cuya app también lo admite; con el resto —y con todo lo que ya se envió antes—
+  la clave sigue siendo fija. <strong>Mientras sea fija, quien llegara a obtener tu clave de
+  identidad podría descifrar esas conversaciones.</strong> Es una función reciente y todavía en
+  verificación, así que preferimos describirla que prometerla. En cualquier caso importa
+  mantener el teléfono bloqueado, activar el bloqueo de la app y custodiar tu copia de
+  seguridad.</p>
   <p>Krypta <strong>bloquea la captura y la grabación de pantalla mientras tienes un chat
   abierto</strong>, algo que la mayoría de las apps de mensajería no hace. El bloqueo es del
   sistema operativo, no un truco de la app: el gesto de captura del teléfono se niega a

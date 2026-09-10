@@ -69,6 +69,13 @@ tiene que ser creciente).
       explícitas en los dos XML. Antes la identidad Ed25519 y la base de mensajes subían al
       Drive del usuario. Verificado: `dumpsys package` ya no lista `ALLOW_BACKUP`.
 - [x] **Política de privacidad redactada**: [politica-privacidad.html](politica-privacidad.html).
+      Revisada el 10 sep 2026 contra lo que hace el código (cifrado en reposo de base y
+      adjuntos, clave por llamada, estado real del ratchet).
+- [x] **Cifrado en reposo completo** (8-9 sep 2026): identidad envuelta por el Keystore, base
+      entera con SQLCipher y adjuntos de `krypta_files/` cifrados. Era el hallazgo A-4 de la
+      auditoría. Ojo al declarar la **sección de seguridad de datos** de la ficha: los adjuntos
+      que ya estuvieran en el móvil antes de esa versión siguen en claro, y abrir uno con otra
+      app le entrega una copia sin cifrar.
 - [x] **FGS `specialUse`, lado app** (31 jul): el manifiesto declara
       `foregroundServiceType="specialUse|microphone"` con su
       `<property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE">` — verificado en
@@ -312,3 +319,8 @@ Ver [PRUEBAS-PENDIENTES.md](PRUEBAS-PENDIENTES.md):
       contra el propio PeerID).
 - [ ] §3 Reinicio del móvil, cambio de red y persistencia > 6 h.
 - [ ] Failover multinodo (apagar el nodo del Mac y comprobar entrega por `krypta2`).
+- [ ] **§16 El ratchet, ya encendido** (10 sep 2026). El envío con secreto hacia adelante está
+      **activo** pero nunca se ha probado entre dos móviles: pérdida de estado, reentrega del
+      buzón y un archivo grande cruzando un cambio de época. Solo afecta a parejas donde ambos
+      tengan este build, y `RATCHET_SEND = false` lo revierte — pero **esta es la prueba que no
+      publicaría sin cerrar**, porque un mensaje que el otro extremo no pueda abrir se pierde.

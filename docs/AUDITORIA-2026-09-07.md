@@ -265,6 +265,9 @@ barrido de directorios de staging con `mtime` anterior a N horas (el mismo patr�
 
 ### A-4 (Medio-Alto) — Identidad y base de datos sin cifrar en reposo
 
+> **Resuelto el 8-9 sep 2026**: identidad envuelta por el Keystore, base entera con SQLCipher y
+> adjuntos cifrados (`FileVault`). Lo que sigue es el diagnóstico original.
+
 **Dónde:** [native-bridge/…/Libp2pNode.kt:40-45](../native-bridge/src/main/java/chat/neto/krypta/nativebridge/Libp2pNode.kt#L40)
 (`// TODO: cifrar en reposo`), `DataModule.provideDatabase` (Room sin SQLCipher),
 `krypta_files/` (adjuntos en claro).
@@ -289,6 +292,11 @@ de privacidad promete al usuario ("tu identidad se guarda únicamente en tu disp
 lo que un atacante con acceso físico o root puede hacer.
 
 ### A-5 (Medio) — Sin secreto hacia adelante (PFS)
+
+> **Resuelto en código el 9-10 sep 2026** (ver [DISENO-ratchet.md](DISENO-ratchet.md)): doble
+> ratchet por épocas, envío encendido, clave de llamada negociada y adjuntos cifrados en reposo.
+> Queda deber la prueba con dos móviles reales antes de contarlo como garantía en la
+> documentación de cara al usuario. Lo que sigue es el diagnóstico original.
 
 **Dónde:** [AesGcmMessageCipher.kt](../p2p-signaling/src/main/java/chat/neto/krypta/p2p/AesGcmMessageCipher.kt),
 que lo admite en su propio KDoc.
@@ -537,12 +545,12 @@ El plan de acción se ejecutó al día siguiente de escribir el informe. Estado 
 | A-10 | `node.key` fuera de `.gitignore` | ✅ Hecho | `.gitignore` (`/infra/node/*.key`, `/infra/node/mailbox/`) |
 | A-6 | Sin `security-model.md` ni análisis de metadatos | ✅ Hecho | [security-model.md](security-model.md), 10 secciones; el análisis de metadatos es su §6 |
 | A-11 | Nodo sin capa anti-abuso | ✅ Hecho (falta desplegar) | `mailbox.go` (reparto justo + desalojo), `wake.go` (tope de suscripciones), `main.go` (límites finitos del relay) |
-| A-4 | Identidad y BD sin cifrar en reposo | 🟡 Identidad hecha; Room no | `IdentityStore` + `KeystoreKeyWrapper` + 6 tests JVM. Room con SQLCipher sigue pendiente |
+| A-4 | Identidad y BD sin cifrar en reposo | ✅ Hecho (9 sep 2026) | `IdentityStore` + `KeystoreKeyWrapper`; **base con SQLCipher** (`DatabaseKey`/`DatabaseEncryption`, conversión verificada sobre la base real del TECNO) y **adjuntos cifrados** (`FileVault`). Los adjuntos anteriores no se convierten |
 | A-7 | Sin reconciliación de envíos fallidos | ✅ Hecho | `ChatService.retryFailed`, paso `reintentos` del ciclo WAN + `MessageRepository.findByStatus` |
-| §7 | Migraciones de Room sin test | 🟡 Escrito, sin ejecutar | `data/src/androidTest/.../MigrationTest.kt` (compila y empaqueta los esquemas; falta correrlo en un dispositivo) |
+| §7 | Migraciones de Room sin test | ✅ Hecho (9-10 sep 2026) | `MigrationTest` **ejecutado en el TECNO**: 5 casos (4→5, 5→6, 6→7, 7→8, 8→9), todos verdes |
 | A-9 | El id del emisor puede pisar otra conversación | ✅ Hecho | Guardas en `onReceived`, `persistFile` y `markOutgoingRead` + 2 tests |
 | A-12 | Deuda menor y código muerto | ✅ Hecho | `dial()` eliminado, KDoc de `Libp2pNode` al día, `ackedReceipts` acotado (LRU), `findPeers` sin duplicados |
-| A-5 | Sin secreto hacia adelante (PFS) | 🟡 Documentado, no resuelto | Dicho con todas las letras en la política de privacidad §9, en la ayuda in-app y en `security-model.md` §4. El ratchet sigue siendo trabajo futuro |
+| A-5 | Sin secreto hacia adelante (PFS) | 🟡 Implementado y encendido; **sin probar en vivo** | Doble ratchet por épocas ([DISENO-ratchet.md](DISENO-ratchet.md), fases 1-9), envío encendido el 10 sep 2026 — pero solo con contactos que lo anuncien, y la prueba con dos móviles (`PRUEBAS-PENDIENTES` §16) **se debe**. La clave de llamada ya se negocia para todos |
 | A-14 | `ChatService` clase-Dios | ⬜ No hecho | Refactor de arquitectura, sin urgencia (tramo 3 del plan) |
 | A-13 | `:app` depende de clases concretas | ⬜ No hecho | Ídem |
 | Fase 0 | Gate de NAT con dos SIMs | ⬜ No hecho | Necesita dos teléfonos con operadoras distintas |
@@ -550,6 +558,9 @@ El plan de acción se ejecutó al día siguiente de escribir el informe. Estado 
 **Cobertura de tests**: 116 → **136** tests JVM (todos verdes), más 4 tests Go nuevos. `:data`
 y `:native-bridge`, que no tenían ninguno, ya tienen: `MigrationTest` (instrumentado) y
 `IdentityStoreTest` (6 casos) respectivamente.
+
+> **Al 10 sep 2026**: **209** tests JVM tras el trabajo de cifrado en reposo y ratchet, más los
+> instrumentados de `:data` corriendo de verdad en el dispositivo.
 
 **Pendiente operativo, no de código**: los tres nodos de infraestructura **siguen corriendo el
 binario anterior**. Todo el anti-abuso (A-11) y la lectura acotada del 6 sep solo entran en

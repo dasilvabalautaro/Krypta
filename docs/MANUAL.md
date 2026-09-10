@@ -1,6 +1,7 @@
 # Manual técnico y de usuario de Krypta
 
-> Estado del documento: refleja el estado del proyecto a **17 de julio de 2026** (ver
+> Estado del documento: refleja el estado del proyecto a **17 de julio de 2026**, con los
+> apartados de cifrado puestos al día el **10 de septiembre de 2026** (ver
 > [architecture.md](architecture.md) y [../CLAUDE.md](../CLAUDE.md) para el detalle más
 > reciente). Krypta está en fase de skeleton/beta funcional: no ha sido publicado en Google
 > Play todavía. Las secciones marcadas **[pendiente]** son trabajo o verificación que aún
@@ -45,7 +46,13 @@ Piezas que lo hacen posible:
   una notificación en segundos aunque la app esté cerrada.
 - **Todo el contenido va cifrado con el secreto del par** (X25519 ECDH derivado de las
   identidades Ed25519 + HKDF + AES-256-GCM): texto, fotos, archivos, notas de voz y las
-  llamadas de voz/vídeo.
+  llamadas de voz/vídeo. Desde el 10 sep 2026, con los contactos que tengan una versión
+  reciente, esa clave además **cambia con cada mensaje** (ratchet); con el resto sigue siendo
+  fija por contacto. Cada llamada usa su propia clave, sorteada para ella.
+- **Lo que se guarda en el teléfono también va cifrado** (9 sep 2026): la base de datos de las
+  conversaciones (SQLCipher) y los adjuntos de `krypta_files/`, con claves envueltas por el
+  almacén seguro de Android. Dos matices: los adjuntos que ya estuvieran en el móvil antes de
+  esa versión siguen en claro, y abrir uno con otra aplicación le entrega una copia sin cifrar.
 
 El diseño completo y el roadmap por fases están en
 [PLAN-senalizacion-descentralizada.md](PLAN-senalizacion-descentralizada.md); el estado de

@@ -1,8 +1,10 @@
 # Modelo de seguridad de Krypta
 
-**Última actualización:** 8 de septiembre de 2026 (§7: el secreto compartido **ya no se
-guarda** — se deriva de la identidad al leer, así que el fichero de la base de datos por sí
-solo ya no abre el historial; ese mismo día se había corregido aquí la afirmación contraria).
+**Última actualización:** 10 de septiembre de 2026 — **cifrado en reposo y ratchet**. Desde la
+última revisión: la base de datos va cifrada entera (SQLCipher, 9 sep), los adjuntos también
+(9 sep), la clave de cada llamada se negocia en vez de derivarse de la identidad (9 sep), y el
+**doble ratchet está desplegado con el envío encendido** (10 sep) — pero **por pareja** y **sin
+prueba en dos móviles reales todavía**, así que §4 lo cuenta como mecanismo, no como garantía.
 **Estado:** entregable pendiente de la Fase 6 del
 [plan](PLAN-senalizacion-descentralizada.md), abierto desde el inicio del proyecto y escrito
 a raíz de la [auditoría del 7 de septiembre de 2026](AUDITORIA-2026-09-07.md) (hallazgo A-6).
@@ -73,16 +75,26 @@ vuelvan a añadir. Por eso el §7 (identidad en reposo) es la parte más crític
 - **AES-256-GCM**, nonce aleatorio de 96 bits antepuesto, tag de 128 bits. Un mensaje
   manipulado **falla la autenticación y se descarta**; no se pinta nada a medias.
 - Clave = `HKDF-SHA256(secreto_compartido, info="krypta-msg-key-v1")`.
-- Las **llamadas** usan una clave por llamada, `HKDF(secreto, callId)`, y cada frame de audio y
-  de vídeo va cifrado con ella. El relay solo mueve bytes opacos.
+- Las **llamadas** usan una clave por llamada y cada frame de audio y de vídeo va cifrado con
+  ella; el relay solo mueve bytes opacos. Desde el 9 sep 2026 esa clave **se negocia**: cada lado
+  sortea 32 bytes al azar y los manda dentro del sobre de señalización (invite/accept), y la
+  clave sale de las dos mitades. Antes se derivaba del secreto estático, así que quien robara la
+  identidad podía abrir cualquier llamada que hubiera grabado; ahora necesita además el sobre de
+  señalización de esa llamada concreta. Con un contacto que aún no lo entiende se sigue por el
+  camino antiguo.
 
 ### Lo que NO se garantiza (importante)
 
-- **No hay secreto hacia adelante (PFS).** La clave de un contacto es estática mientras dure
-  la identidad: no hay ratchet ni claves efímeras. Quien obtenga tu identidad **puede descifrar
-  todo lo que tengas guardado** y todo lo que hubiera capturado antes. Signal y WhatsApp sí
-  tienen ratchet; Krypta, hoy, no. Es una decisión consciente de alcance (v1), no un descuido,
-  y está anotada en el código (`AesGcmMessageCipher`).
+- **El secreto hacia adelante (PFS) existe, pero solo por pareja y sin probar en vivo.** Krypta
+  tiene un **doble ratchet por épocas** (ver [DISENO-ratchet.md](DISENO-ratchet.md)) y el envío
+  se encendió el 10 sep 2026. Ahora bien:
+  - **se usa solo con los contactos cuya app también lo anuncia**; con el resto la clave sigue
+    siendo estática mientras dure la identidad, y para ellos sigue siendo cierto que **quien
+    obtenga tu identidad puede descifrar todo lo que tengas guardado**;
+  - **no se ha verificado todavía entre dos móviles reales** (`PRUEBAS-PENDIENTES` §16), así que
+    este documento no lo cuenta aún como una garantía, solo como un mecanismo desplegado;
+  - **no es retroactivo**: los mensajes anteriores no ganan PFS, y el historial guardado se
+    protege con el cifrado de la base (§7), no con el ratchet.
 - **No hay negación (deniability) ni protección de metadatos por diseño.** Ver §5 y §6.
 - **No se oculta el tamaño.** Un mensaje corto y una foto se distinguen por el número de bytes
   que pasan por el relay, y un archivo troceado se ve como una ráfaga de depósitos de 48 KiB.
@@ -171,8 +183,10 @@ orientada a usuarios y no a operadores.
 | Dato | Dónde | Protección |
 |---|---|---|
 | Identidad Ed25519 | `krypta_identity` (prefs) | **Envuelta con una clave AES del Android Keystore** (TEE, no exportable). Desde el 8 sep 2026; antes estaba en claro. La migración es automática y solo borra la copia en claro tras verificar que la envuelta se recupera igual (`IdentityStore`) |
-| Mensajes (ciphertext) y contactos | `krypta.db` (Room) | Almacenamiento privado de la app. **Sin cifrar** (no hay SQLCipher) |
-| Adjuntos, notas de voz, GIF | `filesDir/krypta_files/` | Almacenamiento privado. **Sin cifrar** |
+| Mensajes y contactos | `krypta.db` (Room) | **Cifrada entera con SQLCipher** desde el 9 sep 2026; la frase-clave (32 bytes al azar) vive envuelta por el Keystore. La conversión de la base en claro anterior se hizo una sola vez, verificando tabla a tabla antes de sustituir el fichero |
+| Contenido de los mensajes | dentro de `krypta.db` | Desde la v8 (9 sep 2026) se guarda el **sobre en claro**, no el ciphertext de la red: con ratchet la clave de un mensaje se borra al usarla y lo guardado dejaría de poder abrirse. Lo que protege el historial es el cifrado de la base |
+| Adjuntos, notas de voz, GIF | `filesDir/krypta_files/` | **Cifrados** (AES-256-GCM, clave envuelta por el Keystore) desde el 9 sep 2026. Los que ya estaban en el móvil siguen en claro: se leen igual, pero no se convierten. Abrir uno con otra app le entrega una copia en claro (queda en la caché hasta el siguiente arranque) |
+| Estado del ratchet por conversación | `krypta.db` (v7) | Dentro de la base cifrada. Es material que abre lo que está **por llegar**: borrarlo no rompe la conversación (se reengancha sola en la época 0) |
 | **Secreto compartido por contacto** | **En ningún sitio** (memoria durante la ejecución) | Se **deriva** por ECDH de la identidad y del PeerID cada vez que se lee el contacto (DB v6, 8 sep 2026). Antes se guardaba en claro y bastaba el fichero para descifrar todo el historial |
 | Copia de seguridad `.krbk` | Donde el usuario elija | AES-256-GCM con clave PBKDF2-HMAC-SHA256 (310k iteraciones) de la frase-clave del usuario |
 
@@ -207,8 +221,12 @@ Notas:
   se hace una sola vez al arrancar, sobre un fichero aparte, y **solo sustituye el original tras
   comprobar que la copia tiene las mismas tablas y las mismas filas**: el historial de mensajes
   no tiene copia de seguridad de ninguna clase, así que ahí no vale el "casi seguro".
-  Los adjuntos de `krypta_files/` siguen en claro por definición: son la foto, el PDF o la nota
-  de voz, y el sistema necesita leerlos para mostrarlos.
+- **Los adjuntos de `krypta_files/` también van cifrados** desde el 9 sep 2026 (AES-256-GCM,
+  clave envuelta en el Keystore). Krypta los descifra en memoria para pintarlos o
+  reproducirlos, así que no queda una copia en claro en disco — salvo cuando el usuario elige
+  **abrir uno con otra aplicación**, que por definición se lo lleva en claro (queda en la caché
+  hasta el siguiente arranque). Los adjuntos anteriores a esa fecha siguen en claro: se leen
+  igual, pero no se convierten.
 - `android:allowBackup="false"`: nada de esto sube a Google Drive. La única copia es el `.krbk`.
 - **`FLAG_SECURE` en la pantalla de chat**: sin capturas, sin grabación, sin miniatura en
   recientes, sin proyección a pantallas no seguras. Solo en el chat, que es donde está el
@@ -249,12 +267,15 @@ escrituras.
 
 1. **Metadatos de la entrega diferida y del relay**: el operador del nodo ve quién habla con
    quién y cuándo (§6). Es el hueco más grande del modelo.
-2. **El pasado, si te roban la identidad**: sin PFS, comprometer el dispositivo descifra todo
-   el historial guardado (§4).
+2. **El pasado, si te roban la identidad**: con los contactos que aún no tienen ratchet, quien
+   obtenga tu identidad puede descifrar lo que hubiera capturado de la red (§4). El **historial
+   guardado en el móvil** ya no depende de eso —está en la base cifrada—, pero sí de que no se
+   saquen también las claves del Keystore, cosa que un atacante con el proceso vivo o con root
+   sí puede (punto 3).
 3. **Nada protege frente a código ejecutándose *dentro* del proceso o con root** (§7): ahí el
    atacante le pide la clave al TEE igual que se la pide la app, y el cifrado en reposo —de la
-   identidad o de la base— no cambia nada. Lo que sí queda cubierto es llevarse los ficheros.
-   Y los adjuntos siguen en claro.
+   identidad o de la base— no cambia nada. Lo que sí queda cubierto es llevarse los ficheros:
+   desde el 9 sep 2026, adjuntos incluidos (los anteriores a esa fecha siguen en claro).
 4. **Al contacto**: nada impide que quien recibe tus mensajes los guarde, los reenvíe o los
    fotografíe con otra cámara.
 5. **La disponibilidad**: los nodos son pocos y de un solo operador; si caen todos, la entrega
@@ -273,9 +294,19 @@ escrituras.
   [DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) — con una
   advertencia importante: **el relay filtra ese mismo grafo** y eso no lo arregla, así que lo
   que se gana es que no quede en disco, no que el operador no pueda saberlo en vivo.
-- **PFS** (Noise/doble ratchet) para el contenido.
-- **Cifrar los adjuntos** de `krypta_files/`, que es lo único que queda en claro en el
-  dispositivo. (La base ya está cifrada desde el 9 sep 2026.)
+- **PFS** (doble ratchet). Implementado entero el 9 sep 2026 —ver
+  [DISENO-ratchet.md](DISENO-ratchet.md)— y con el **envío encendido el 10 sep 2026**
+  (`RATCHET_SEND = true`), aunque **por pareja**: se usa solo con los contactos que también
+  tengan una versión que lo anuncie, así que mientras el resto no actualice, §4 sigue siendo
+  cierto para ellos. Y sigue **sin haberse probado con dos móviles reales** (esa prueba se
+  debe: `PRUEBAS-PENDIENTES` §16), así que este documento no lo cuenta todavía como una
+  garantía. Lo que sí cambió para todos es la clave de las llamadas, que se negocia por
+  llamada.
+- ~~**Cifrar los adjuntos** de `krypta_files/`.~~ **Hecho el 9 sep 2026**: lo que escribe el
+  almacén va cifrado (AES-256-GCM, clave envuelta en el Keystore). Dos límites que hay que
+  decir: **abrir un adjunto con otra app le entrega una copia en claro** (queda en la caché
+  hasta el siguiente arranque), y **los adjuntos que ya estaban en el móvil no se convierten**
+  — se siguen leyendo, pero siguen en claro; vaciar el chat los borra.
 - **Alertas** de verdad para el chequeo de nodos (hoy es un script que hay que programar), y
   límite de ritmo también en la retirada del buzón.
 - **Diversidad de operadores**: guía de "monta tu nodo" para usuarios, y una forma cómoda de
