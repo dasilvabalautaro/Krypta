@@ -1173,9 +1173,21 @@ relay** — and read the gater's own counters so a failure says which of three t
 live probe that judges by its own `Connect` result lies** — the dialer can see success a moment
 before the far side closes, which made the first post-fix run look like the leak was still open;
 and kad-dht's `PublicQueryFilter` drops peers whose addresses are **all** relay addrs, which is
-why `FindPeer` answers `routing: not found` while the phone is on cellular. Still open from §5.1:
-the node hands out phone addresses via `FindPeer`, mDNS is always started, LAN addrs are
-advertised, and there is no relay-only mode (contacts see the IP by design).
+why `FindPeer` answers `routing: not found` while the phone is on cellular. **mDNS is opt-in since the same day**: it used to start always and announce the PeerID and LAN
+address to the whole WiFi (a stable identifier, visible to anyone sharing a café/office network),
+while Krypta's real discovery is WAN. The pref (`lan_discovery` in `krypta_settings`, same pattern
+as the bootstrap) is toggled from Ajustes → "Red local" and takes effect **immediately in both
+directions**: `StartMdns` now stores the service on the Go `Node` (it was a local variable, so it
+could never be stopped) and there is `StopMdns`; the Kotlin side also **releases the
+`MulticastLock`**, which until now stayed held for the life of the process. Verified on the TECNO:
+switch off on a fresh start, toggling logs `descubrimiento LAN activado` / `desactivado`, and WAN
+is unaffected. **Still open from §5.1**: the node hands out phone addresses via `FindPeer` — and
+note the obvious fix does **not** work: kad-dht applies the same `AddressFilter` to provider
+records (`handlers.go:325`), i.e. to the rendezvous, so filtering there would leave contacts
+unable to find each other; separating the two needs a kad-dht patch, and the no-patch alternative
+(never publish public direct addrs, everything via relay) depends on DCUtR, which is the NAT gate
+nobody has measured. Also open: LAN addrs are still advertised, and there is no relay-only mode
+(contacts see the IP by design).
 
 **The node's log was keeping user identifiers (found 10 Sep 2026).** The `/krypta/msg` handler in
 `infra/node/main.go` printed the sender's PeerID and ciphertext of every direct message, and on the
@@ -1379,6 +1391,14 @@ change; when a roadmap decision changes, update
 **Play Store readiness:** the launch checklist (what's done, what's a store-listing chore,
 what's an infra risk) lives in [docs/PLAY-STORE.md](docs/PLAY-STORE.md) — update it as items
 close.
+
+**Privacy/trust roadmap:** what is still missing for Krypta's bet to be *true and checkable* —
+metadata (the DHT pair graph, blind deposit, padding, the IP), external crypto review and
+post-quantum, transparency (open source, reproducible builds, operator page), identity rotation,
+and the product gaps — is ordered in
+[docs/PLAN-privacidad-y-confianza.md](docs/PLAN-privacidad-y-confianza.md) (10 Sep 2026). It came
+out of verifying an external Signal comparison against the code; the comparison itself is
+deliberately not versioned here (circumstantial, others will follow) — the plan is.
 
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a

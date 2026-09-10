@@ -336,10 +336,11 @@ Ver [PRUEBAS-PENDIENTES.md](PRUEBAS-PENDIENTES.md):
       direcciones públicas **antes** de que la app pueda descartar a un desconocido.
       Reproducible con `ip_leak_probe_test.go`. **Parcialmente cerrado el mismo día**: el
       `ConnectionGater` del puente ya corta al extraño que marca por el relay —verificado en el
-      móvil, sin regresión— así que la IP ya no se entrega. Queda: que el nodo no reparta
-      direcciones de móviles por `FindPeer`, que el mDNS no vaya activado por defecto, no
-      anunciar direcciones de red local, y decidir si se ofrece un modo "solo relay" (los
-      contactos ven la IP por diseño). Esto no es una nota de compatibilidad: es una promesa de
+      móvil, sin regresión— así que la IP ya no se entrega, y el **mDNS pasa a opt-in** (ya no
+      se anuncia el PeerID a la WiFi de serie). Queda: que el nodo no reparta direcciones de
+      móviles por `FindPeer` —y ojo, `dht.AddressFilter` **no** sirve: filtraría también los
+      registros del rendezvous—, no anunciar direcciones de red local, y decidir si se ofrece un
+      modo "solo relay" (los contactos ven la IP por diseño). Esto no es una nota de compatibilidad: es una promesa de
       privacidad, y la parte grave ya está tapada.
 - [ ] §2 Verificación anti-MITM real entre dos móviles (la del 23 jul no vale: se comparó
       contra el propio PeerID).

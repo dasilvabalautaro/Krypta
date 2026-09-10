@@ -570,6 +570,14 @@ desacoplados y testeables.
   del §5.1 del modelo de seguridad: un extraño que marcaba por la dirección de relay provocaba
   que libp2p le mandara las direcciones públicas por hole punching, antes de que
   `ChatService.onReceived` pudiera descartarlo (está una capa por encima). Go `TestGater*`.
+  **mDNS opt-in (10 sep 2026)**: el descubrimiento en LAN ya **no se arranca de serie**
+  (`SignalingService.start` lo consulta primero). Anunciarse por mDNS delata el PeerID y la
+  dirección local a **toda** la WiFi, y el descubrimiento real de Krypta es WAN; era un atajo de
+  pruebas encendido en producción. La preferencia (`lan_discovery` en `krypta_settings`, igual
+  que el bootstrap) se cambia desde Ajustes → "Red local" y surte efecto **en el momento en los
+  dos sentidos**: para poder apagarlo, `StartMdns` ahora guarda el servicio en el `Node` (antes
+  era una variable local) y hay `StopMdns`; el lado Kotlin además **suelta el `MulticastLock`**,
+  que hasta ahora se quedaba tomado mientras viviera el proceso.
   Diagnóstico: `onlinePeers`, `wanStatus` (`DISABLED/CONNECTING/CONNECTED/ERROR`) y `log`
   (StateFlow de líneas recientes).
 - `SignalingModule` — `@Binds ISignalingService → SignalingService`.

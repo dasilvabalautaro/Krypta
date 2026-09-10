@@ -145,8 +145,10 @@ es saber los nodos —que van dentro del APK— y el PeerID de la víctima:
    públicas. Resultado real: `/ip4/<IP pública del móvil>/udp/<puerto>/quic-v1`, en 1,7 s.
 
 Contribuye a que sea tan fácil que el móvil **anuncie todas sus direcciones**:
-`circuitAddrsFactory` añade las del relay sin quitar ninguna. Y el mDNS se arranca siempre
-(`SignalingService`), así que en una WiFi compartida cualquiera ve tu PeerID y tu dirección local.
+`circuitAddrsFactory` añade las del relay sin quitar ninguna. El **mDNS**, que hasta el 10 sep
+2026 se arrancaba siempre y anunciaba el PeerID y la dirección local a toda la WiFi, ahora va
+**apagado de serie** y se enciende en Ajustes → "Red local" (surte efecto en el momento en los
+dos sentidos, y al apagarlo se suelta el `MulticastLock`).
 
 Aparte de esto, tus **contactos** ven tu IP por diseño en cuanto hay conexión directa, y el
 operador del nodo la ve siempre (como el servidor de Signal). La diferencia con Signal es que
@@ -173,11 +175,21 @@ porque el `PublicQueryFilter` de kad-dht descarta del resultado a los peers cuya
 son **todas** de relay — o sea que esa vía solo devuelve algo cuando hay algo público que
 devolver.
 
-Mitigaciones que siguen pendientes, por orden: que el nodo no entregue direcciones de móviles
-por `FindPeer` (`dht.AddressFilter`); mDNS desactivado por defecto (hoy se arranca siempre); no
-anunciar direcciones de red local; y un modo "solo relay" para ocultar la IP también a los
-contactos, que la ven por diseño en cuanto hay conexión directa. Ninguna oculta la IP al
-operador: para eso solo sirve una VPN o Tor.
+**Lo que sigue pendiente**, y una trampa que conviene no repetir:
+
+- Que el nodo no entregue direcciones de móviles por `FindPeer`. El arreglo aparente —
+  `dht.AddressFilter` en el nodo— **no vale**: en kad-dht ese filtro se aplica también a los
+  registros de proveedor (`handlers.go:325`, `GetProviders`), que es el **rendezvous**, así que
+  dejaría a los contactos sin las direcciones con las que se encuentran. Separar los dos casos
+  exige parchear kad-dht. La alternativa sin parche —que el móvil no publique direcciones
+  públicas directas y todo entre por relay— depende de que DCUtR funcione, que es el gate de NAT
+  que nunca se ha medido.
+- No anunciar direcciones de red local (mismo condicionante).
+- Un modo "solo relay" para ocultar la IP también a los contactos, que la ven por diseño en
+  cuanto hay conexión directa.
+
+Ninguna de estas oculta la IP al **operador**: para eso solo sirve una VPN o Tor, y eso le pasa
+igual a Signal.
 
 > **Nota histórica (corregida el 8 sep 2026).** Hasta esa fecha, cada ciclo del bucle WAN dejaba
 > viva una goroutine de re-anuncio, de modo que las claves de días pasados **se seguían
