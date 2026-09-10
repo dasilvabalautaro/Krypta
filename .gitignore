@@ -15,6 +15,9 @@ local.properties
 # Credenciales de firma de release. El keystore vive fuera del repo
 # (~/keystores/krypta/krypta.jks); ver hasReleaseKeystore en app/build.gradle.kts.
 /keystore.properties
+
+# Exportaciones de la bóveda de notas del autor (se regeneran allí, no aquí).
+/compare-signal.pdf
 *.jks
 *.keystore
 # Notas de credenciales del autor (usuario/contraseña de git). No deberían estar
