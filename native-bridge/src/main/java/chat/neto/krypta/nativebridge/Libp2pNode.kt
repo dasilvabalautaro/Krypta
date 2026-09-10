@@ -213,6 +213,26 @@ class Libp2pNode @Inject constructor(
      * Inicializa la DHT Kademlia y conecta a los bootstrap dados (multiaddrs separados por
      * salto de línea). En el móvil [server] = false (modo client).
      */
+    /**
+     * Quién puede **abrirnos** conexión (uno por línea): contactos + nodos. Vacío = abierto.
+     * El filtro vive en Go (`gater.go`) y corta en `InterceptSecured`, o sea en cuanto el
+     * handshake revela el PeerID y **antes** de que exista conexión: así un extraño no llega a
+     * identify ni provoca el hole punching que le entregaría nuestra IP (security-model §5.1).
+     */
+    suspend fun setAllowedPeers(peers: String) = withContext(Dispatchers.IO) {
+        node?.setAllowedPeers(peers)
+        Unit
+    }
+
+    /**
+     * Estado del filtro para el panel de Diagnóstico: `permitidos=N entrantes=N rechazadas=N`.
+     * `permitidos=0` significa **filtro abierto**, que es precisamente lo que hay que poder ver
+     * sin adivinar (el 10 sep 2026 se perdió un rato con esa duda).
+     */
+    suspend fun gaterStats(): String = withContext(Dispatchers.IO) {
+        node?.gaterStats().orEmpty()
+    }
+
     suspend fun startDht(bootstrap: String, server: Boolean = false) = withContext(Dispatchers.IO) {
         node?.startDHT(bootstrap, server)
         Unit

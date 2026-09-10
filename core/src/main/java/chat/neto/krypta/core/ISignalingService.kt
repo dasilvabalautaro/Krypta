@@ -16,6 +16,23 @@ interface ISignalingService {
 
     suspend fun stop()
 
+    /**
+     * Fija quién puede **abrirnos** una conexión: los PeerID de los contactos y de los nodos,
+     * separados por saltos de línea. Una cadena vacía deja el filtro abierto.
+     *
+     * No es una comodidad: sin esto, cualquiera que conociera nuestro PeerID nos marcaba por
+     * la dirección de relay —que el propio nodo le entrega— y libp2p, ante una conexión
+     * entrante por relay, iniciaba el hole punching por su cuenta y le mandaba nuestras
+     * direcciones públicas. El descarte de PeerID desconocido de `onReceived` no llegaba a
+     * tiempo porque está una capa por encima. Ver `docs/security-model.md` §5.1.
+     *
+     * Implementación por defecto vacía: los dobles de test no necesitan saber de esto.
+     */
+    suspend fun setAllowedPeers(peers: String) {}
+
+    /** Estado del filtro de conexiones, para el diagnóstico. Vacío si no aplica. */
+    suspend fun allowedPeersStatus(): String = ""
+
     /** Publica el punto de encuentro diario derivado por HKDF para ser descubierto. */
     suspend fun announce(rendezvous: ByteArray)
 

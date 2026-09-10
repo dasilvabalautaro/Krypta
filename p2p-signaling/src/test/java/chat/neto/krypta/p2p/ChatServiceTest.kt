@@ -36,6 +36,8 @@ class ChatServiceTest {
 
     private class FakeSignaling : ISignalingService {
         override val events = MutableSharedFlow<SignalingEvent>()
+        val allowedPeers = mutableListOf<String>()
+        override suspend fun setAllowedPeers(peers: String) { allowedPeers.add(peers) }
         var sentCiphertext: ByteArray? = null
         /** Simula que el arranque del host/mDNS revienta (p. ej. datos móviles sin multicast). */
         var failOnStart = false
@@ -942,6 +944,59 @@ class ChatServiceTest {
 
         assertTrue(messages.saved.isEmpty())
         assertTrue(contacts.store.isEmpty()) // announceAndFind ya no lo verá (relee de Room)
+    }
+
+    // --- Filtro de quién puede abrirnos conexión (fuga de IP, security-model §5.1) ----------
+
+    /**
+     * La lista que se le pasa al transporte lleva los contactos **y los nodos**. Los nodos son
+     * imprescindibles: el relay y AutoNAT necesitan poder hablarnos de vuelta, y si se
+     * quedaran fuera la app se quedaría sin red.
+     */
+    @Test
+    fun `the allowed-peer list carries contacts and infra nodes`() = runTest {
+        val signaling = FakeSignaling()
+        signaling.bootstrapAddr = "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooWNodo"
+        val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+
+        chat.announceAndFind()
+
+        val ultima = signaling.allowedPeers.last().lines()
+        assertTrue("falta el contacto: $ultima", ultima.contains(contact.peerId))
+        assertTrue("falta el nodo: $ultima", ultima.contains("12D3KooWNodo"))
+    }
+
+    /**
+     * Un bloqueado no entra en la lista: además de no recibir nada, deja de poder sacarnos la
+     * IP (que es lo que consigue quien logra abrirnos una conexión).
+     */
+    @Test
+    fun `a blocked contact is left out of the allowed-peer list`() = runTest {
+        val signaling = FakeSignaling()
+        signaling.bootstrapAddr = "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooWNodo"
+        val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(contact.copy(blocked = true))), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+
+        chat.refreshAllowedPeers()
+
+        val ultima = signaling.allowedPeers.last().lines()
+        assertFalse("el bloqueado no debería estar: $ultima", ultima.contains(contact.peerId))
+        assertTrue("el nodo sí debería estar: $ultima", ultima.contains("12D3KooWNodo"))
+    }
+
+    /** El PeerID sale del multiaddr, también con `/p2p-circuit` detrás (direcciones de relay). */
+    @Test
+    fun `bootstrapPeerIds extracts one id per node, circuit form included`() = runTest {
+        val chat = ChatService(FakeSignaling(), cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+
+        val ids = chat.bootstrapPeerIds(
+            "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooWUno\n" +
+                "  \n" +
+                "/dns4/nodo.example/tcp/443/wss/p2p/12D3KooWDos\n" +
+                "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooWUno/p2p-circuit\n" +
+                "esto-no-es-un-multiaddr",
+        )
+
+        assertEquals(listOf("12D3KooWUno", "12D3KooWDos"), ids)
     }
 
     // --- Bloqueo de contacto ---------------------------------------------------------------

@@ -109,6 +109,10 @@ class SignalingService @Inject constructor(
 
     override suspend fun connectDht(bootstrap: String) = node.startDht(bootstrap, server = false)
 
+    override suspend fun setAllowedPeers(peers: String) = node.setAllowedPeers(peers)
+
+    override suspend fun allowedPeersStatus(): String = node.gaterStats()
+
     override suspend fun selfAddrs(): List<String> =
         node.listenAddrs().split("\n").filter { it.isNotBlank() }
 

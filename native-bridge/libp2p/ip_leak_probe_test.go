@@ -171,10 +171,26 @@ func TestIPLeakViaRelayDial(t *testing.T) {
 	defer cancel()
 	// Las conexiones relayadas son "limited": sin esto libp2p ni las intenta.
 	dialCtx := network.WithAllowLimitedConn(ctx, "poc-ip-leak")
+	// Con el filtro de `gater.go` puesto, esto **debe** fallar: es el resultado bueno. Antes del
+	// 10 sep 2026 no fallaba, y de ahí salía la IP.
 	if err := h.Connect(dialCtx, peer.AddrInfo{ID: victim, Addrs: []multiaddr.Multiaddr{relayAddr}}); err != nil {
-		t.Fatalf("no se pudo marcar a la víctima por el relay: %v", err)
+		t.Logf("=== ✅ el filtro cortó al extraño: %v ===", err)
+		t.Logf("sin conexión aceptada no hay identify ni hole punching, así que no hay fuga de IP")
+		return
 	}
-	t.Logf("=== CONEXIÓN ACEPTADA por %s sin ser contacto suyo ===", shortID(victim))
+	// OJO: que `Connect` no dé error NO significa que la víctima la haya aceptado. El que marca
+	// puede dar el handshake por completado un instante antes de que el otro lado cierre por
+	// filtro. Lo que decide es si la conexión **se puede usar**.
+	sctx, scancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer scancel()
+	s, serr := h.NewStream(network.WithAllowLimitedConn(sctx, "poc-ip-leak"), victim, "/krypta/msg/1.0.0")
+	if serr != nil {
+		t.Logf("=== ✅ el filtro cortó al extraño: la conexión no es usable (%v) ===", serr)
+		t.Logf("sin conexión aceptada no hay identify ni hole punching, así que no hay fuga de IP")
+		return
+	}
+	_ = s.Reset()
+	t.Logf("=== ⚠️ CONEXIÓN ACEPTADA Y USABLE por %s sin ser contacto suyo ===", shortID(victim))
 
 	// Dar tiempo a identify y al hole punching que la víctima inicia sola.
 	select {

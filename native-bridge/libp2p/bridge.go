@@ -193,6 +193,10 @@ type Node struct {
 	cancel      context.CancelFunc
 	peerHandler PeerHandler
 
+	// Filtro de quién puede ABRIRNOS conexión (ver gater.go). Se rellena desde la app con los
+	// contactos y los nodos; vacío = abierto.
+	gater *peerGater
+
 	mailboxHandler MailboxHandler
 
 	wakeMu      sync.Mutex
@@ -229,6 +233,7 @@ func NewNodeWithIdentity(identity []byte, relayAddrs string) (*Node, error) {
 }
 
 func newNode(priv crypto.PrivKey, relayAddrs string) (*Node, error) {
+	gater := newPeerGater()
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(
 			"/ip4/0.0.0.0/tcp/0",
@@ -240,6 +245,10 @@ func newNode(priv crypto.PrivKey, relayAddrs string) (*Node, error) {
 		// wss/443 solo si la vía directa no conecta en ~1 s (ver dial_ranker.go): sin esto
 		// libp2p marca antes el 443 que el 4001 y los móviles pasarían por Caddy.
 		libp2p.DialRanker(directFirstDialRanker),
+		// Solo los contactos y los nodos pueden abrirnos conexión (ver gater.go). Sin esto,
+		// un extraño con tu PeerID te marcaba por el relay y el hole punching le entregaba
+		// tu IP pública antes de que la app pudiera descartarlo.
+		libp2p.ConnectionGater(gater),
 	}
 	if priv != nil {
 		opts = append(opts, libp2p.Identity(priv))
@@ -257,7 +266,7 @@ func newNode(priv crypto.PrivKey, relayAddrs string) (*Node, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Node{h: h, ctx: ctx, cancel: cancel}, nil
+	return &Node{h: h, ctx: ctx, cancel: cancel, gater: gater}, nil
 }
 
 // circuitAddrsFactory devuelve un AddrsFactory que AÑADE, a las direcciones anunciadas del
