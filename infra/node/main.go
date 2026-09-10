@@ -51,6 +51,9 @@ func main() {
 	// que ser estable entre reinicios para poder publicarlo en DEFAULT_BOOTSTRAP.
 	quicPortFlag := flag.String("quicport", "0", "UDP port for QUIC (0 = ephemeral; set it on a public-IP node)")
 	mailboxDir := flag.String("mailboxdir", "", "E2EE store-and-forward mailbox dir (default: <key dir>/mailbox)")
+	// Solo para pruebas en un nodo local: imprime el PeerID remitente de cada mensaje directo.
+	// NUNCA en un nodo público (ver msgHandler).
+	debugMsg := flag.Bool("debugmsg", false, "print sender PeerID + ciphertext of inbound /krypta/msg streams (local testing only)")
 	flag.Parse()
 	wsPort := *wsPortFlag
 	quicPort := *quicPortFlag
@@ -111,18 +114,7 @@ func main() {
 	}
 	defer h.Close()
 
-	// Print any inbound Krypta message (lets on-device tests verify the phone can dial
-	// this node and deliver a message over a libp2p stream). Bounded read: see below.
-	h.SetStreamHandler(kryptaProtocol, func(s network.Stream) {
-		defer s.Close()
-		// Acotado por lo mismo que en el puente del móvil: este nodo es público y cualquiera
-		// puede abrirle este stream, así que sin tope un extraño le hace reservar memoria sin
-		// fin. Aquí el mensaje solo se imprime, pero el nodo es infraestructura compartida.
-		data, _ := io.ReadAll(io.LimitReader(s, maxInboundMessage))
-		// Print as hex: payloads are E2EE, so this node sees only opaque ciphertext.
-		fmt.Printf("message from %s: %d bytes (ciphertext, hex): %x\n",
-			s.Conn().RemotePeer(), len(data), data)
-	})
+	h.SetStreamHandler(kryptaProtocol, msgHandler(os.Stdout, *debugMsg))
 
 	// Buzón E2EE store-and-forward (ver mailbox.go). Default junto al node.key para que
 	// funcione igual bajo launchd (que no fija WorkingDirectory) que a mano.
@@ -187,6 +179,29 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	fmt.Println("\nshutting down")
+}
+
+// msgHandler atiende /krypta/msg/1.0.0, que en el nodo solo existe para que una prueba en el
+// dispositivo compruebe que el móvil llega a marcarlo y entregarle un mensaje.
+//
+// Por defecto **no escribe nada**. Antes imprimía el PeerID remitente y el ciphertext de cada
+// mensaje, y bajo systemd eso acababa en el journal persistente y, vía rsyslog, en
+// /var/log/syslog: el 10 sep 2026 el nodo de São Paulo tenía 12 de esas líneas guardadas
+// desde el 7 ago, lo que desmentía la política de privacidad («no se guarda ningún registro»).
+// Un nodo público no debe emitir identificadores de usuario a su log; con debug (flag
+// -debugmsg) vuelve el comportamiento antiguo, para un nodo local de pruebas.
+//
+// La lectura va acotada igual que en el puente del móvil: cualquiera puede abrir este stream,
+// y sin tope un extraño le hace reservar memoria sin fin.
+func msgHandler(w io.Writer, debug bool) network.StreamHandler {
+	return func(s network.Stream) {
+		defer s.Close()
+		data, _ := io.ReadAll(io.LimitReader(s, maxInboundMessage))
+		if debug {
+			fmt.Fprintf(w, "message from %s: %d bytes (ciphertext, hex): %x\n",
+				s.Conn().RemotePeer(), len(data), data)
+		}
+	}
 }
 
 func loadOrCreateKey(path string) (crypto.PrivKey, error) {

@@ -8,9 +8,10 @@
 # Requiere acceso SSH con sudo (o root). Qué hace:
 #   1. Sube el binario Linux de dist/ a /usr/local/bin/krypta-node
 #   2. Crea el usuario de sistema `krypta` y /var/lib/krypta (identidad + buzón)
-#   3. Instala/recarga la unidad systemd (Restart=always, arranca en el boot)
-#   4. Abre los puertos en ufw si está activo
-#   5. Imprime el PeerID y el multiaddr de bootstrap para pegar en la app
+#   3. Fija los buffers UDP de QUIC (sysctl) y la retención del journal (30 días)
+#   4. Instala/recarga la unidad systemd (Restart=always, arranca en el boot)
+#   5. Abre los puertos en ufw si está activo
+#   6. Imprime el PeerID y el multiaddr de bootstrap para pegar en la app
 #
 # Es idempotente: relanzarlo actualiza el binario y reinicia el servicio. NO toca el
 # node.key existente, así que el PeerID se conserva entre despliegues.
@@ -66,6 +67,37 @@ rm -f /tmp/krypta-node.new /tmp/krypta-node.service
 mkdir -p /var/lib/krypta
 chown krypta:krypta /var/lib/krypta
 chmod 0700 /var/lib/krypta
+
+# Buffers UDP para quic-go. Con el default de Ubuntu (~208 KiB) avisa al arrancar "failed to
+# sufficiently increase receive buffer size" y el caudal QUIC queda capado bajo carga. Mismo
+# valor que el nodo de Nyx en Secaucus, donde ya está comprobado.
+if [ ! -f /etc/sysctl.d/99-krypta-quic.conf ]; then
+  echo "  fijando net.core.{rmem,wmem}_max para QUIC"
+  cat > /etc/sysctl.d/99-krypta-quic.conf <<'SYSCTL'
+# Krypta: buffers UDP para quic-go (ver infra/node/OPERACION.md)
+net.core.rmem_max=7500000
+net.core.wmem_max=7500000
+SYSCTL
+fi
+sysctl -q --system >/dev/null 2>&1 || true
+
+# Retención del journal. Por defecto journald solo borra por TAMAÑO (10 % del disco), así que
+# todo lo que el nodo haya impreso se queda meses: el 10 sep 2026 aún guardaba líneas con
+# PeerIDs de agosto. 30 días conserva lo que sirve para detectar una intrusión (SSH, sistema);
+# MaxFileSec=1week hace que se archive por semanas, porque journald solo borra ficheros
+# archivados enteros cuya última entrada ya caducó — con el default de un mes, lo caducado
+# podía seguir vivo semanas de más dentro del fichero activo. Afecta a todo el journal de la
+# máquina, que en un VPS dedicado al nodo es lo que se quiere.
+JOURNALD_CONF=/etc/systemd/journald.conf.d/krypta-retencion.conf
+JOURNALD_WANT='[Journal]
+MaxRetentionSec=30day
+MaxFileSec=1week'
+if [ "$(cat "$JOURNALD_CONF" 2>/dev/null)" != "$JOURNALD_WANT" ]; then
+  echo "  fijando retención del journal a 30 días"
+  mkdir -p /etc/systemd/journald.conf.d
+  printf '%s\n' "$JOURNALD_WANT" > "$JOURNALD_CONF"
+  systemctl restart systemd-journald
+fi
 
 systemctl daemon-reload
 systemctl enable --now krypta-node
