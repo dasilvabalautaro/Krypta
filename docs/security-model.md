@@ -115,7 +115,47 @@ El punto de cita entre dos contactos es `rendezvous = HKDF(secreto_compartido, f
 
 Lo que un observador de la DHT **sí** ve: que un PeerID concreto anuncia y busca ciertas claves
 opacas. Puede contar cuántas (≈ cuántos contactos activos tienes) y ver cuándo estás en línea.
-No puede saber **quiénes** son ni leer nada.
+No puede leer nada.
+
+**Corrección importante (10 sep 2026): sí puede saber quiénes son.** Este documento decía lo
+contrario y era falso. Los **dos** miembros de una pareja anuncian y buscan **la misma** clave de
+rendezvous (`ChatService.announceAndFind`), y los móviles son clientes de la DHT: los únicos que
+guardan esos registros son los nodos de infraestructura. O sea que **cada nodo tiene, día a día,
+qué dos PeerID comparten cada punto de cita**: el grafo social completo de las parejas activas,
+incluidas las que hablan en directo y nunca tocan el buzón ni el relay. No queda en disco (los
+registros viven en memoria del nodo), pero está ahí. **El depósito ciego no arregla esto.**
+
+### 5.1 Tu IP queda expuesta (verificado el 10 sep 2026)
+
+**Cualquiera que conozca tu PeerID puede sacar tu IP pública en segundos**, sin ser contacto
+tuyo y sin que tú hagas nada. El PeerID no es un secreto: se comparte por WhatsApp o por QR.
+
+Reproducido contra el móvil del autor con dos sondas
+(`native-bridge/libp2p/ip_leak_probe_test.go`), desde una identidad efímera cuya única ventaja
+es saber los nodos —que van dentro del APK— y el PeerID de la víctima:
+
+1. `TestIPLeakAgainstLiveNode`: le pregunta al nodo por ese PeerID (`FindPeer`). El nodo
+   entregó **4 direcciones** del móvil a un desconocido. `handleFindPeer` de la DHT devuelve las
+   direcciones que tenga de cualquier peer conectado, sin filtro. En datos móviles solo salen
+   direcciones de relay: revelan **presencia y por dónde alcanzarte**, no la IP.
+2. `TestIPLeakViaRelayDial`: con una de esas direcciones, el extraño **marca al móvil por el
+   relay**. La conexión **se acepta** (no hay `ConnectionGater`: el filtro de PeerID desconocido
+   de `ChatService.onReceived` está una capa por encima y llega tarde), y ante una conexión
+   entrante por relay **libp2p inicia el hole punching solo** y le manda sus direcciones
+   públicas. Resultado real: `/ip4/<IP pública del móvil>/udp/<puerto>/quic-v1`, en 1,7 s.
+
+Contribuye a que sea tan fácil que el móvil **anuncie todas sus direcciones**:
+`circuitAddrsFactory` añade las del relay sin quitar ninguna. Y el mDNS se arranca siempre
+(`SignalingService`), así que en una WiFi compartida cualquiera ve tu PeerID y tu dirección local.
+
+Aparte de esto, tus **contactos** ven tu IP por diseño en cuanto hay conexión directa, y el
+operador del nodo la ve siempre (como el servidor de Signal). La diferencia con Signal es que
+allí un desconocido con tu número no puede sacarte la IP, y aquí uno con tu PeerID sí.
+
+Mitigaciones pendientes, por orden: un `ConnectionGater` que solo acepte contactos y nodos; que
+el nodo no entregue direcciones de móviles por `FindPeer`; mDNS desactivado por defecto; no
+anunciar direcciones de red local; y un modo "solo relay" para ocultar la IP también a los
+contactos. Ninguna oculta la IP al operador: para eso solo sirve una VPN o Tor.
 
 > **Nota histórica (corregida el 8 sep 2026).** Hasta esa fecha, cada ciclo del bucle WAN dejaba
 > viva una goroutine de re-anuncio, de modo que las claves de días pasados **se seguían
@@ -319,6 +359,13 @@ escrituras.
    diferida y el relay se detienen (la entrega directa entre dos móviles alcanzables, no).
 6. **El análisis de tráfico a gran escala**: no hay tráfico de relleno, ni batching, ni mezcla.
    Quien observe la red y el nodo a la vez puede correlacionar por tiempos.
+7. **Tu dirección IP, ni siquiera frente a desconocidos** (§5.1, verificado el 10 sep 2026):
+   quien tenga tu PeerID se la saca en segundos, porque el nodo entrega tus direcciones por
+   `FindPeer` y tu móvil, ante una conexión entrante por el relay, inicia el hole punching y
+   manda sus direcciones públicas antes de que la app pueda descartar a un desconocido.
+8. **Quiénes son tus contactos, frente al operador del nodo** (§5): los dos lados de cada
+   pareja anuncian la misma clave de rendezvous, así que los nodos tienen el grafo de parejas
+   activas de cada día. Es el hueco que el depósito ciego **no** cierra.
 
 ---
 

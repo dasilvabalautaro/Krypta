@@ -23,6 +23,12 @@ casillas según se vayan cerrando; lo que está hecho lleva la fecha de verifica
 > [PRUEBAS-PENDIENTES.md](PRUEBAS-PENDIENTES.md)**. Antes de publicar hay que decidir si esto
 > es **específico de Transsion** (la colaboradora, con otro modelo, sí recibía) o afecta a
 > todos: lo primero es una nota de compatibilidad; lo segundo bloquea la salida.
+>
+> ✅ **10 sep 2026: funcionó en el TECNO** con el build de ese día, que cambia justo lo que más
+> podía influir (nodos por TCP directo en dos VPS, sin el reciclado de WebSocket de Cloudflare,
+> y ciclo WAN a 180 s porque el wake se sostiene): el aviso **llegó y sonó con la app en
+> segundo plano**. Es **una muestra**, no una regresión cerrada: antes de publicar hay que
+> repetir la medición de CPU de §13 con la app cerrada.
 
 ## Registro de versiones generadas
 
@@ -323,12 +329,27 @@ incumplimiento afecta a **visibilidad y capacidad de publicación**, no es un re
 
 Ver [PRUEBAS-PENDIENTES.md](PRUEBAS-PENDIENTES.md):
 
+- [ ] **Cerrar la fuga de IP antes de publicar** (verificado el 10 sep 2026, ver
+      `security-model.md` §5.1). Cualquiera que tenga tu PeerID —que se comparte por WhatsApp o
+      QR— obtiene tu **IP pública en segundos**: el nodo entrega tus direcciones por `FindPeer`
+      y el móvil, ante una conexión entrante por el relay, inicia el hole punching y manda sus
+      direcciones públicas **antes** de que la app pueda descartar a un desconocido.
+      Reproducible con `ip_leak_probe_test.go`. Lo primero es un `ConnectionGater` que solo
+      acepte contactos y nodos; después, que el nodo no reparta direcciones de móviles y que el
+      mDNS no vaya activado por defecto. Esto no es una nota de compatibilidad: es una promesa
+      de privacidad que hoy no se cumple.
 - [ ] §2 Verificación anti-MITM real entre dos móviles (la del 23 jul no vale: se comparó
       contra el propio PeerID).
 - [ ] §3 Reinicio del móvil, cambio de red y persistencia > 6 h.
-- [ ] Failover multinodo (apagar el nodo del Mac y comprobar entrega por `krypta2`).
-- [ ] **§16 El ratchet, ya encendido** (10 sep 2026). El envío con secreto hacia adelante está
-      **activo** pero nunca se ha probado entre dos móviles: pérdida de estado, reentrega del
-      buzón y un archivo grande cruzando un cambio de época. Solo afecta a parejas donde ambos
-      tengan este build, y `RATCHET_SEND = false` lo revierte — pero **esta es la prueba que no
-      publicaría sin cerrar**, porque un mensaje que el otro extremo no pueda abrir se pierde.
+- [ ] Failover multinodo — **media prueba, sola**: el 10 sep 2026 un depósito aterrizó en el
+      buzón de **Dallas**, o sea que el cliente cayó al segundo nodo por su cuenta cuando São
+      Paulo no aceptó. Falta la otra mitad: que el destinatario **retire** de ese segundo nodo
+      (hoy ese sobre sigue sin recoger). La prueba deliberada es parar São Paulo
+      (`systemctl stop krypta-node`) y comprobar la entrega, ya no apagar el nodo del Mac.
+- [ ] **§16 El ratchet, ya encendido** (10 sep 2026) — **PARCIAL**. Ese mismo día, con los dos
+      móviles en el build nuevo, hubo **conversación real en los dos sentidos sin pérdidas**.
+      Sigue sin probarse lo que de verdad podía romper: **pérdida de estado**, **reentrega del
+      buzón**, **archivo grande cruzando un cambio de época** y **llamada**. Solo afecta a
+      parejas donde ambos tengan este build, y `RATCHET_SEND = false` lo revierte — pero
+      **esos cuatro escenarios son la prueba que no publicaría sin cerrar**, porque un mensaje
+      que el otro extremo no pueda abrir se pierde.

@@ -9,15 +9,21 @@
 > `~/Desktop/krypta-arm64-debug.apk` (`./gradlew :app:assembleDebug -PslimAbi` + copia) y lo
 > comparte el autor. **Ambos móviles deben tener la misma versión** para cada prueba.
 >
-> Última actualización: **10 sep 2026** — se añadió **§16: el ratchet ya está encendido y su
-> prueba con dos móviles se debe** (es la más importante de esta lista ahora mismo, porque un
-> mensaje enviado con ratchet que el otro extremo no pueda abrir se pierde). Antes, el 2 sep:
-> auditoría previa a preparar la versión de producción.
-> ⛔ **Hallazgo bloqueante: la entrega en segundo plano NO funciona hoy en el móvil del autor.**
-> Ver **§13**. Con la app cerrada (pero viva, en primer plano el servicio, con WiFi validado,
-> exención de batería y pantalla encendida) el móvil **no mantiene ninguna conexión con los
-> nodos y no retira el buzón**; al abrir la app lo recoge al instante. Es exactamente la queja
-> "llegan mensajes pero no suena la alarma", y no está resuelta por la auditoría del 13 ago.
+> Última actualización: **10 sep 2026 (tarde)** — **pruebas con dos móviles hechas**, ambos con
+> el build de ese día (nodos São Paulo + Dallas, `wss/443`, ratchet encendido):
+>
+> - ✅ **§16 ratchet, conversación normal**: intercambio real en los dos sentidos, sin pérdidas
+>   (reportado por el autor; el Diagnóstico del TECNO registra `← mensaje` 08:34:24 y 08:35:58 y
+>   `→ enviado` 08:36:13 contra el mismo contacto). **Los escenarios concretos de §16 siguen sin
+>   hacer**: pérdida de estado, reentrega del buzón, archivo grande cruzando época y llamada.
+> - ✅ **§13 entrega en 2.º plano**: llegó **y sonó** con la app en segundo plano, que es lo que
+>   estaba roto desde el 2 sep. Es **una muestra** en el TECNO con el build nuevo, no una
+>   regresión cerrada: repetirla antes de publicar (§13, prueba de no regresión).
+> - ⚠️ Quedan **4 sobres sin recoger** en los nodos (3 en São Paulo, 1 en Dallas) para dos
+>   PeerID que **no son** el TECNO ni el contacto de la prueba. Caducan a los 7 días; ver §12.
+>
+> Antes, el 10 sep por la mañana: §16 añadida al encender el ratchet. Y el 2 sep: auditoría
+> previa a preparar la versión de producción.
 >
 > (La videollamada §11 quedó **VERIFICADA** el 16 jul — funcionó bien.)
 >
@@ -508,6 +514,20 @@ suprime la alarma que debería descongelarlo.
 alarma puede ejecutarse en un proceso al que el sistema no da CPU. Los arreglos del bucle WAN y
 del latido siguen siendo correctos —quitaron cuelgues reales— pero no pueden resolver esto.
 
+### ✅ FUNCIONÓ EL 10 SEP 2026 (una muestra, build nuevo)
+
+Con el build del 10 sep —que cambia justo lo que más podía influir: los nodos pasan a **TCP
+directo** contra dos VPS, sin el reciclado de WebSocket de Cloudflare, y el ciclo WAN se relaja
+a 180 s **porque el wake se sostiene**— el autor reporta que el aviso **llegó y sonó con la app
+en segundo plano**. Observado desde fuera a la vez: el TECNO mantenía conexión establecida con
+**los dos** nodos, y su Diagnóstico anuncia rendezvous cada ~3 min, que es la cadencia de
+"wake en pie" (con el wake caído serían 30 s).
+
+Lo honesto: es **una muestra**, en el móvil que fallaba, y no se ha repetido la medición de CPU
+de esta sección con la app cerrada. La decisión de abajo **no se revierte todavía**; lo que
+cambia es que deja de ser un hallazgo bloqueante y pasa a "prueba de no regresión antes de
+publicar" (punto 4 de la lista de abajo).
+
 ### DECISIÓN (2 sep 2026): se deja como está, a la espera de más móviles
 El autor decide **no adoptar push por ahora** y tratar el caso del TECNO como
 **posiblemente particular**, hasta tener más muestras. Razonable con lo que hay: dos móviles,
@@ -649,7 +669,21 @@ Usar un contacto desechable, no uno real.
 
 ---
 
-## 16. El ratchet, ya encendido — **PRUEBA PENDIENTE (ahora va detrás del encendido)**
+## 16. El ratchet, ya encendido — **PARCIAL: conversación normal ✅ (10 sep 2026), escenarios límite pendientes**
+
+> **Resultado del 10 sep 2026 (tarde).** Los dos móviles con el build de ese día. Conversación
+> real en los dos sentidos **sin pérdidas** (punto 2 de la lista), reportada por el autor y
+> consistente con lo observado desde fuera: el Diagnóstico del TECNO registra `← mensaje de
+> …f47d1JYR` a las 08:34:24 y 08:35:58 y `→ enviado a …f47d1JYR` a las 08:36:13, el ciclo WAN
+> anuncia a 2 contactos cada ~3 min (o sea, con el wake en pie) y los dos nodos veían a la vez
+> dos móviles de **operadoras distintas de La Paz** (Viva y Tigo). Lo que **no** se pudo
+> comprobar desde fuera es la marca `peerProtocol = 2`: la base va cifrada con SQLCipher y el
+> panel de Diagnóstico solo guarda las últimas líneas, así que el `↔ protocolo v2 anunciado`
+> del punto 1 ya había salido del buffer. Que ambos móviles lleven el build del día es lo que
+> hace que la pareja use v2.
+>
+> **Sigue pendiente lo que de verdad podía romper**: reentrega del buzón (3), archivo grande
+> cruzando época (4), pérdida de estado e importación de `.krbk` (5) y llamada (7).
 
 El secreto hacia adelante está implementado entero (`docs/DISENO-ratchet.md`, fases 1–6) y
 cubierto por tests JVM: el ratchet en sí (`RatchetTest`, 17), su persistencia y atomicidad
@@ -675,9 +709,9 @@ Usar contactos desechables si se puede.
      mirar el Diagnóstico: debe salir `↔ protocolo v2 anunciado a N contacto(s)` en cada uno, y
      **una sola vez** — si reaparece en cada arranque, la marca no está persistiendo. En el otro
      móvil debe aparecer `↔ …<peer> habla protocolo v2`.
-2. - [ ] **Conversación normal.** Texto en los dos sentidos, foto, nota de voz y respuesta con
-     cita. Todo debe llegar y leerse igual que antes. (Con el interruptor apagado esto ya
-     funciona; aquí lo que se prueba es que sigue funcionando **con ratchet**.)
+2. - [x] **Conversación normal.** ✅ **10 sep 2026**: texto en los dos sentidos, sin pérdidas,
+     con los dos móviles en el build del día. Falta repetirlo con **foto, nota de voz y
+     respuesta con cita**, que van por caminos distintos (envelope `I`, troceado y `Y`).
 3. - [ ] **Reentrega del buzón.** Cerrar la app de B, enviarle 3–4 mensajes desde A, abrirla:
      tienen que llegar **todos y una sola vez**. Después, en dos ciclos seguidos de WAN, el
      Diagnóstico de B no debe volver a recoger los mismos sobres (si reaparecen es que no se
@@ -875,6 +909,12 @@ directa (DCUtR) o se queda en relay.
   líneas), apagar el nodo de la Mac (`launchctl unload …chat.neto.krypta.node.plist`),
   enviar con el receptor cerrado → debe salir SENT (buzón del nodo Windows) y notificar al
   abrir; recargar el nodo de la Mac al acabar.
+  **(10 sep, tarde) Failover del depósito observado en producción, sin provocarlo**: a las
+  12:29 UTC un sobre aterrizó en el buzón de **Dallas**. Como `MailboxPut` deposita en el
+  **primer nodo vivo** y São Paulo es el primero de la lista, eso significa que en ese momento
+  São Paulo no aceptó el depósito y el cliente cayó al segundo nodo solo. Es media prueba: el
+  depósito hizo failover de verdad, pero **el sobre sigue sin recogerse** (ver §12), así que la
+  otra mitad —que el destinatario lo retire del segundo nodo— no está demostrada.
   **(10 sep) La prueba cambia de nodos**: `DEFAULT_BOOTSTRAP` es ahora São Paulo + Dallas (los
   domésticos salieron). Pasos: ambos móviles con un APK del 10 sep o posterior y **sin lista
   guardada en Ajustes** (o con esas dos líneas); con el receptor cerrado, parar São Paulo

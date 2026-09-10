@@ -1110,9 +1110,14 @@ matters: who gets v2 is decided by `contact.peerProtocol`, so **nothing changes 
 end updates**; the moment it does, that pair goes to the ratchet without having passed the live
 test. The exposure while that's true: a v2 message the peer cannot open is **dropped and acked**,
 i.e. lost. It is bounded to pairs where *both* run this build, and `RATCHET_SEND = false` in a
-later publish returns everything to v1. The test is still owed —
-[docs/PRUEBAS-PENDIENTES.md](docs/PRUEBAS-PENDIENTES.md) §16, to be run with a throwaway contact
-before trusting a real conversation to it. Flipping the default also exposed a latent trap in the
+later publish returns everything to v1. The test is partly paid — **10 Sep 2026, two
+phones both on that day's build: a real bidirectional conversation over the ratchet, no losses**
+(the TECNO's diagnostics show `← mensaje` 08:34:24 / 08:35:58 and `→ enviado` 08:36:13, and both
+nodes saw two phones on two different La Paz carriers at once). What is **still owed** is the part
+that could actually break: mailbox redelivery, a big chunked file crossing an epoch change, state
+loss + `.krbk` import, and a call — [docs/PRUEBAS-PENDIENTES.md](docs/PRUEBAS-PENDIENTES.md) §16.
+Note `peerProtocol = 2` could not be read from outside (SQLCipher), so "v2 was in use" is inferred
+from both phones running that build, not observed directly. Flipping the default also exposed a latent trap in the
 test suite: `conRatchet { }` restored the switch to a hardcoded `false`, so with production now
 `true` it would have silently turned sending off for every test after it; it saves and restores
 the previous value. **User-facing wording deliberately unchanged**: the help and the privacy
@@ -1134,6 +1139,22 @@ is now the only way `DatabaseModule` gets one. Regression test `SqlCipherTest` (
 the real `UnsatisfiedLinkError` against the pre-fix code — and the app was re-verified live on the
 TECNO: it launches, the conversation list renders with both contacts and their decrypted previews,
 and the status reads "conectado".
+
+**Anyone who knows your PeerID can get your public IP (verified 10 Sep 2026).** Two probes in
+`native-bridge/libp2p/ip_leak_probe_test.go`, run from an ephemeral identity whose only advantage
+is knowing the nodes (they ship in the APK) and the victim's PeerID — which is not a secret:
+`TestIPLeakAgainstLiveNode` asks a node `FindPeer(<peerID>)` and it hands over the phone's
+addresses (kad-dht's `handleFindPeer` returns peerstore addrs of any connected peer, unfiltered);
+`TestIPLeakViaRelayDial` then dials the phone through one of those `/p2p-circuit` addrs — **the
+connection is accepted** (there is no `ConnectionGater`; `ChatService.onReceived`'s unknown-peer
+drop sits a layer above and is too late) and libp2p **starts hole punching on its own** for any
+inbound relayed connection, handing a stranger `/ip4/<phone's public IP>/udp/<port>/quic-v1` in
+1.7 s. Contributing factors: `circuitAddrsFactory` **appends** relay addrs without filtering any
+of the host's own, and mDNS is always started. Also corrected the same day: `security-model.md` §5
+claimed a DHT observer "cannot know who your contacts are" — false, both sides of a pair advertise
+the **same** rendezvous key and phones are DHT clients, so the infra nodes hold the daily pair
+graph (in memory) for every active pair, blind deposit or not. Mitigations are listed in §5.1 and
+none is implemented yet; the gater is the first.
 
 **The node's log was keeping user identifiers (found 10 Sep 2026).** The `/krypta/msg` handler in
 `infra/node/main.go` printed the sender's PeerID and ciphertext of every direct message, and on the
