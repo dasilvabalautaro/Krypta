@@ -224,12 +224,23 @@ reinstaló **escribe algo**. Solo entonces el otro adopta el linaje nuevo y la c
 vuelve. No es un bloqueo permanente (eso es lo que promete el §1.6 y se cumple), pero es una
 **ventana de pérdida silenciosa** que dura hasta el primer mensaje del que reinstaló.
 
-Para el usuario eso significa: si reinstalas, pídele a la otra persona que te escriba, o escribe
-tú primero. Y para el código, dos salidas posibles, ninguna hecha: que el receptor que **falla**
-al abrir un mensaje de un linaje menor mande de vuelta cualquier cosa (él sí sabe que el otro va
-atrasado, así que puede reengancharlo sin esperar a que el usuario escriba), o que el emisor cuya
-racha de mensajes no se abre nunca vuelva a la época 0. La primera es más barata y arregla el
-caso real.
+**Arreglado el mismo día (`ChatService.rehook`).** El receptor que falla al abrir un sobre con
+cabecera de ratchet **sabe** que el otro va atrasado, así que no hay que esperar a que nadie
+escriba: le manda el anuncio de capacidades (`V`), que ya viaja por el ratchet con su linaje, y
+con eso el otro extremo lo adopta y vuelve a ser legible. Tres decisiones que importan:
+
+- **Se reutiliza el sobre `V`** en vez de inventar uno: un cliente anterior ya lo ignora
+  limpiamente como `Unsupported`.
+- **Va lanzado**, no en línea: el camino del buzón es síncrono —el acuse depende de que
+  `onReceived` vuelva— y bloquearlo con una llamada de red retrasaría la entrega.
+- **Un reengache por contacto cada 5 minutos**, y solo hacia contactos que ya hablan v2.
+  Cualquiera de tus contactos podría mandar basura a propósito; sin tope, eso nos haría emitir
+  un mensaje por cada una.
+
+Lo que **no** arregla: el mensaje que provocó el fallo ya está perdido. El reengache salva los
+siguientes, así que la ventana pasa de "hasta que la otra persona escriba" a "un mensaje".
+Queda sin hacer la otra salida posible: que el emisor cuya racha de mensajes no se abre nunca
+vuelva por su cuenta a la época 0.
 
 Las otras invariantes que la prueba fija y que sí se cumplieron: nada se abre como otro mensaje
 (ni entre sentidos, ni entre épocas, ni entre linajes), ninguna terna `(linaje, época, N)` se

@@ -726,11 +726,12 @@ Usar contactos desechables si se puede.
      escribe a B y B lo lee. Esto es lo que hace que una sesión rota nunca sea permanente, y
      es la propiedad que más conviene ver con los ojos.
      **Y lo que hay que mirar además** (lo destapó la prueba de propiedades, ver
-     `DISENO-ratchet.md` §1.9): justo **antes** de que B escriba, que A le mande un mensaje. Ese
-     mensaje **se va a perder** —A escribe en el linaje viejo y B descarta lo menor— y en el
-     móvil de A se quedará como enviado sin que B lo vea nunca. Es el comportamiento esperado
-     hoy, no un fallo de la prueba; sirve para medir cuánto dura la ventana y decidir si merece
-     la pena arreglarla.
+     `DISENO-ratchet.md` §1.9): justo **antes** de que B escriba, que A le mande **dos**
+     mensajes seguidos. Lo esperado con el reengache del 10 sep 2026: **el primero se pierde**
+     (A escribe en el linaje viejo y B descarta lo menor) pero en el Diagnóstico de B debe salir
+     `↔ reengache enviado a …`, y **el segundo mensaje de A tiene que llegar** sin que B haya
+     escrito nada a mano. Si el segundo también se pierde, el reengache no está funcionando en
+     el móvil real y eso sí es un fallo.
 6. - [ ] **Los mensajes de antes se siguen leyendo.** Subir de una versión anterior (no
      reinstalar): el historial previo debe seguir legible y el Diagnóstico debe registrar
      `🗄 historial convertido: N mensaje(s)` una sola vez.

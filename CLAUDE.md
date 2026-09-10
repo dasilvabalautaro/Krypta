@@ -1125,6 +1125,32 @@ policy still say the key does not change over time, which remains true for every
 today, and understating protection is the safe direction to be wrong in — that text moves when the
 live test passes, not before.
 
+**The ratchet under chaos, and the two things it found (10 Sep 2026).** `RatchetPropertyTest`
+draws random sequences of sends, out-of-order deliveries, drops, duplicates and state losses from
+fixed seeds and pins what must never happen: nothing opens as another message (across directions,
+epochs or lineages), no `(lineage, epoch, N)` triple ever repeats for a sender — the observable
+form of "no message key or nonce is ever reused" — epochs never drift more than one apart, and
+after the chaos the conversation recovers **within one round**. Failures print the seed and the
+action script, because a property test that fails without the sequence is useless. It found two
+things on its first runs, both in `DISENO-ratchet.md` §1.9: (a) **an epoch-0 message can be
+replayed** — that epoch is re-derivable from the shared secret, so once its chain is evicted from
+the retired ones `openOld` re-derives it and opens the message again; replay protection therefore
+rests on the **pre-decrypt dedup** (`RoomRatchetStore`, 500 digests per conversation), which is a
+security component with a finite window, not a convenience; and (b) **the lineage rule lost
+messages silently** after a reinstall: the peer who hasn't noticed keeps writing in the old
+lineage and everything he sends is dropped (and acked) until the reinstalled side writes.
+(b) was fixed the same day with `ChatService.rehook`: the receiver that *fails* to open a
+ratchet-looking envelope knows the other side is behind, so it sends the `V` capability envelope
+back — reusing an envelope older clients already ignore — **launched off the mailbox path** (that
+path is synchronous; the ack waits on `onReceived` returning) and capped at one per contact every
+5 minutes, since any contact could feed garbage on purpose. The message that triggered it is
+still lost; the window shrinks from "until the other person writes" to one message. **Test-harness
+gotcha worth keeping**: work launched into `runTest`'s `backgroundScope` did **not** run under
+`advanceUntilIdle()` here — three wrong hypotheses went by before measuring it with a throwaway
+probe instead of reasoning about it; those tests now inject a
+`CoroutineScope(Dispatchers.Unconfined)` and put the service's own diagnostics log in the failure
+message, which is what finally distinguished "not called" from "called and failed".
+
 **A crash the ratchet work surfaced (9 Sep 2026): Krypta started once and never again.**
 `System.loadLibrary("sqlcipher")` sat *inside* `DatabaseEncryption.encryptInPlace`, **after its
 early return**. On the launch that converted the plaintext DB it loaded; on every launch after
