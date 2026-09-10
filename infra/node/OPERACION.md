@@ -14,8 +14,34 @@ por hecho que ya está montado.
 | PeerID | `12D3KooWBwcbXveKDSf4LrH9DYnwMDAyagkzh2uPYZyWkeoVMuk5` |
 
 Es la **primera línea** de `Libp2pNode.DEFAULT_BOOTSTRAP`, o sea el nodo primario: `MailboxPut`
-deposita en el primero vivo. El Mac y el PC Windows quedan de respaldo, y como el bridge retira
+deposita en el primero vivo. El respaldo es el VPS de Dallas (segunda línea desde el 10 sep
+2026; antes lo eran el Mac y el PC Windows), y como el bridge retira
 y escucha de *todos* los nodos, que este se caiga no corta la entrega — solo la empeora.
+
+> **Nodo de respaldo en Dallas (desde el 10 sep 2026).** InterServer, `163.245.192.235`,
+> PeerID `12D3KooWQf7ZM3kXxc76XEN3Aj8gxhYorSKViPEGF4zepQuMQVCM`, Ubuntu 24.04.4 (1 vCPU /
+> 1,9 GB). Todo lo de esta guía vale igual para él (`ssh root@163.245.192.235`, mismas rutas,
+> mismo `deploy-vps.sh`), con tres diferencias: **no hay rsyslog** (el log solo está en el
+> journal), **`ufw` sí está activo** (22/tcp, 4001/tcp+udp, 443/tcp), y el SSH **no acepta
+> contraseña** (`/etc/ssh/sshd_config.d/00-krypta-hardening.conf`) — así que si se pierde la
+> clave de la Mac la única entrada es la consola del panel de InterServer. `node.key`
+> respaldada en `~/keystores/krypta/krypta-node-dallas.key`. Es la **segunda línea** de
+> `DEFAULT_BOOTSTRAP` desde el 10 sep 2026, en lugar del Mac y el Windows. Detalles en la
+> sección «Nodo de respaldo» del [README](README.md).
+
+> **Caddy en los dos VPS (desde el 10 sep 2026)** sirve `wss/443` para redes que solo dejan
+> salir por ese puerto: `krypta-sp.neto.chat` y `krypta-dal.neto.chat` (registros A en
+> Cloudflare con **nube gris** — si alguien activa el proxy, el certificado deja de renovarse y
+> el tráfico vuelve a pasar por Cloudflare). Se reinstala con `deploy-caddy.sh`. Comprobaciones:
+>
+> ```bash
+> systemctl status caddy
+> journalctl -u caddy -n 30 --no-pager      # renovaciones del certificado; nunca IPs de clientes
+> echo | openssl s_client -connect krypta-sp.neto.chat:443 -servername krypta-sp.neto.chat 2>/dev/null | openssl x509 -noout -enddate
+> ```
+>
+> Caddy escucha también en el 80, pero `ufw` lo cierra al exterior a propósito: el certificado
+> se obtiene por TLS-ALPN en el 443. No abras el 80.
 
 ## Qué hay en la máquina
 
@@ -51,6 +77,8 @@ systemctl status krypta-node
 journalctl -u krypta-node -n 50 --no-pager    # últimas 50 líneas
 journalctl -u krypta-node -f                  # en vivo, como un tail -f
 journalctl -u krypta-node --since "1 hour ago"
+# En Ubuntu el journal es persistente y rsyslog copia cada línea a /var/log/syslog: lo que el
+# nodo imprime se queda en disco. Por eso no imprime identificadores de usuario (ver abajo).
 
 # ¿Hay correo pendiente en el buzón?
 find /var/lib/krypta/mailbox -type f | wc -l   # nº de sobres sin retirar
@@ -133,16 +161,47 @@ nueva y el PeerID cambia.
 sobrescribir lo que toques. Si hay que cambiar algo de `/var/lib/krypta/`: `systemctl stop
 krypta-node`, el cambio, y `systemctl start krypta-node`.
 
+**El log no debe contener identificadores de usuario.** Es lo que promete la §5 de la política
+de privacidad («no se guarda ningún registro más allá de eso»), y aquí «registro» incluye el
+journal. Hasta el 10 sep 2026 no se cumplía: el handler de `/krypta/msg` imprimía el PeerID
+remitente de cada mensaje directo, y la máquina tenía **12 de esas líneas desde el 7 ago**, en
+el journal y en `/var/log/syslog`. Ahora el nodo solo imprime el arranque (su propio PeerID y
+sus direcciones) y errores fatales; `-debugmsg` recupera el volcado antiguo, **solo para un nodo
+local de pruebas**. Si algún día añades una línea de log, que no lleve PeerIDs, IPs ni
+etiquetas de buzón — `TestMsgHandlerNoRegistraIdentificadores` cubre el caso que ya pasó.
+Comprobación rápida en la máquina:
+
+```bash
+journalctl -u krypta-node --no-pager | grep -oE "12D3KooW[1-9A-Za-z]{44}" | sort -u   # solo el del propio nodo
+```
+
 ## Pendientes en esta máquina
 
-- **Topes finitos al relay.** Hoy [main.go](main.go) usa
-  `EnableRelayService(relayv2.WithInfiniteLimits())` — necesario porque el tope por defecto
-  (128 KiB / 2 min) cortaba las llamadas a los ~20 s, pero regala ancho de banda a cualquier
-  nodo libp2p de internet, y ahora con factura de por medio. Al dimensionarlos hay que contar
-  con los caudales reales: **43 MB/hora** una llamada de voz relayada, **225 MB/hora** una de
-  vídeo. Y recordar que el tope por circuito no es por sí solo protección contra abuso: quien
-  quiera abusar abre muchos circuitos, así que lo que acota el gasto son los límites de
-  `Resources` (máximo de reservas y circuitos, y reservas por peer/IP).
-- **`net.core.rmem_max` bajo.** Al arrancar, quic-go avisa *"failed to sufficiently increase
-  receive buffer size (was: 208 kiB, wanted: 7168 kiB, got: 416 kiB)"*. No bloquea nada, pero
-  puede limitar el rendimiento de QUIC bajo carga. Se arregla con un sysctl.
+- **Registros antiguos con PeerIDs.** El binario del 10 sep se desplegó ese mismo día y
+  `/var/log/syslog*` **ya está purgado** (12 líneas en `syslog`, `syslog.1` y `syslog.4.gz`;
+  permisos `syslog:adm 640` conservados). Queda **el journal**, que no permite borrar líneas
+  sueltas: se decidió **dejarlo rotar** en vez de vaciarlo entero, porque eso también borraría
+  los logs de SSH y del sistema, que son los que sirven para detectar una intrusión. Sin límite
+  de antigüedad journald solo borraba al llegar al 10 % del disco (se habrían ido hacia
+  noviembre), así que desde el 10 sep `deploy-vps.sh` fija
+  `/etc/systemd/journald.conf.d/krypta-retencion.conf` (`MaxRetentionSec=30day`,
+  `MaxFileSec=1week`) y el journal se rotó a mano ese día: la última línea con PeerID es del
+  6 sep y el fichero que la contiene acaba el 10 sep, así que **se borra hacia el 10 oct 2026**.
+  Si hubiera que repetir la purga del syslog, el detalle que importa es el **HUP a rsyslog**:
+  reescribir el fichero crea uno nuevo, y sin HUP rsyslog sigue escribiendo en el viejo, ya
+  borrado.
+  ```bash
+  PAT='message from 12D3KooW'
+  for f in /var/log/syslog*; do
+    [ "$(zgrep -c "$PAT" "$f")" = 0 ] && continue
+    case "$f" in *.gz) zcat "$f" | grep -v "$PAT" | gzip > "$f.p" ;; *) grep -v "$PAT" "$f" > "$f.p" ;; esac
+    chown --reference="$f" "$f.p"; chmod --reference="$f" "$f.p"; mv "$f.p" "$f"
+  done
+  systemctl kill -s HUP rsyslog.service
+  ```
+- ~~**Topes finitos al relay.**~~ Hechos el 8 sep 2026 (8 GiB / 6 h por conexión relayada y
+  cupos de reservas subidos, ver [main.go](main.go)).
+- ~~**`net.core.rmem_max` bajo.**~~ Arreglado el 10 sep 2026: `deploy-vps.sh` escribe
+  `/etc/sysctl.d/99-krypta-quic.conf` (`rmem_max`/`wmem_max` = 7 500 000, el mismo valor que el
+  nodo de Nyx) y quic-go ya no avisa *"failed to sufficiently increase receive buffer size"* al
+  arrancar.

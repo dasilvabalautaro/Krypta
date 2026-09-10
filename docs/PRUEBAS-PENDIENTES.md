@@ -875,6 +875,12 @@ directa (DCUtR) o se queda en relay.
   líneas), apagar el nodo de la Mac (`launchctl unload …chat.neto.krypta.node.plist`),
   enviar con el receptor cerrado → debe salir SENT (buzón del nodo Windows) y notificar al
   abrir; recargar el nodo de la Mac al acabar.
+  **(10 sep) La prueba cambia de nodos**: `DEFAULT_BOOTSTRAP` es ahora São Paulo + Dallas (los
+  domésticos salieron). Pasos: ambos móviles con un APK del 10 sep o posterior y **sin lista
+  guardada en Ajustes** (o con esas dos líneas); con el receptor cerrado, parar São Paulo
+  (`ssh root@216.128.169.83 systemctl stop krypta-node`) y enviar → debe salir SENT por el
+  buzón de Dallas y notificar al abrir el receptor; volver a arrancar São Paulo al acabar
+  (`systemctl start krypta-node`) y comprobar que los dos siguen en `check-nodes.sh`.
   **(23 jul) El intento de prueba con una segunda persona ("Jimena") NO llegó a ejecutarse**:
   el PeerID dado de alta era el **del propio TECNO**, no el de ella. Como `Contact.id` **es**
   el PeerID, el alta hizo `upsert` sobre el contacto de auto-envío que ya existía de las

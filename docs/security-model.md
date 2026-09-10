@@ -164,7 +164,8 @@ No ve el contenido (doble cifrado: Noise + E2EE).
 
 ### 6.4 Concentración de operador
 
-Los tres nodos de `Libp2pNode.DEFAULT_BOOTSTRAP` los opera **la misma persona** (el autor). Eso
+Los dos nodos de `Libp2pNode.DEFAULT_BOOTSTRAP` (VPS en São Paulo y en Dallas, de dos proveedores
+distintos desde el 10 sep 2026) los opera **la misma persona** (el autor). Eso
 significa que, hoy, un solo operador está en posición de observar todo lo anterior para todos
 los usuarios. Es coherente con la decisión de "descentralizar la confianza, no la
 infraestructura" —el operador no puede leer nada— pero **no** con una lectura ingenua de
@@ -175,6 +176,34 @@ nodos** y es editable, así que cualquiera puede levantar el suyo
 ([infra/node/README.md](../infra/node/README.md)) y usarlo, solo o combinado. Falta: que dos
 usuarios que quieran hablar entre sí compartan al menos un nodo, y una guía de "monta tu nodo"
 orientada a usuarios y no a operadores.
+
+### 6.5 Registros del nodo
+
+Lo que un nodo imprime **se queda en disco**: bajo systemd en Ubuntu el journal es persistente
+y rsyslog lo copia a `/var/log/syslog`, y bajo launchd en la Mac va a un `node.log` que no se
+rota. Así que la regla es que **el nodo no emite identificadores de usuario** (PeerIDs, IPs,
+etiquetas de buzón) a su log: solo el arranque y errores fatales.
+
+No siempre fue así. Hasta el 10 sep 2026 el handler de `/krypta/msg` imprimía el PeerID
+remitente y el ciphertext de cada mensaje directo, y el nodo de São Paulo tenía 12 de esas
+líneas guardadas desde el 7 ago — lo que contradecía la política de privacidad. El volcado
+queda tras `-debugmsg`, solo para nodos locales de prueba, y
+`TestMsgHandlerNoRegistraIdentificadores` fija el comportamiento por defecto. Lo que ya estaba
+escrito hay que purgarlo a mano en cada máquina ([OPERACION.md](../infra/node/OPERACION.md)).
+Estado a 10 sep 2026: el VPS ya corre el binario nuevo y su `/var/log/syslog` está purgado; su
+**journal conserva esas líneas hasta que caduquen** —se decidió no vaciarlo entero, porque
+también se perderían los logs de SSH—; con la retención de 30 días que fija ahora
+`deploy-vps.sh`, se borran hacia el 10 oct 2026. Los nodos del Mac y de Windows siguen con el binario anterior,
+y el `node.log` del Mac está sin purgar.
+
+Este es un buen ejemplo de qué es la **confianza operativa**: el diseño decía «nada en disco» y
+la operación decía otra cosa, sin que nadie lo supiera. Se descubrió mirando.
+
+La misma regla vale para **Caddy**, que desde el 10 sep 2026 sirve `wss/443` en los dos VPS: sin
+log de accesos y con un filtro que borra IP, puerto y cabeceras del cliente de cualquier línea de
+error (`infra/node/deploy-caddy.sh`). Comprobado tras tráfico real: la IP de origen no aparece ni
+en su journal ni en `/var/log/syslog`. Y sigue valiendo lo que se dijo arriba: el proveedor del
+VPS puede ver el tráfico de red de la máquina, esto solo evita que el nodo lo escriba.
 
 ---
 
@@ -255,6 +284,14 @@ nodos —buzón, wake, relay con límites finitos e ida y vuelta real— y sale 
 falla, pensado para cron/launchd. Existe porque hasta ahora nadie se enteraba de nada: el 8 sep
 2026 el nodo primario pasó dos días con un binario viejo y se descubrió mirando a mano.
 
+**La vía `wss/443` debilita los límites por IP** (desde el 10 sep 2026). Detrás de Caddy, el nodo
+ve a todos esos clientes llegar desde `127.0.0.1`: libp2p no limita conexiones por IP en loopback,
+y el cupo de 256 reservas de relay por IP se reparte entre todos ellos. Quien quiera saltarse los
+límites por IP puede entrar por el 443. Lo que no cambia son los límites que no dependen de la IP:
+el ritmo y el reparto del buzón van por remitente autenticado, y el relay sigue con sus topes por
+conexión y totales. Para que los usuarios legítimos no acaben ahí, el puente marca la vía
+WebSocket 1 s por detrás de la directa (`dial_ranker.go`).
+
 **Lo que sigue abierto**: no hay lista de control de acceso, ni límite de ritmo en la
 *retirada* del buzón (solo en el depósito), ni alertas automáticas —el chequeo hay que
 programarlo—. Un atacante decidido puede seguir generando carga; lo que ya no puede es **dejar
@@ -309,5 +346,35 @@ escrituras.
   — se siguen leyendo, pero siguen en claro; vaciar el chat los borra.
 - **Alertas** de verdad para el chequeo de nodos (hoy es un script que hay que programar), y
   límite de ritmo también en la retirada del buzón.
-- **Diversidad de operadores**: guía de "monta tu nodo" para usuarios, y una forma cómoda de
-  que dos contactos acuerden qué nodos usan.
+- **Confianza operativa** (hoja de ruta, 10 sep 2026). Hoy el nivel es «aficionado sin
+  transparencia»: un solo operador, sin nada publicado sobre cómo opera. No se sale de ahí
+  imitando el tamaño de Signal, sino haciendo que haga falta confiar menos en el operador y
+  que lo que quede se pueda comprobar. Por orden de impacto:
+  1. **Reducir lo que el nodo sabe**: encender el depósito ciego (`BLIND_DEPOSIT`) en cuanto
+     esté repartida la versión que sabe recibir — con el primario en un proveedor ajeno, un
+     volcado de ese disco es hoy el grafo social con horas —; medir y subir la tasa de
+     conexión directa (la prueba de NAT con dos SIM, nunca hecha), porque cada conexión
+     directa es una conversación que el relay no ve; y rellenar los blobs a tamaños fijos
+     para que el tamaño no delate si es texto, foto o nota de voz.
+  2. **Infraestructura** — *hecho en lo principal el 10 sep 2026*: los nodos caseros (Mac tras
+     Cloudflare Tunnel, PC Windows de uso diario) salieron de `DEFAULT_BOOTSTRAP` y los
+     sustituye un VPS en **otro proveedor** (InterServer, Dallas, EE. UU.), con SSH solo por
+     clave y `ufw` desde antes de desplegar. Sube disponibilidad y seguridad y **saca a
+     Cloudflare del camino** (terminaba el TLS del `wss`: no veía contenido, pero sí IPs,
+     tiempos y volumen de cada usuario) — para los móviles actualizados; los que sigan con la
+     versión anterior siguen pasando por los nodos caseros hasta actualizar. No reduce la
+     concentración de operador: sigue siendo una persona. Logs sin identificadores (§6.5) y
+     `node.key` respaldado fuera de cada máquina, hechos; quedan las alertas reales.
+  3. **Transparencia del cliente**, que es la confianza más grande de todas — quien firma la
+     APK puede leerlo todo, con E2EE o sin él —: código público del cliente y del nodo, builds
+     reproducibles (APK, AAR y binario del nodo) con distribución por F-Droid a medio plazo, y
+     custodia seria de la clave de firma.
+  4. **Una página de operador**: quién opera cada nodo, en qué proveedor y país, qué se
+     registra y cuánto se retiene, qué se hace ante una petición legal, y un informe periódico
+     de peticiones recibidas aunque diga «0».
+  5. **Diversidad de operadores**: guía de «monta tu nodo» para usuarios; que cada contacto
+     comparta sus nodos de buzón preferidos **dentro del E2EE**, para depositar donde elige el
+     destinatario y no donde elige el autor; y algún operador ajeno (una organización de
+     derechos digitales) en la lista por defecto.
+  6. **Largo plazo**: auditoría externa y una entidad legal, para que no haya una sola persona
+     a la que presionar.

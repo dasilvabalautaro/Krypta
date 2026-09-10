@@ -550,6 +550,17 @@ desacoplados y testeables.
   otro (visto en vivo: krypta2 en dial backoff → estado ERROR, pero el buzón retiraba por
   el nodo del Mac). Ahora ≥1 bootstrap conectado = éxito; error solo si fallan todos
   (`TestStartDHTPartialBootstrapFailure`).
+  **Un nodo, varias líneas (10 sep 2026)**: cada nodo de `DEFAULT_BOOTSTRAP` va por
+  `tcp/4001` directo **y** por `wss/443` (Caddy en el VPS, para redes que solo dejan salir por
+  el 443). No son nodos de más: `parseAddrInfos` agrupa por PeerID, y el orden de preferencia
+  lo marca la primera aparición de cada uno. Lo delicado es el **orden de marcado**: el ranker
+  estándar de libp2p cuenta `wss` como TCP y marca antes el puerto más bajo (443 antes que
+  4001), así que los móviles habrían entrado por Caddy — donde el nodo los ve a todos desde
+  `127.0.0.1` y los límites por IP no sirven. El host usa `libp2p.DialRanker(directFirstDialRanker)`
+  (`dial_ranker.go`): ordena por separado directas y WebSocket y pone estas 1 s por detrás de la
+  última directa; si un peer solo tiene WebSocket, se marcan al instante. Go
+  `TestDialRanker*`, incluido uno que fija el comportamiento del ranker estándar para avisar si
+  un día deja de hacer falta.
   Diagnóstico: `onlinePeers`, `wanStatus` (`DISABLED/CONNECTING/CONNECTED/ERROR`) y `log`
   (StateFlow de líneas recientes).
 - `SignalingModule` — `@Binds ISignalingService → SignalingService`.

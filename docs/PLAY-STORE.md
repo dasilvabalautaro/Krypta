@@ -42,6 +42,11 @@ tiene que ser creciente).
 > esa versión solo conoce los dos nodos domésticos. De ahí la 5: es lo que lleva el nodo
 > primario a los usuarios nuevos.
 
+> **10 sep 2026**: `DEFAULT_BOOTSTRAP` pasa a São Paulo + **Dallas** (VPS de InterServer) y
+> saca a los dos nodos domésticos. Solo llega a los usuarios con la **siguiente versión que se
+> suba**; hasta entonces, quien tenga una de Play sigue con la lista vieja, así que el Mac y el
+> Windows no se pueden apagar todavía.
+
 > ⚠️ **Resolver antes de generar la siguiente**: la fila 6 dice "generado", pero el punto de
 > `USE_FULL_SCREEN_INTENT` (más abajo) dice que **Play lo reclamó *al subir la 1.5***. Ambas
 > cosas no pueden ser ciertas. Si la 6 llegó a Play, la próxima subida tiene que ser
@@ -308,8 +313,11 @@ incumplimiento afecta a **visibilidad y capacidad de publicación**, no es un re
       justo lo que pasó ese día sin que nadie lo notara.
 - [ ] **Programarlo** (cron en el VPS o launchd en la Mac) y decidir a dónde va el aviso: el
       script está, pero mientras no se lance solo, sigue habiendo que acordarse.
-- [ ] **Redesplegar los tres nodos**: acumulan ya dos tandas de cambios sin desplegar — la
-      lectura acotada del 6 sep (Mac y Windows) y todo el anti-abuso del 8 sep (los tres).
+- [x] **Nodos de `DEFAULT_BOOTSTRAP` al día** (10 sep 2026): São Paulo redesplegado con el
+      binario actual, y el respaldo pasa a ser un VPS nuevo en Dallas desplegado con ese mismo
+      binario; los dos pasan `check-nodes.sh` entero. Los domésticos (Mac y Windows) salen de
+      la lista y **siguen con el binario viejo**: solo importan mientras queden móviles con la
+      versión anterior.
 
 ## Pruebas en vivo que no publicaría sin cerrar
 

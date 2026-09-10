@@ -180,15 +180,20 @@ cp infra/node/chat.neto.krypta.node.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/chat.neto.krypta.node.plist
 launchctl start chat.neto.krypta.node
 cat ~/krypta/node.log     # ver el PeerID
+# node.log no se rota nunca. Si viene de un binario anterior al 10 sep 2026, trae el PeerID
+# de cada remitente que habló /krypta/msg con el nodo ("message from 12D3KooW…"): bórralas con
+#   sed -i '' '/message from 12D3KooW/d' ~/krypta/node.log
 ```
 
 ## Nodo primario en un VPS Linux (systemd) — recomendado para producción
 
 > **Estado (7 ago 2026): DESPLEGADO.** Vultr São Paulo, `216.128.169.83`, hostname
-> `krypta-node-saopaulo`, Ubuntu 24.04, plan compartido 2 GB. PeerID
+> `krypta-node-saopaulo`, Ubuntu 24.04, plan compartido de **1 vCPU / 1 GB** (954 MB útiles,
+> medido el 10 sep 2026; aquí ponía «2 GB» por error — y le sobra: el proceso usa ~30 MB). PeerID
 > `12D3KooWBwcbXveKDSf4LrH9DYnwMDAyagkzh2uPYZyWkeoVMuk5`. Ya es la **primera línea** de
 > `Libp2pNode.DEFAULT_BOOTSTRAP` (nodo primario, por `/ip4/…/tcp/4001` directo — sin
-> Cloudflare); el Mac Catalina y el PC Windows quedan de respaldo. Validado con las cuatro
+> Cloudflare); el respaldo es el VPS de Dallas desde el 10 sep 2026 (antes lo eran el Mac
+> Catalina y el PC Windows, ver «Nodo de respaldo»). Validado con las cuatro
 > sondas de abajo: buzón, wake, ciclo completo y latencia **p50 = 107 ms / p95 = 119 ms**
 > desde La Paz, frente a los 146–163 ms que daban los nodos domésticos vía Cloudflare.
 >
@@ -213,10 +218,10 @@ cat ~/krypta/node.log     # ver el PeerID
 > permisos `600`) **antes** de arrancar el servicio; si el servicio arranca sin ella, se
 > genera una identidad nueva y el PeerID cambia.
 >
-> Pendiente en esta máquina: (a) `net.core.rmem_max` bajo → quic-go avisa
-> "failed to sufficiently increase receive buffer size" al arrancar (no bloquea, puede
-> limitar el throughput QUIC bajo carga); (b) poner topes finitos al relay antes de abrirlo
-> al público (ver el aviso de tráfico arriba).
+> Ya no quedan pendientes de los que aparecían aquí: los **topes finitos del relay** están
+> desde el 8 sep 2026, y el 10 sep `deploy-vps.sh` pasó a fijar el **`sysctl` de QUIC**
+> (quic-go ya no avisa del buffer al arrancar) y una **retención de 30 días en el journal**.
+> Redesplegado ese día con las cuatro sondas en verde (p50 = 103 ms).
 
 ### Por qué un VPS cambia las cosas (no es solo uptime)
 
@@ -241,11 +246,92 @@ disco sobran**. Lo que importa de verdad:
   a los 146–180 ms medidos en la sonda de latencia. Para Latinoamérica, São Paulo o Miami;
   un VPS europeo mete ~200 ms extra y se nota en llamada.
 - **Tráfico**: una llamada de voz relayada son ~6 KB/s por sentido ≈ **43 MB/hora** de salida;
-  una videollamada a 250 kbps ≈ **225 MB/hora**. Con los cupos habituales (1–20 TB/mes) el
-  uso legítimo es despreciable. **El riesgo es el relay abierto**: hoy
-  `EnableRelayService(relayv2.WithInfiniteLimits())` (ver [main.go](main.go)) regala ancho de
-  banda a cualquier nodo libp2p de internet. Antes de exponerlo con factura por tráfico, pon
-  topes finitos o una ACL.
+  una videollamada a 250 kbps ≈ **225 MB/hora** sumando ambos sentidos. Con los cupos
+  habituales (1–20 TB/mes) el uso legítimo es despreciable: el primario movió ~2,9 GB en 34
+  días. El relay tiene **topes finitos desde el 8 sep 2026** (8 GiB / 6 h por conexión, ver
+  [main.go](main.go)), pero acotan cada conexión, no el total: con facturación por GB, pon una
+  alerta de gasto en el panel.
+
+### Nodo de respaldo (desplegado y en `DEFAULT_BOOTSTRAP` desde el 10 sep 2026)
+
+Es para **sustituir a los nodos domésticos** (Mac tras Cloudflare y PC Windows). No es un nodo
+en reserva: los móviles reservan relay, retiran buzón y mantienen wake con **todos** los nodos
+de la lista, así que tiene tráfico real desde el primer día. Hay que exigirle lo mismo que al
+primario, y además:
+
+- **Otro proveedor que Vultr** (otra región de Vultr da disponibilidad, no diversidad: misma
+  cuenta, misma empresa, mismo punto de presión legal) y, si la latencia lo permite, **otra
+  jurisdicción que Brasil**.
+- **Latencia desde La Paz de p50 ≤ ~150 ms**, medida antes de pagar.
+- **Virtualización completa (KVM/Hyper-V)**, no contenedor: hace falta el `sysctl` de QUIC.
+- **Condiciones de uso que permitan relay/P2P**, confirmadas por escrito si son ambiguas.
+- **2FA en la cuenta y sin backups automáticos del proveedor** (copiarían el buzón); solo
+  `node.key`, a mano y fuera de la máquina.
+
+**Contratado: InterServer, Dallas (Texas)** — `163.245.192.235`, hostname del proveedor
+`vps3616309.trouble-free.net`, AS26666. Verificado el 10 sep 2026, antes de desplegar nada:
+
+| | Resultado |
+|---|---|
+| Máquina | KVM, Ubuntu 24.04.4, 1 vCPU / 1,9 GB / 38 GB, IPv4 pública propia (sin NAT), **sin IPv6** |
+| Ubicación | **Dallas**: 1,3 ms a `tx-us-ping.vultr.com` frente a 38,7 ms a `nj-us-ping.vultr.com`, y la ruta pasa por `switch15-dfw1.trouble-free.net`. La geolocalización por IP no sirve para esto |
+| Latencia desde La Paz | ICMP 131 ms de media, 0 % de pérdida (São Paulo: ~104 ms) |
+| Puertos entrantes | **UDP 4001 y TCP 4001 llegan** desde fuera (listener temporal en el VPS, paquete enviado desde la Mac): el proveedor no los filtra |
+| SSH (al contratar) | Entraba con la clave `id_ed25519` de la Mac, pero con **contraseña y login de root habilitados** (`50-cloud-init.conf`): a los 4 minutos de encenderse ya había 14 intentos fallidos desde 2 IPs. Corregido antes de desplegar (abajo) |
+| Firewall (al contratar) | `ufw` no instalado; actualizaciones automáticas activas |
+
+Dos correcciones a lo que se evaluó antes de contratar: el nodo de Nyx que se usó como
+referencia **también está en Dallas**, no en Secaucus como dicen su nombre y sus documentos, y
+la reseña según la cual Dallas no ofrece KVM era falsa. Consecuencia: este respaldo y el segundo
+nodo de Nyx **comparten centro de datos**, no solo proveedor — un corte ahí tumba los dos, cosa
+que para la redundancia *de Krypta* no importa (el primario está en Vultr São Paulo) pero sí
+para el acoplamiento entre productos.
+
+Lo que sigue en pie de la evaluación: VPS aparte de la caja de Nyx (ambos usan el 4001); leer sus
+condiciones sobre P2P/proxy (su web no se deja leer de forma automatizada) y qué pasa al pasarse
+de tráfico; y que no publica informe de transparencia, cosa que compensa el depósito ciego, no el
+proveedor.
+
+**Desplegado el mismo día**, en este orden:
+
+1. **SSH solo con clave**: `/etc/ssh/sshd_config.d/00-krypta-hardening.conf`
+   (`PasswordAuthentication no`, `KbdInteractiveAuthentication no`,
+   `PermitRootLogin prohibit-password`). El prefijo `00-` es lo que importa: en `sshd_config.d`
+   gana el **primer** valor leído, y `50-cloud-init.conf` lo activa. Validado con `sshd -t`
+   antes de recargar, y comprobado desde fuera que la clave entra y que un intento solo con
+   contraseña recibe `Permission denied (publickey)`.
+2. **`ufw`**: entrada denegada por defecto; abiertos 22/tcp, 4001/tcp, 4001/udp y 443/tcp (la
+   regla de SSH se añade y se comprueba **antes** de activar). `allow` y no `limit` en el 22:
+   `deploy-vps.sh` abre varias conexiones seguidas y `limit` corta a partir de 6 en 30 s; sin
+   contraseña, la fuerza bruta ya no tiene por dónde entrar. El 8081 (ws en claro) queda
+   cerrado desde fuera, verificado.
+3. **`deploy-vps.sh root@163.245.192.235`**: PeerID
+   **`12D3KooWQf7ZM3kXxc76XEN3Aj8gxhYorSKViPEGF4zepQuMQVCM`**, `sysctl` de QUIC y retención del
+   journal aplicados, sin aviso de buffer al arrancar. Sondas en verde: buzón, ciclo completo,
+   wake, y latencia **p50 = 136 ms por TCP / 130 ms por QUIC** (la de QUIC prueba el UDP de
+   punta a punta a través de `ufw`).
+4. **`node.key` respaldada** en `~/keystores/krypta/krypta-node-dallas.key` (`600`), mismo
+   SHA-256 que en el VPS.
+
+Multiaddrs:
+
+```
+/ip4/163.245.192.235/tcp/4001/p2p/12D3KooWQf7ZM3kXxc76XEN3Aj8gxhYorSKViPEGF4zepQuMQVCM
+/ip4/163.245.192.235/udp/4001/quic-v1/p2p/12D3KooWQf7ZM3kXxc76XEN3Aj8gxhYorSKViPEGF4zepQuMQVCM
+```
+
+**Sustituye a los nodos domésticos desde el 10 sep 2026**: `Libp2pNode.DEFAULT_BOOTSTRAP` pasa a
+ser São Paulo + Dallas, sin el Mac ni el Windows. Tres consecuencias:
+
+- **Solo llega a quien actualice.** Los móviles con una versión anterior siguen con la lista
+  vieja (São Paulo + Mac + Windows), y los que guardaron una lista propia en Ajustes la
+  conservan aunque actualicen: esos tienen que editarla a mano.
+- **No apagues el Mac ni el Windows todavía.** Mientras quede algún móvil con la lista vieja,
+  puede depositar en ellos cuando São Paulo no responda, y apagarlos con sobres pendientes los
+  perdería. Retíralos cuando el parque esté actualizado, y antes comprueba que su buzón está
+  vacío.
+- **La prueba de failover con dos móviles cambia**: ahora es apagar São Paulo y comprobar que la
+  entrega sigue por Dallas (ver PRUEBAS-PENDIENTES).
 
 ### Despliegue (un comando)
 
@@ -279,11 +365,42 @@ Cloudflare (el túnel no lleva UDP, así que QUIC ni se usa). En un VPS hay que 
 el multiaddr de bootstrap debe ser estable entre reinicios. De ahí la bandera `-quicport`
 (default `0` = comportamiento anterior); la unidad systemd pasa `-quicport 4001`.
 
-### TLS en 443 (opcional pero recomendado)
+### TLS en 443 (desplegado en los dos VPS, 10 sep 2026)
 
-Con IP pública el camino simple es TCP/QUIC en 4001 y listo. Aun así conviene dejar
-`wss/443` como plan B: hay wifis públicas y redes corporativas que bloquean todo lo que no
-sea 443. Lo más corto es **Caddy** (Let's Encrypt automático) delante del `ws` en claro:
+Con IP pública el camino simple es TCP/QUIC en 4001. Pero hay wifis públicas y redes
+corporativas que bloquean todo lo que no sea 443, y al retirar los nodos domésticos —los únicos
+con `wss`— esos usuarios se habrían quedado **sin ningún nodo**. Así que los dos VPS sirven
+también `wss/443` con **Caddy** delante del `ws` local:
+
+| Nodo | Nombre (A, nube gris) | Línea en `DEFAULT_BOOTSTRAP` |
+|---|---|---|
+| São Paulo | `krypta-sp.neto.chat` → `216.128.169.83` | `/dns4/krypta-sp.neto.chat/tcp/443/wss/p2p/12D3KooWBwcb…Muk5` |
+| Dallas | `krypta-dal.neto.chat` → `163.245.192.235` | `/dns4/krypta-dal.neto.chat/tcp/443/wss/p2p/12D3KooWQf7Z…QVCM` |
+
+Se instala con [`deploy-caddy.sh`](deploy-caddy.sh) (`bash infra/node/deploy-caddy.sh
+root@<IP> <dominio>`), que comprueba antes que el nombre resuelve a la IP del VPS — con la nube
+**naranja** resolvería a Cloudflare, el tráfico volvería a pasar por ellos y el WebSocket se
+reciclaría. Lo que hace y por qué:
+
+- **Repositorio oficial de Caddy** (2.11.4 al instalar), no el paquete de Ubuntu.
+- **Certificado por TLS-ALPN en el 443** (`disable_http_challenge`): el 80 sigue cerrado en `ufw`.
+  Let's Encrypt, renovación automática (el primero caduca el 9 dic 2026).
+- **Sin log de accesos** y el log general con un filtro que borra IP, puerto y cabeceras del
+  cliente: la misma regla de §6.5 del modelo de seguridad. Verificado tras tráfico real por
+  `wss`: la IP de origen no aparece ni en el journal de Caddy ni en `/var/log/syslog`.
+- Comprobado con `check-nodes.sh` sobre las líneas `wss`: buzón, wake, relay, ida y vuelta y
+  depósito ciego pasan por Caddy.
+
+**Dos consecuencias que hay que conocer.** (1) **El orden de marcado**: libp2p trata `wss` como
+TCP y, dentro de TCP, marca primero el **puerto más bajo** — 443 antes que 4001. Sin corregirlo,
+los móviles habrían preferido pasar por Caddy. El puente usa un ranker propio
+([`dial_ranker.go`](../../native-bridge/libp2p/dial_ranker.go)) que retrasa la vía WebSocket 1 s
+por detrás de la directa, así que `wss` solo entra cuando el 4001 no conecta. (2) **Detrás de
+Caddy todos llegan desde `127.0.0.1`**: libp2p no limita conexiones por IP en loopback, y el
+relay reparte **un solo** cupo de 256 reservas por IP entre todos los usuarios que entren por
+`wss`. Vale para una vía de respaldo; no valdría si fuese la principal.
+
+La configuración que escribe el script, para referencia:
 
 ```caddyfile
 krypta3.tudominio.com {
@@ -324,8 +441,10 @@ dejando el de Windows de secundario. La Mac Catalina puede jubilarse a máquina 
 
 > **Estado (16 jul 2026): DESPLEGADO.** Corre en el PC Windows del autor, expuesto como
 > `krypta2.neto.chat`; PeerID `12D3KooWNGNzFsntPcabJ3DxmYKuXzSD6skeTaeepsnbntc6JTEm`
-> (verificado con las sondas de buzón/wake desde la Mac). Su multiaddr ya viene de serie
-> en `Libp2pNode.DEFAULT_BOOTSTRAP`. Falta la prueba de failover con 2 móviles (Fase C).
+> (verificado con las sondas de buzón/wake desde la Mac). **Retirado de
+> `Libp2pNode.DEFAULT_BOOTSTRAP` el 10 sep 2026**, junto con el Mac: los sustituye el VPS de
+> Dallas (ver «Nodo de respaldo»). Sigue encendido mientras queden móviles con la versión
+> anterior, que aún lo usan.
 
 El nodo es Go puro: para Windows basta **cross-compilar un `.exe` y ejecutarlo** (no hay
 que instalar Go en el PC). Binario ya compilado (x64):

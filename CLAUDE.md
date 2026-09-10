@@ -156,7 +156,8 @@ no-Docker deploy guide (launchd) in [infra/node/README.md](infra/node/README.md)
 `krypta-node.service`: systemd, `Restart=always`, `LimitNOFILE=65535`; idempotent, keeps
 `node.key` so the PeerID survives redeploys). It is now the **first line** of
 `Libp2pNode.DEFAULT_BOOTSTRAP` (primary), reached by **direct `/ip4/…/tcp/4001` — no
-Cloudflare**, with the Mac and Windows home nodes demoted to **backup**: the bridge puts to
+Cloudflare**, with the Mac and Windows home nodes demoted to **backup** (and on 10 Sep 2026 replaced
+altogether by an InterServer VPS in Dallas, see below): the bridge puts to
 the first live node and fetches/listens on *all* of them, so any single node dying (the VPS
 included) doesn't stop delivery. Validated live from the dev Mac before promotion: mailbox,
 wake, a full round-trip (`TestMailboxRoundTripAgainstLiveNode`, added the same day: A puts →
@@ -165,10 +166,43 @@ exercises the node's non-spoofable-sender property against production) and laten
 **p50 = 107 ms / p95 = 119 ms** from La Paz vs. 146–163 ms through Cloudflare. Provider note:
 **DigitalOcean has no South American region at all** (NYC, SFO, Toronto, Atlanta, Richmond,
 Kansas City, Amsterdam, London, Frankfurt, Singapore, Bangalore, Sydney), and for a
-voice/video relay the region outranks the brand — hence Vultr. Open items on that box:
-`net.core.rmem_max` is low (quic-go logs "failed to sufficiently increase receive buffer
-size" at startup — harmless, may cap QUIC throughput under load), `node.key` still needs an
-off-box copy, and the relay needs finite caps before going public. Both home nodes were
+voice/video relay the region outranks the brand — hence Vultr. Its early open items are
+closed: `node.key` backed up off-box (8 Aug), finite relay caps (8 Sep), and — since 10 Sep —
+`deploy-vps.sh` sets the QUIC `sysctl` (`rmem_max`/`wmem_max` = 7 500 000, so quic-go no longer
+warns about the receive buffer) plus a 30-day journal retention. The box is **1 vCPU / 1 GB**,
+not 2 GB as the docs used to say. A **backup VPS** to replace the two home nodes was bought
+and **deployed 10 Sep**: InterServer **Dallas**, `163.245.192.235`, PeerID
+`12D3KooWQf7ZM3kXxc76XEN3Aj8gxhYorSKViPEGF4zepQuMQVCM` (KVM, 1 vCPU / 1.9 GB, IPv4 only). Hardened
+before deploying — SSH key-only via `sshd_config.d/00-krypta-hardening.conf` (the `00-` prefix
+matters: first value wins and `50-cloud-init.conf` enables passwords; 14 brute-force attempts
+had already arrived in its first 4 minutes) and `ufw` (22, 4001/tcp+udp, 443). Probes green, p50
+136 ms TCP / 130 ms QUIC; `node.key` backed up to `~/keystores/krypta/krypta-node-dallas.key`.
+**It replaced the two home nodes in `DEFAULT_BOOTSTRAP` the same day**, which is now São
+Paulo + Dallas only (`check-nodes.sh` reads the constant, so it follows automatically). This only
+reaches phones on a newer build, and a phone with a saved bootstrap pref keeps its own list — so
+the Mac and Windows nodes must **stay up** (and be drained) until older clients are gone. The
+two-phone failover test is now "stop São Paulo, deliver via Dallas" (PRUEBAS-PENDIENTES).
+**Removing the home nodes also removed the only `wss/443` path** (they were the Cloudflare-tunnel
+ones), stranding users on networks that only allow 443. Fixed the same day **without a tunnel**:
+DNS A records in Cloudflare with the proxy **off** (gray cloud) — `krypta-sp.neto.chat`,
+`krypta-dal.neto.chat` — and **Caddy** on both VPS in front of the local `ws` (installed by
+`infra/node/deploy-caddy.sh`: official Caddy repo, cert via TLS-ALPN so port 80 stays closed, no
+access log and a log filter deleting client IP/port/headers — verified the source IP is absent from
+Caddy's journal and syslog after real wss traffic). Each node now appears **twice** in
+`DEFAULT_BOOTSTRAP` (tcp/4001 lines first, then wss/443); that's safe because the bridge groups
+lines by PeerID. **Gotcha that needed an AAR change**: go-libp2p's default dial ranker treats `wss`
+as TCP and dials the **lowest port first**, so 443 beat 4001 and phones would have gone through
+Caddy — where the node sees everyone as `127.0.0.1` (libp2p doesn't limit loopback per IP, and the
+relay's 256-reservations-per-IP cap becomes shared). `native-bridge/libp2p/dial_ranker.go` adds
+`libp2p.DialRanker(directFirstDialRanker)`: direct and WebSocket addrs ranked separately, WebSocket
+1 s after the last direct dial (immediately if a peer has only WebSocket). Go `TestDialRanker*`
+caught a wrong first version (it only delayed wss, leaving tcp 250 ms behind). Verified live on
+the TECNO with the regenerated AAR: after a cold start it holds `tcp/4001` connections to both VPS
+and none through Caddy (checked with `ss` on each box). The wss path still
+weakens per-IP limits for anyone who deliberately uses it — accepted for a fallback, noted in
+`security-model.md` §8. Located by RTT, not geo-IP (1.3 ms to Vultr's Dallas ping host vs 38.7 ms to NJ) —
+which also showed Nyx's "Secaucus" node is in fact in Dallas, the same datacenter. Details in
+[infra/node/README.md](infra/node/README.md) "Nodo de respaldo". Both home nodes were
 single points of failure for the mailbox/wake/relay of every user, which is why the VPS was
 the intended primary — see [docs/PLAY-STORE.md](docs/PLAY-STORE.md).
 A public IP also unlocks: real QUIC (better DCUtR, less relay traffic) and no Cloudflare
@@ -1100,6 +1134,21 @@ is now the only way `DatabaseModule` gets one. Regression test `SqlCipherTest` (
 the real `UnsatisfiedLinkError` against the pre-fix code — and the app was re-verified live on the
 TECNO: it launches, the conversation list renders with both contacts and their decrypted previews,
 and the status reads "conectado".
+
+**The node's log was keeping user identifiers (found 10 Sep 2026).** The `/krypta/msg` handler in
+`infra/node/main.go` printed the sender's PeerID and ciphertext of every direct message, and on the
+VPS stdout lands in a **persistent** journal *and* — through rsyslog — `/var/log/syslog`: 12 such
+lines were on disk since 7 Aug, contradicting the privacy policy's "no record is kept". Setting
+journald to volatile would not have fixed it (rsyslog). Fixed at the source: `msgHandler` writes
+nothing unless the new `-debugmsg` flag is passed (local test nodes only); pinned by Go
+`TestMsgHandlerNoRegistraIdentificadores` plus a debug-mode twin so the first can't pass by a broken
+capture. **Rule: a node log line never carries PeerIDs, IPs or mailbox labels.** **Live on the VPS
+since 10 Sep** (redeployed, same PeerID, probes green) and its `/var/log/syslog*` purged, with a
+`HUP` to rsyslog so it reopens the rewritten file. Its **journal was deliberately left to rotate**
+rather than vacuumed (that would also erase SSH/system logs), and with the 30-day retention set the same day
+the old lines age out around **10 Oct 2026**. The Mac and Windows nodes still run the old binary,
+and the Mac's `~/krypta/node.log` (never rotated) is unpurged. The operational-trust roadmap this
+came out of is in `security-model.md` §10.
 
 ## Module structure
 
