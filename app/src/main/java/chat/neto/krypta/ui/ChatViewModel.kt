@@ -263,7 +263,7 @@ class ChatViewModel @Inject constructor(
                 BootstrapResult.INVALID ->
                     _bootstrapError.value =
                         "Multiaddr inválido (uno por línea). " +
-                            "Ej: /dns4/krypta.neto.chat/tcp/443/wss/p2p/<PeerID>"
+                            "Ej: /ip4/216.128.169.83/tcp/4001/p2p/<PeerID>"
                 else -> {
                     _bootstrapError.value = null
                     _bootstrap.value = addr.trim()

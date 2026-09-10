@@ -237,6 +237,9 @@ func newNode(priv crypto.PrivKey, relayAddrs string) (*Node, error) {
 		libp2p.EnableRelay(),        // usa relays para dialar/ser dialado (cliente Relay v2)
 		libp2p.EnableHolePunching(), // DCUtR: tras conectar por relay, intenta upgrade a directo
 		libp2p.NATPortMap(),         // mapea puerto vía UPnP/NAT-PMP si el router lo permite
+		// wss/443 solo si la vía directa no conecta en ~1 s (ver dial_ranker.go): sin esto
+		// libp2p marca antes el 443 que el 4001 y los móviles pasarían por Caddy.
+		libp2p.DialRanker(directFirstDialRanker),
 	}
 	if priv != nil {
 		opts = append(opts, libp2p.Identity(priv))

@@ -364,22 +364,41 @@ class Libp2pNode @Inject constructor(
         /**
          * Nodos bootstrap WAN por defecto (uno por línea), en orden de preferencia —
          * `MailboxPut` deposita en el primero vivo, así que quien esté primero aquí es el
-         * primario. Primero el **VPS de São Paulo** (31 jul 2026): IP pública dedicada, sin
-         * Cloudflare Tunnel de por medio (TCP directo, no `wss`), región cercana a
-         * Latinoamérica para el relay de voz/vídeo — validado con
-         * `TestMailboxFetchAgainstLiveNode`/`TestWakeAgainstLiveNode` antes de entrar aquí.
-         * Los otros dos quedan como **respaldo doméstico**, expuestos vía Cloudflare Tunnel
-         * como `wss` sobre el 443: el Mac (`krypta`) y el PC Windows (`krypta2`). Es
-         * infraestructura compartida (igual para todos los usuarios) y pública, no identidad
-         * de nadie. El bridge retira/escucha de TODOS los nodos (`MailboxFetch`,
-         * `StartWake`), así que la caída de cualquiera —incluido el VPS— no corta la
-         * entrega. Si cambia el PeerID de un nodo (p. ej. se pierde su `node.key`) o el
-         * dominio/IP, actualiza esta constante.
+         * primario. Primero el **VPS de São Paulo** (Vultr, 31 jul 2026): IP pública dedicada,
+         * TCP directo, región cercana a Latinoamérica para el relay de voz/vídeo. Después el
+         * **VPS de respaldo en Dallas** (InterServer, 10 sep 2026): otro proveedor, otro país y
+         * otra región, para que la caída de un proveedor o de un centro de datos no deje sin
+         * buzón, wake ni relay a todo el parque — validado con las sondas de
+         * `check-nodes.sh` (buzón, wake, relay con topes, ida y vuelta, depósito ciego) antes de
+         * entrar aquí.
+         *
+         * Hasta el 10 sep 2026 el respaldo eran **dos nodos domésticos** tras Cloudflare Tunnel
+         * (`wss` sobre el 443): el Mac Catalina (`krypta.neto.chat`) y el PC Windows
+         * (`krypta2.neto.chat`). Salieron porque una máquina de uso diario guardando `node.key`
+         * y el buzón es mucha superficie de ataque, y porque Cloudflare veía la IP, los tiempos
+         * y el volumen de cada usuario. Los móviles con la versión anterior los siguen usando
+         * hasta actualizar, así que **no hay que apagarlos antes** de que el parque se renueve.
+         *
+         * Cada nodo va **dos veces**: por TCP directo al 4001 y por `wss` sobre el 443 (Caddy
+         * delante del `ws` local, con certificado de Let's Encrypt y DNS en nube gris — no pasa
+         * por Cloudflare). El 443 es para redes que solo dejan salir por ahí (WiFi de hotel,
+         * empresa, universidad): al salir los nodos domésticos, que eran los únicos con `wss`,
+         * esos usuarios se habían quedado sin ningún nodo. No son nodos nuevos: el bridge
+         * agrupa las líneas por PeerID (`parseAddrInfos`), así que buzón, wake y relay siguen
+         * viendo dos nodos, y el orden de preferencia lo marca la primera aparición de cada
+         * PeerID — por eso las dos líneas TCP van primero.
+         *
+         * Es infraestructura compartida (igual para todos los usuarios) y pública, no identidad
+         * de nadie. El bridge retira/escucha de TODOS los nodos (`MailboxFetch`, `StartWake`),
+         * así que la caída de cualquiera no corta la entrega. Si cambia el PeerID de un nodo
+         * (p. ej. se pierde su `node.key`) o su IP, actualiza esta constante (o, para la vía
+         * `wss`, basta con cambiar el registro DNS).
          */
         const val DEFAULT_BOOTSTRAP =
             "/ip4/216.128.169.83/tcp/4001/p2p/12D3KooWBwcbXveKDSf4LrH9DYnwMDAyagkzh2uPYZyWkeoVMuk5\n" +
-                "/dns4/krypta.neto.chat/tcp/443/wss/p2p/12D3KooWPTUUREfK1dqiEmppLy3ycyFxCvuCbK6s1TPqaQm2UBog\n" +
-                "/dns4/krypta2.neto.chat/tcp/443/wss/p2p/12D3KooWNGNzFsntPcabJ3DxmYKuXzSD6skeTaeepsnbntc6JTEm"
+                "/ip4/163.245.192.235/tcp/4001/p2p/12D3KooWQf7ZM3kXxc76XEN3Aj8gxhYorSKViPEGF4zepQuMQVCM\n" +
+                "/dns4/krypta-sp.neto.chat/tcp/443/wss/p2p/12D3KooWBwcbXveKDSf4LrH9DYnwMDAyagkzh2uPYZyWkeoVMuk5\n" +
+                "/dns4/krypta-dal.neto.chat/tcp/443/wss/p2p/12D3KooWQf7ZM3kXxc76XEN3Aj8gxhYorSKViPEGF4zepQuMQVCM"
     }
 }
 
