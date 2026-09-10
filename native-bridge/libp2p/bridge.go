@@ -199,6 +199,11 @@ type Node struct {
 
 	mailboxHandler MailboxHandler
 
+	// Servicio mDNS, guardado para poder **pararlo**. Antes era una variable local, así que
+	// una vez encendido no había forma de apagarlo (ni de soltar el MulticastLock del móvil).
+	mdnsMu  sync.Mutex
+	mdnsSvc mdns.Service
+
 	wakeMu      sync.Mutex
 	wakeCancel  context.CancelFunc
 	wakeStreams int      // nº de streams de wake abiertos (multi-nodo: uno por nodo alcanzable)
@@ -324,9 +329,36 @@ func (n *Node) SetPeerHandler(h PeerHandler) { n.peerHandler = h }
 // StartMdns enables LAN peer discovery over mDNS: peers on the same Wi-Fi advertising the
 // same serviceTag are found and auto-connected (no bootstrap/DHT needed). This is Krypta's
 // optional LAN path; WAN discovery still goes through the DHT + rendezvous.
+// Va **apagado de serie** desde el 10 sep 2026 (lo decide la app): anunciarse en la WiFi
+// delata el PeerID a cualquiera que comparta la red. Ver docs/security-model.md §5.1.
 func (n *Node) StartMdns(serviceTag string) error {
 	svc := mdns.NewMdnsService(n.h, serviceTag, &mdnsNotifee{n: n})
-	return svc.Start()
+	if err := svc.Start(); err != nil {
+		return err
+	}
+	n.mdnsMu.Lock()
+	prev := n.mdnsSvc
+	n.mdnsSvc = svc
+	n.mdnsMu.Unlock()
+	// Idempotente: si ya había uno (p. ej. al reactivar), se cierra el viejo en vez de dejar
+	// dos anunciando.
+	if prev != nil {
+		_ = prev.Close()
+	}
+	return nil
+}
+
+// StopMdns deja de anunciarse en la red local. Sin esto, apagar el descubrimiento LAN solo
+// surtía efecto al siguiente arranque del host.
+func (n *Node) StopMdns() error {
+	n.mdnsMu.Lock()
+	svc := n.mdnsSvc
+	n.mdnsSvc = nil
+	n.mdnsMu.Unlock()
+	if svc == nil {
+		return nil
+	}
+	return svc.Close()
 }
 
 type mdnsNotifee struct{ n *Node }

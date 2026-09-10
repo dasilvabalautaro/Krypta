@@ -33,6 +33,15 @@ interface ISignalingService {
     /** Estado del filtro de conexiones, para el diagnóstico. Vacío si no aplica. */
     suspend fun allowedPeersStatus(): String = ""
 
+    /**
+     * ¿Descubrimiento en la red local (mDNS) activado? Por defecto **no**: anunciarse en la
+     * WiFi delata el PeerID a quien comparta la red, y el descubrimiento real es WAN.
+     */
+    suspend fun lanDiscovery(): Boolean = false
+
+    /** Activa o desactiva el descubrimiento en la red local. */
+    suspend fun setLanDiscovery(enabled: Boolean) {}
+
     /** Publica el punto de encuentro diario derivado por HKDF para ser descubierto. */
     suspend fun announce(rendezvous: ByteArray)
 

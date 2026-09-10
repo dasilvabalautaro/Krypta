@@ -228,6 +228,7 @@ fun KryptaApp(
             BackHandler { showSettings = false }
             val backupMessage by viewModel.backupMessage.collectAsState()
             val restoredPeerId by viewModel.restoredPeerId.collectAsState()
+            val lanDiscovery by viewModel.lanDiscovery.collectAsState()
             SettingsScreen(
                 myPeerId = myPeerId,
                 bootstrap = bootstrap,
@@ -239,6 +240,8 @@ fun KryptaApp(
                 onBack = { showSettings = false },
                 onOpenHelp = { showHelp = true },
                 onSetBootstrap = viewModel::setBootstrap,
+                lanDiscovery = lanDiscovery,
+                onSetLanDiscovery = viewModel::setLanDiscovery,
                 onProbeLatency = viewModel::probeCallLatency,
                 onExportBackup = viewModel::exportBackup,
                 onImportBackup = viewModel::importBackup,

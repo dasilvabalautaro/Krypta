@@ -88,9 +88,20 @@ class SignalingService @Inject constructor(
     override suspend fun start() {
         node.start()
         // mDNS es solo un atajo de pruebas en LAN; el descubrimiento WAN real es por DHT +
-        // rendezvous. Si falla (p. ej. en datos móviles, sin interfaz multicast) NO debe
-        // impedir el host ni el arranque del bucle WAN, que es el camino principal de Krypta.
-        runCatching { node.startMdns() }
+        // rendezvous. Va **apagado de serie** desde el 10 sep 2026: anunciarse en la WiFi
+        // delata el PeerID a cualquiera que comparta la red. Si falla (p. ej. en datos
+        // móviles, sin interfaz multicast) NO debe impedir el host ni el arranque del bucle
+        // WAN, que es el camino principal de Krypta.
+        if (node.lanDiscoveryEnabled()) runCatching { node.startMdns() }
+    }
+
+    override suspend fun lanDiscovery(): Boolean = node.lanDiscoveryEnabled()
+
+    override suspend fun setLanDiscovery(enabled: Boolean) {
+        node.setLanDiscovery(enabled)
+        // Surte efecto en el momento, en los dos sentidos: el puente guarda el servicio mDNS
+        // para poder cerrarlo (y soltar el MulticastLock).
+        if (enabled) runCatching { node.startMdns() } else runCatching { node.stopMdns() }
     }
 
     override suspend fun stop() = node.stop()

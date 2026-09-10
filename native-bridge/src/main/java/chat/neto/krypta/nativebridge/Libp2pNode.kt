@@ -70,6 +70,21 @@ class Libp2pNode @Inject constructor(
         settings.edit().putString("bootstrap", addr).apply()
     }
 
+    /**
+     * ¿Descubrimiento en la red local (mDNS) activado? **Por defecto NO** (10 sep 2026).
+     *
+     * Antes se arrancaba siempre, y eso anuncia el PeerID y la dirección local a **toda** la
+     * WiFi: en un café o una oficina, cualquiera que conozca tu PeerID sabe que estás ahí, y el
+     * resto ve un identificador estable. Como el descubrimiento real de Krypta es WAN (DHT +
+     * rendezvous) y esto es un atajo de pruebas en LAN, sale de serie apagado y se enciende a
+     * mano cuando hace falta. Ver `docs/security-model.md` §5.1.
+     */
+    fun lanDiscoveryEnabled(): Boolean = settings.getBoolean("lan_discovery", false)
+
+    fun setLanDiscovery(enabled: Boolean) {
+        settings.edit().putBoolean("lan_discovery", enabled).apply()
+    }
+
     /** PeerID de este dispositivo (derivado de la identidad persistente). */
     fun localPeerId(): String = Bridge.peerIDForIdentity(identity)
 
@@ -187,6 +202,17 @@ class Libp2pNode @Inject constructor(
             }
         }
         node?.startMdns(serviceTag)
+        Unit
+    }
+
+    /**
+     * Deja de anunciarse en la red local y **suelta el `MulticastLock`**, que si no se queda
+     * tomado mientras viva el proceso (consumo de radio para nada).
+     */
+    suspend fun stopMdns() = withContext(Dispatchers.IO) {
+        runCatching { node?.stopMdns() }
+        multicastLock?.let { runCatching { it.release() } }
+        multicastLock = null
         Unit
     }
 

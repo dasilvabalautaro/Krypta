@@ -220,6 +220,11 @@ class ChatViewModel @Inject constructor(
     /** Multiaddr del nodo bootstrap WAN (vacío = solo LAN/mDNS). */
     val bootstrap: StateFlow<String> = _bootstrap.asStateFlow()
 
+    private val _lanDiscovery = MutableStateFlow(false)
+
+    /** ¿Descubrimiento en la red local (mDNS)? Apagado de serie; ver `security-model.md` §5.1. */
+    val lanDiscovery: StateFlow<Boolean> = _lanDiscovery.asStateFlow()
+
     private val _bootstrapError = MutableStateFlow<String?>(null)
     /** Mensaje de error del campo bootstrap (null = sin error). */
     val bootstrapError: StateFlow<String?> = _bootstrapError.asStateFlow()
@@ -232,6 +237,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             _myPeerId.value = chat.myPeerId()
             _bootstrap.value = chat.bootstrap().orEmpty()
+            _lanDiscovery.value = chat.lanDiscovery()
             runCatching { chat.start() } // arranca host + descubrimiento (LAN + WAN si hay bootstrap)
         }
         // Al terminar cada llamada, vuelve el micro/altavoz a su estado por defecto y apaga
@@ -257,6 +263,14 @@ class ChatViewModel @Inject constructor(
     }
 
     /** Guarda el nodo bootstrap WAN y arranca el descubrimiento por rendezvous. */
+    /** Activa o desactiva el mDNS. Surte efecto en el momento, en los dos sentidos. */
+    fun setLanDiscovery(enabled: Boolean) {
+        viewModelScope.launch {
+            runCatching { chat.setLanDiscovery(enabled) }
+            _lanDiscovery.value = chat.lanDiscovery()
+        }
+    }
+
     fun setBootstrap(addr: String) {
         viewModelScope.launch {
             when (runCatching { chat.setBootstrap(addr) }.getOrNull()) {

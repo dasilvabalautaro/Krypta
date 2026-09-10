@@ -641,6 +641,20 @@ class ChatService @Inject constructor(
 
     private var lastAllowedCount = -1
 
+    /**
+     * ¿Descubrimiento en la red local (mDNS) activado? Apagado de serie: anunciarse en la WiFi
+     * delata el PeerID a quien comparta la red (`docs/security-model.md` §5.1), y el
+     * descubrimiento real de Krypta es WAN por DHT + rendezvous.
+     */
+    suspend fun lanDiscovery(): Boolean = runCatching { signaling.lanDiscovery() }.getOrDefault(false)
+
+    /** Activa o desactiva el mDNS. Surte efecto en el momento, en los dos sentidos. */
+    suspend fun setLanDiscovery(enabled: Boolean) {
+        runCatching { signaling.setLanDiscovery(enabled) }
+            .onFailure { logLine("descubrimiento LAN: ${it.message}") }
+            .onSuccess { logLine(if (enabled) "descubrimiento LAN activado" else "descubrimiento LAN desactivado") }
+    }
+
     /** Recalcula la lista leyendo los contactos (para cuando cambian fuera del ciclo WAN). */
     internal suspend fun refreshAllowedPeers() {
         val ids = runCatching { contacts.observeAll().first() }
