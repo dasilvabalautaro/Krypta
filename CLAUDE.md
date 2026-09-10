@@ -1153,8 +1153,29 @@ inbound relayed connection, handing a stranger `/ip4/<phone's public IP>/udp/<po
 of the host's own, and mDNS is always started. Also corrected the same day: `security-model.md` §5
 claimed a DHT observer "cannot know who your contacts are" — false, both sides of a pair advertise
 the **same** rendezvous key and phones are DHT clients, so the infra nodes hold the daily pair
-graph (in memory) for every active pair, blind deposit or not. Mitigations are listed in §5.1 and
-none is implemented yet; the gater is the first.
+graph (in memory) for every active pair, blind deposit or not.
+
+**The relay-dial vector was closed the same day** with `native-bridge/libp2p/gater.go`: a
+`ConnectionGater` where **outbound is never filtered** (we must be able to dial nodes and
+contacts) and **inbound only passes if the PeerID is on a list** the app fills with its
+non-blocked contacts plus the infra nodes — `ChatService.pushAllowedPeers`, called from `start()`
+and from `announceAndFind` every WAN cycle, so adds/removes/blocks are picked up with no extra
+plumbing (blocked contacts are excluded, so they can't harvest the IP either). It cuts at
+`InterceptSecured`, i.e. as soon as the handshake reveals who is calling and **before** a
+connection exists, so no identify and no hole punching. Wired through `ISignalingService`
+(default no-op body so test doubles keep compiling) and exposed for diagnostics as
+`filtro de conexiones: N permitido(s) · permitidos=N entrantes=N rechazadas=N`. Verified live on
+the TECNO: 4 allowed (2 contacts + 2 nodes), probe now reports *"el filtro cortó al extraño"*,
+and no regression (`relay: OK`, rendezvous announcing, both nodes still seeing the phone). Go
+tests `TestGater*` include the real shape of the attack — a stranger dialing **through the
+relay** — and read the gater's own counters so a failure says which of three things happened
+(never consulted / consulted but allowed / list empty = open). Two lessons worth keeping: **a
+live probe that judges by its own `Connect` result lies** — the dialer can see success a moment
+before the far side closes, which made the first post-fix run look like the leak was still open;
+and kad-dht's `PublicQueryFilter` drops peers whose addresses are **all** relay addrs, which is
+why `FindPeer` answers `routing: not found` while the phone is on cellular. Still open from §5.1:
+the node hands out phone addresses via `FindPeer`, mDNS is always started, LAN addrs are
+advertised, and there is no relay-only mode (contacts see the IP by design).
 
 **The node's log was keeping user identifiers (found 10 Sep 2026).** The `/krypta/msg` handler in
 `infra/node/main.go` printed the sender's PeerID and ciphertext of every direct message, and on the

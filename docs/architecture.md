@@ -561,6 +561,15 @@ desacoplados y testeables.
   última directa; si un peer solo tiene WebSocket, se marcan al instante. Go
   `TestDialRanker*`, incluido uno que fija el comportamiento del ranker estándar para avisar si
   un día deja de hacer falta.
+  **Filtro de conexiones entrantes (10 sep 2026)**: el host instala un `ConnectionGater`
+  (`gater.go`). Las salidas no se filtran; las **entradas** solo pasan si el PeerID está en la
+  lista que fija la app (`SetAllowedPeers`, contactos no bloqueados + nodos), que se refresca en
+  `ChatService.pushAllowedPeers` al arrancar y en cada ciclo WAN. Con la lista vacía queda
+  **abierto** a propósito (una ventana corta al arrancar es mejor que perder entregas), y por eso
+  el diagnóstico publica `permitidos=N`: con 0 hay que verlo, no deducirlo. Cierra la fuga de IP
+  del §5.1 del modelo de seguridad: un extraño que marcaba por la dirección de relay provocaba
+  que libp2p le mandara las direcciones públicas por hole punching, antes de que
+  `ChatService.onReceived` pudiera descartarlo (está una capa por encima). Go `TestGater*`.
   Diagnóstico: `onlinePeers`, `wanStatus` (`DISABLED/CONNECTING/CONNECTED/ERROR`) y `log`
   (StateFlow de líneas recientes).
 - `SignalingModule` — `@Binds ISignalingService → SignalingService`.

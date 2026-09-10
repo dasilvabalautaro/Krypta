@@ -152,10 +152,32 @@ Aparte de esto, tus **contactos** ven tu IP por diseño en cuanto hay conexión 
 operador del nodo la ve siempre (como el servidor de Signal). La diferencia con Signal es que
 allí un desconocido con tu número no puede sacarte la IP, y aquí uno con tu PeerID sí.
 
-Mitigaciones pendientes, por orden: un `ConnectionGater` que solo acepte contactos y nodos; que
-el nodo no entregue direcciones de móviles por `FindPeer`; mDNS desactivado por defecto; no
+**Estado (10 sep 2026, el mismo día): el vector 2 está cerrado.** El puente instala un
+`ConnectionGater` (`native-bridge/libp2p/gater.go`): las **salidas** nunca se filtran —hay que
+poder marcar a los nodos y a los contactos— y las **entradas** solo pasan si el PeerID está en
+una lista que la app rellena con sus contactos no bloqueados y los nodos, al arrancar y en cada
+ciclo WAN (`ChatService.pushAllowedPeers`). Corta en `InterceptSecured`, o sea en cuanto el
+handshake revela quién llama y **antes** de que exista conexión: así no hay identify ni hole
+punching. Los **bloqueados quedan fuera**, así que tampoco pueden sacar la IP.
+
+Verificado en el móvil: el panel de Diagnóstico dice `filtro de conexiones: 4 permitido(s)` y la
+sonda `TestIPLeakViaRelayDial`, que antes entregaba la IP pública en 1,7 s, ahora responde
+*"el filtro cortó al extraño: la conexión no es usable"*. Sin regresión: `DHT: conectado`,
+`relay: OK (alcanzable por circuit)` y rendezvous anunciando, con los dos nodos viendo al móvil.
+
+**Lo que queda de la vía 1 (preguntar al nodo).** Sigue abierta, y da lo que el móvil anuncie:
+direcciones de relay y presencia. Hoy **no** da la IP, porque las direcciones que el móvil
+publica son de circuito; pero si algún día anuncia una pública confirmada (WiFi con UPnP), el
+nodo la repartiría igual. Detalle útil: en datos móviles la sonda recibe `routing: not found`,
+porque el `PublicQueryFilter` de kad-dht descarta del resultado a los peers cuyas direcciones
+son **todas** de relay — o sea que esa vía solo devuelve algo cuando hay algo público que
+devolver.
+
+Mitigaciones que siguen pendientes, por orden: que el nodo no entregue direcciones de móviles
+por `FindPeer` (`dht.AddressFilter`); mDNS desactivado por defecto (hoy se arranca siempre); no
 anunciar direcciones de red local; y un modo "solo relay" para ocultar la IP también a los
-contactos. Ninguna oculta la IP al operador: para eso solo sirve una VPN o Tor.
+contactos, que la ven por diseño en cuanto hay conexión directa. Ninguna oculta la IP al
+operador: para eso solo sirve una VPN o Tor.
 
 > **Nota histórica (corregida el 8 sep 2026).** Hasta esa fecha, cada ciclo del bucle WAN dejaba
 > viva una goroutine de re-anuncio, de modo que las claves de días pasados **se seguían

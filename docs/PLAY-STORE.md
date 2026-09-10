@@ -334,10 +334,13 @@ Ver [PRUEBAS-PENDIENTES.md](PRUEBAS-PENDIENTES.md):
       QR— obtiene tu **IP pública en segundos**: el nodo entrega tus direcciones por `FindPeer`
       y el móvil, ante una conexión entrante por el relay, inicia el hole punching y manda sus
       direcciones públicas **antes** de que la app pueda descartar a un desconocido.
-      Reproducible con `ip_leak_probe_test.go`. Lo primero es un `ConnectionGater` que solo
-      acepte contactos y nodos; después, que el nodo no reparta direcciones de móviles y que el
-      mDNS no vaya activado por defecto. Esto no es una nota de compatibilidad: es una promesa
-      de privacidad que hoy no se cumple.
+      Reproducible con `ip_leak_probe_test.go`. **Parcialmente cerrado el mismo día**: el
+      `ConnectionGater` del puente ya corta al extraño que marca por el relay —verificado en el
+      móvil, sin regresión— así que la IP ya no se entrega. Queda: que el nodo no reparta
+      direcciones de móviles por `FindPeer`, que el mDNS no vaya activado por defecto, no
+      anunciar direcciones de red local, y decidir si se ofrece un modo "solo relay" (los
+      contactos ven la IP por diseño). Esto no es una nota de compatibilidad: es una promesa de
+      privacidad, y la parte grave ya está tapada.
 - [ ] §2 Verificación anti-MITM real entre dos móviles (la del 23 jul no vale: se comparó
       contra el propio PeerID).
 - [ ] §3 Reinicio del móvil, cambio de red y persistencia > 6 h.
