@@ -400,6 +400,13 @@ escrituras.
 8. **Quiénes son tus contactos, frente al operador del nodo** (§5): los dos lados de cada
    pareja anuncian la misma clave de rendezvous, así que los nodos tienen el grafo de parejas
    activas de cada día. Es el hueco que el depósito ciego **no** cierra.
+9. **La reproducción de un mensaje muy viejo** (10 sep 2026): quien haya capturado un sobre
+   genuino de la **época 0** de una conversación puede hacer que se entregue otra vez, porque esa
+   época se re-deriva del secreto compartido. Lo para la deduplicación previa, que conserva las
+   **500 huellas más recientes por conversación**: más allá de esa ventana, el mensaje se
+   volvería a mostrar (repetido, con la fecha del original). No permite falsificar nada, solo
+   repetir algo que ya se dijo. Lo encontró la prueba de propiedades del ratchet; el detalle y
+   las salidas posibles están en [DISENO-ratchet.md](DISENO-ratchet.md) §1.9.
 
 ---
 

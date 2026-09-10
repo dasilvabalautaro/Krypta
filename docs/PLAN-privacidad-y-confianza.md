@@ -44,13 +44,21 @@ Dos cosas que conviene tener claras al leer el plan, porque son las que más pes
 | §16: reentrega del buzón, archivo grande cruzando época, pérdida de estado, llamada | ⬜ **pendiente, y es la puerta de publicación** |
 | §13 entrega en 2.º plano | ✅ una muestra el 10 sep; falta la medición de no regresión |
 | Failover São Paulo → Dallas | 🟡 media prueba, ocurrió sola; falta que el destinatario retire del segundo nodo |
-| Tests de propiedades del ratchet (pérdidas, desorden, duplicados, envíos simultáneos, pérdida de estado) | ⬜ **lo más rentable que queda sin depender de nadie** |
+| Tests de propiedades del ratchet (pérdidas, desorden, duplicados, envíos simultáneos, pérdida de estado) | ✅ 10 sep 2026 (`RatchetPropertyTest`) — y encontró algo en su primera corrida: ver abajo |
 | `check-nodes.sh` programado con aviso | ⬜ |
 
-Los tests de propiedades merecen una línea aparte: son puro JVM, no dependen del segundo móvil,
-y atacan justo donde el propio diseño dice que se rompen los protocolos —los casos límite—. Lo
-que hay que fijar es que las dos partes **siempre converjan** y que **nunca se reutilice una
-clave de mensaje ni un nonce**.
+Los tests de propiedades ya están (`RatchetPropertyTest`): sortean secuencias de envíos,
+entregas desordenadas, pérdidas, duplicados y pérdidas de estado con semillas fijas, y fijan que
+las dos partes siempre converjan, que nada se abra como otro mensaje y que **nunca se repita una
+terna `(linaje, época, N)`** en un mismo emisor, que es la forma observable de que ninguna clave
+ni nonce se reutiliza.
+
+**Y encontraron algo en la primera corrida**: el ratchet **no** detecta la reproducción de un
+mensaje de la época 0, porque esa época se re-deriva del secreto compartido. Lo para la
+deduplicación previa, que conserva 500 huellas por conversación — así que esa deduplicación es
+una pieza de seguridad con ventana finita, no una comodidad. Detalle y salidas posibles en
+[DISENO-ratchet.md](DISENO-ratchet.md) §1.9; decidir si se acota por tiempo en vez de por
+cantidad queda pendiente.
 
 ---
 

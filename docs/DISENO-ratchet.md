@@ -192,6 +192,53 @@ Tres cosas que el diseño sobre el papel no decía, y que están fijadas en `Rat
 
 ---
 
+### 1.9 Lo que encontró la prueba de propiedades (10 sep 2026)
+
+`RatchetPropertyTest` sortea secuencias de envíos, entregas desordenadas, pérdidas, duplicados y
+pérdidas de estado con semillas fijas, y comprueba que ciertas cosas nunca pasan. En su primera
+corrida encontró algo que no estaba escrito:
+
+**El ratchet no detecta la reproducción de un mensaje de la época 0.** Cuando el receptor ya ha
+dejado atrás esa época y su cadena ha salido de las retiradas (`MAX_PAST_CHAINS` = 3), `openOld`
+la **re-deriva del secreto compartido** —que es justo lo que hace que la época 0 no tenga secreto
+hacia adelante— y con ella vuelve a abrir el mensaje. Dentro de la cadena viva no pasa (la clave
+está gastada), y en una época retirada distinta de la 0 tampoco (su cadena se fue).
+
+Consecuencia, y es la parte que importa: **la deduplicación previa no es una comodidad, es una
+pieza de seguridad**. Y tiene ventana finita: `RoomRatchetStore` conserva las **500 huellas más
+recientes por conversación** (`SEEN_PER_CONVERSATION`). O sea que reproducir un sobre de época 0
+más viejo que esas 500 lo volvería a entregar, y el usuario vería un mensaje repetido. No es una
+falsificación —hace falta un sobre genuino, capturado del buzón o de la red— pero sí un mensaje
+que aparece dos veces, y con la marca de tiempo del original.
+
+Qué se podría hacer, si algún día se decide: acotar la deduplicación por **tiempo** en vez de por
+cantidad (el TTL del buzón son 7 días, así que ahí hay un tope natural), o rechazar de plano los
+sobres de época 0 cuyo linaje ya no es el vigente y que llegan cuando la sesión lleva épocas
+avanzadas. Queda anotado y sin hacer.
+
+**Y una asimetría de la regla del linaje que tampoco estaba escrita.** Cuando un extremo pierde
+el estado, su linaje nuevo es mayor, y el §1.6 dice que **un linaje menor se descarta**. O sea
+que quien no se ha enterado sigue escribiendo en el linaje viejo y **sus mensajes se pierden**
+—se descartan al no poder abrirse y, si venían del buzón, se acusan igual— hasta que el que
+reinstaló **escribe algo**. Solo entonces el otro adopta el linaje nuevo y la conversación
+vuelve. No es un bloqueo permanente (eso es lo que promete el §1.6 y se cumple), pero es una
+**ventana de pérdida silenciosa** que dura hasta el primer mensaje del que reinstaló.
+
+Para el usuario eso significa: si reinstalas, pídele a la otra persona que te escriba, o escribe
+tú primero. Y para el código, dos salidas posibles, ninguna hecha: que el receptor que **falla**
+al abrir un mensaje de un linaje menor mande de vuelta cualquier cosa (él sí sabe que el otro va
+atrasado, así que puede reengancharlo sin esperar a que el usuario escriba), o que el emisor cuya
+racha de mensajes no se abre nunca vuelva a la época 0. La primera es más barata y arregla el
+caso real.
+
+Las otras invariantes que la prueba fija y que sí se cumplieron: nada se abre como otro mensaje
+(ni entre sentidos, ni entre épocas, ni entre linajes), ninguna terna `(linaje, época, N)` se
+repite en un mismo emisor —la forma observable de que ninguna clave ni nonce se reutiliza—, las
+dos épocas nunca se separan más de una, y tras el caos la conversación se recupera **en una
+ronda**: si al que quedó atrasado no se le lee, basta con que hable el otro.
+
+---
+
 ## 2. Por qué no el doble ratchet tal cual
 
 Merece la pena dejar escrito el callejón, porque el diseño de arriba es una desviación y las

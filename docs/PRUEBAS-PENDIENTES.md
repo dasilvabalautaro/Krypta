@@ -725,6 +725,12 @@ Usar contactos desechables si se puede.
      (arranca un linaje nuevo en la época 0, que A adopta por ser mayor). Y a la inversa: A
      escribe a B y B lo lee. Esto es lo que hace que una sesión rota nunca sea permanente, y
      es la propiedad que más conviene ver con los ojos.
+     **Y lo que hay que mirar además** (lo destapó la prueba de propiedades, ver
+     `DISENO-ratchet.md` §1.9): justo **antes** de que B escriba, que A le mande un mensaje. Ese
+     mensaje **se va a perder** —A escribe en el linaje viejo y B descarta lo menor— y en el
+     móvil de A se quedará como enviado sin que B lo vea nunca. Es el comportamiento esperado
+     hoy, no un fallo de la prueba; sirve para medir cuánto dura la ventana y decidir si merece
+     la pena arreglarla.
 6. - [ ] **Los mensajes de antes se siguen leyendo.** Subir de una versión anterior (no
      reinstalar): el historial previo debe seguir legible y el Diagnóstico debe registrar
      `🗄 historial convertido: N mensaje(s)` una sola vez.
