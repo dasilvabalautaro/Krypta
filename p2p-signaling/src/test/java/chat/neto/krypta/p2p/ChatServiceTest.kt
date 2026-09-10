@@ -9,6 +9,8 @@ import chat.neto.krypta.core.model.MessageContent
 import chat.neto.krypta.core.model.MessageStatus
 import chat.neto.krypta.core.repository.ContactRepository
 import chat.neto.krypta.core.repository.MessageRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flowOf
@@ -944,6 +946,94 @@ class ChatServiceTest {
 
         assertTrue(messages.saved.isEmpty())
         assertTrue(contacts.store.isEmpty()) // announceAndFind ya no lo verá (relee de Room)
+    }
+
+    // --- Reengache de sesiones desincronizadas (DISENO-ratchet §1.9) ------------------------
+
+    /** Un sobre con cabecera de ratchet que no se puede abrir por ninguna vía. */
+    private fun sobreIlegible() = ByteArray(Ratchet.HEADER_BYTES + 24) { i ->
+        if (i == 0) Ratchet.WIRE_VERSION else (i * 13 + 7).toByte()
+    }
+
+    /**
+     * Scope para los tests del reengache, que se envía **lanzado** (el camino del buzón es
+     * síncrono y no se puede bloquear con una llamada de red). `Unconfined` ejecuta el `launch`
+     * en el acto y de forma determinista.
+     *
+     * Por qué no `backgroundScope` + `advanceUntilIdle()`, que sería lo natural: se midió y
+     * **no ejecuta** el cuerpo del `launch` en este montaje. Costó tres hipótesis equivocadas
+     * antes de comprobarlo en vez de razonarlo, así que queda escrito aquí.
+     */
+    private fun scopeInmediato() = CoroutineScope(Dispatchers.Unconfined)
+
+    /**
+     * La premisa de los tres tests de abajo: el sobre sintético tiene que **parecer** ratchet,
+     * porque si no `onReceived` se va por la rama v1 y no hay reengache que probar. Se afirma
+     * aparte para que un fallo diga *esto* en vez de "no salió el reengache".
+     */
+    @Test
+    fun `el sobre sintetico parece un sobre de ratchet`() {
+        val bytes = sobreIlegible()
+        assertTrue(
+            "size=${bytes.size} byte0=${bytes[0]} (esperado > ${Ratchet.HEADER_BYTES} y ${Ratchet.WIRE_VERSION})",
+            Ratchet.looksLikeRatchet(bytes),
+        )
+    }
+
+    /**
+     * Cuando alguien reinstala, su linaje nuevo es mayor y **el nuestro se descarta**: sus
+     * mensajes dejan de ser legibles para él hasta que escriba. Aquí somos el que lo sabe
+     * —acabamos de fallar al abrir su sobre—, así que le mandamos algo para que adopte nuestro
+     * linaje en vez de esperar a que el usuario escriba y perder mensajes por el camino.
+     */
+    @Test
+    fun `un sobre de ratchet que no abre provoca un reengache`() = runTest {
+        conRatchet {
+            val signaling = FakeSignaling()
+            val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(contactoV2)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange()))
+
+            assertNull(chat.onReceived(contactoV2.peerId, sobreIlegible()))
+
+            // El log va en el mensaje a propósito: distingue "reengache enviado" de "no salió",
+            // que es justo lo que no se puede adivinar desde un `expected 1 but was 0`.
+            assertEquals("debería salir un reengache · log=${chat.log.value}", 1, signaling.sentAll.size)
+        }
+    }
+
+    /**
+     * Y **uno solo**: cualquiera de tus contactos podría mandar basura a propósito, y sin tope
+     * eso nos haría emitir un mensaje por cada una.
+     */
+    @Test
+    fun `el reengache no se repite con cada fallo`() = runTest {
+        conRatchet {
+            val signaling = FakeSignaling()
+            val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(contactoV2)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange()))
+
+            repeat(5) { chat.onReceived(contactoV2.peerId, sobreIlegible()) }
+
+            assertEquals(
+                "cinco fallos seguidos, un solo reengache · log=${chat.log.value}",
+                1,
+                signaling.sentAll.size,
+            )
+        }
+    }
+
+    /** Sin ratchet no hay linajes que desincronizar: no hay nada que reenganchar. */
+    @Test
+    fun `un contacto que aun no habla v2 no recibe reengache`() = runTest {
+        conRatchet {
+            val signaling = FakeSignaling()
+            val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange()))
+
+            chat.onReceived(contact.peerId, sobreIlegible())
+
+            assertTrue(
+                "a un contacto v1 no se le manda nada · log=${chat.log.value}",
+                signaling.sentAll.isEmpty(),
+            )
+        }
     }
 
     // --- Filtro de quién puede abrirnos conexión (fuga de IP, security-model §5.1) ----------

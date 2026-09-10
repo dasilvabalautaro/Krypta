@@ -913,6 +913,51 @@ class ChatService @Inject constructor(
         }
     }
 
+    /** Último reengache por contacto, para no convertir un fallo repetido en una ráfaga. */
+    private val lastRehook = mutableMapOf<String, Long>()
+
+    /**
+     * **Reengancha** una sesión de ratchet desincronizada mandando cualquier cosa nuestra.
+     *
+     * El caso (encontrado por `RatchetPropertyTest`, ver `docs/DISENO-ratchet.md` §1.9): si uno
+     * de los dos pierde el estado, su linaje nuevo es mayor, y la regla del §1.6 dice que un
+     * linaje **menor se descarta**. El que no se ha enterado sigue escribiendo en el viejo y
+     * **sus mensajes se pierden** hasta que el que reinstaló escriba algo. Aquí somos justo el
+     * que lo sabe —acabamos de fallar al abrir su mensaje—, así que no hace falta esperar a que
+     * el usuario escriba: se le manda el anuncio de capacidades, que ya viaja por el ratchet con
+     * nuestro linaje, y con eso el otro extremo lo adopta y vuelve a ser legible.
+     *
+     * Tres decisiones:
+     * - **Se reutiliza el sobre `V`** en vez de inventar uno: un cliente anterior ya lo ignora
+     *   limpiamente como `Unsupported`, así que no hay nada que negociar.
+     * - **Va lanzado en el `scope`**, no en línea: el camino del buzón es síncrono (el acuse
+     *   depende de que esto vuelva), y bloquearlo con una llamada de red retrasaría la entrega.
+     * - **Un reengache por contacto cada [REHOOK_MIN_INTERVAL_MS]**: cualquiera de tus contactos
+     *   podría mandar basura a propósito, y sin tope eso nos haría emitir un mensaje por cada
+     *   una. Uno cada pocos minutos basta para el caso real y no se puede usar como altavoz.
+     */
+    private fun rehook(contact: Contact) {
+        if (!usesRatchet(contact)) {
+            // Se registra el motivo: "no salió ningún reengache" tanto puede ser esto como el
+            // tope de abajo, y sin distinguirlos no hay forma de diagnosticarlo.
+            logLine("↔ sin reengache para ${short(contact.peerId)}: no usa ratchet (v${contact.peerProtocol})")
+            return
+        }
+        val now = System.currentTimeMillis()
+        val last = lastRehook[contact.id] ?: 0L
+        if (now - last < REHOOK_MIN_INTERVAL_MS) return
+        lastRehook[contact.id] = now
+        scope.launch {
+            val ok = runCatching { sendRaw(contact, MessageEnvelope.encodeHello(PROTOCOL_VERSION)) }.isSuccess
+            logLine(
+                if (ok) "↔ reengache enviado a ${short(contact.peerId)} (su linaje no cuadraba)"
+                else "↔ reengache a ${short(contact.peerId)} no salió; se reintenta al próximo fallo",
+            )
+            // Si no salió, que el próximo fallo pueda volver a intentarlo en vez de esperar.
+            if (!ok) lastRehook.remove(contact.id)
+        }
+    }
+
     /**
      * Sonda del gate de llamadas (Fase 7a): mide el RTT al nodo bootstrap — ida y vuelta a
      * través de Cloudflare ≈ latencia one-way de un frame de audio relayed entre dos
@@ -1052,7 +1097,7 @@ class ChatService @Inject constructor(
     ): Message? {
         val recibido = runCatching {
             sessions.receive(contact, ciphertext) { plain -> persistEnvelope(contact, plain, mailboxId, ts) }
-        }.getOrElse { return openLegacy(contact, ciphertext, mailboxId, ts) }
+        }.getOrElse { return openLegacy(contact, ciphertext, mailboxId, ts, parecíaRatchet = true) }
         return when (recibido) {
             is RatchetSessions.Received.Opened -> recibido.value
             // Ya procesado: devolver null lo ack'ea en el buzón, que es lo correcto — está
@@ -1067,13 +1112,21 @@ class ChatService @Inject constructor(
         ciphertext: ByteArray,
         mailboxId: String?,
         ts: Long?,
+        parecíaRatchet: Boolean = false,
     ): Message? {
         val plain = runCatching { cipher.decrypt(requireNotNull(contact.sharedSecret), ciphertext) }
             .getOrNull()
         if (plain == null) {
             // No se puede abrir por ninguna vía. Antes se persistía el ciphertext como si fuera
             // texto legado, lo que pintaba una burbuja de basura que no ayuda a nadie.
-            logLine("⚠ mensaje ilegible de ${short(contact.peerId)} (descartado)")
+            logLine(
+                "⚠ mensaje ilegible de ${short(contact.peerId)} (descartado, " +
+                    "${if (parecíaRatchet) "venía con cabecera de ratchet" else "sin cabecera de ratchet"})",
+            )
+            // Si venía con cabecera de ratchet, lo más probable es que sus linajes estén
+            // desincronizados y el otro esté escribiendo en uno que aquí ya no vale. Nosotros
+            // sí lo sabemos: reengancharlo (ver [rehook]).
+            if (parecíaRatchet) rehook(contact)
             return null
         }
         return persistEnvelope(contact, plain, mailboxId, ts)
@@ -1464,6 +1517,9 @@ class ChatService @Inject constructor(
          * `V`). La 1 es implícita: no la anuncia nadie, es "lo que había antes".
          */
         const val PROTOCOL_VERSION = 2
+
+        /** Tope del reengache de sesiones desincronizadas: uno por contacto cada 5 min. */
+        internal const val REHOOK_MIN_INTERVAL_MS = 5 * 60 * 1000L
 
         /**
          * ¿Se **envía** ya con ratchet? **Sí, desde el 10 sep 2026.**
