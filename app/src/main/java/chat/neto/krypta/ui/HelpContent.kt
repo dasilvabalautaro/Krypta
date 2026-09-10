@@ -45,6 +45,16 @@ object HelpContent {
         ),
         HelpItem(
             category = "Privacidad y seguridad",
+            question = "¿La clave de cifrado cambia con el tiempo?",
+            answer = "Krypta está incorporando claves que cambian con cada mensaje, en vez de " +
+                "una fija por contacto. Se activa sola con los contactos cuya app también lo " +
+                "admite; con el resto, y con lo ya enviado antes, la clave sigue siendo fija. " +
+                "Mientras sea fija, quien lograra sacar tu identidad podría descifrar esas " +
+                "conversaciones. Es reciente y aún en verificación, así que preferimos " +
+                "contártelo tal cual antes que prometerlo.",
+        ),
+        HelpItem(
+            category = "Privacidad y seguridad",
             question = "¿Cómo sé que hablo con la persona correcta y no con un impostor?",
             answer = "Abre el chat y entra en “Verificar identidad”. Verás un número de " +
                 "seguridad de 60 dígitos: compáralo con el de la otra persona (en persona o por " +
@@ -152,12 +162,12 @@ object HelpContent {
         HelpItem(
             category = "Privacidad y seguridad",
             question = "Si alguien consigue mi móvil, ¿puede leer mis conversaciones?",
-            answer = "Tu clave de identidad se guarda en el almacén seguro del sistema, así que " +
-                "copiar los ficheros de la app desde fuera no basta para abrirla. Ahora bien, " +
-                "quien tenga tu móvil desbloqueado sí puede leer los chats, y Krypta todavía no " +
-                "cambia las claves con el tiempo: quien lograra sacar tu identidad podría " +
-                "descifrar el historial que tengas guardado. Activa el bloqueo de la app y el " +
-                "del móvil, y guarda bien tu copia de seguridad.",
+            answer = "Tu identidad, la base de datos de los chats y los archivos que recibes se " +
+                "guardan cifrados con una clave del almacén seguro del sistema: copiar los " +
+                "ficheros de la app desde fuera no basta para abrirlos. Pero quien tenga tu " +
+                "móvil desbloqueado sí puede leer los chats. Activa el bloqueo de la app y el " +
+                "del móvil, y guarda bien tu copia de seguridad. Y ojo: abrir un archivo con " +
+                "otra aplicación le deja una copia sin cifrar, fuera de Krypta.",
         ),
         HelpItem(
             category = "Privacidad y seguridad",

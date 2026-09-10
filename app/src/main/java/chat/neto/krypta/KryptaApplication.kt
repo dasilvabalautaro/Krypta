@@ -19,5 +19,9 @@ class KryptaApplication : Application() {
     override fun onCreate() {
         super.onCreate() // Hilt inyecta los campos aquí
         notifier.attach()
+        // Copias en claro que quedaron de un "abrir con otra app" de una sesión anterior. Se
+        // limpian al arrancar el proceso y no al volver a la app: si el usuario está viendo un
+        // PDF en otro visor, quitarle el fichero de debajo sería peor que dejarlo un rato más.
+        chat.neto.krypta.ui.clearOpened(this)
     }
 }

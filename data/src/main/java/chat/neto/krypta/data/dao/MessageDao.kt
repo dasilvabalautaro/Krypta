@@ -20,7 +20,7 @@ interface MessageDao {
     // GROUP BY + MAX(timestamp): SQLite garantiza que las columnas sueltas salen de la
     // fila que da el máximo → el mensaje más reciente de cada conversación.
     @Query(
-        "SELECT id, conversationId, senderId, ciphertext, MAX(timestamp) AS timestamp, status " +
+        "SELECT id, conversationId, senderId, payload, encrypted, MAX(timestamp) AS timestamp, status " +
             "FROM messages GROUP BY conversationId"
     )
     fun observeLastMessages(): Flow<List<MessageEntity>>
@@ -34,6 +34,13 @@ interface MessageDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(message: MessageEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(messages: List<MessageEntity>)
+
+    // Conversión del historial: filas que aún guardan ciphertext de la clave estática.
+    @Query("SELECT * FROM messages WHERE encrypted = 1 LIMIT :limit OFFSET :offset")
+    suspend fun findEncrypted(limit: Int, offset: Int): List<MessageEntity>
 
     @Query("SELECT * FROM messages WHERE id = :id")
     suspend fun findById(id: String): MessageEntity?

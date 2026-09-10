@@ -906,6 +906,201 @@ running `:data`'s whole instrumented suite in one process hangs after the SQLCip
 class passes when run on its own (`adb shell am instrument -e class <FQCN>#<method>`), and a
 stale `-journal` left by a killed run will block the next READONLY open until deleted.
 
+**Forward secrecy: design decided, core built (9 Sep 2026, fases 1-2 of
+[docs/DISENO-ratchet.md](docs/DISENO-ratchet.md)).** Nothing is wired yet — the app still
+encrypts exactly as before — but the crypto core exists and the decisions are closed. The
+starting fact that shapes everything: `S = X25519(identity, PeerID)` is a **pure function of the
+two identities**, so a symmetric-only ratchet would buy nothing (whoever steals the identity
+recomputes `S`, recomputes `CK₀` and unrolls the chain); **all the value is in the DH ratchet**.
+The construction is a double ratchet **by epochs**: an epoch is the *pair* of live ephemeral
+X25519 public keys and you advance «as soon as you hold both», with no initiator/responder —
+which is what removes the root-chain fork that Signal's design avoids only because X3DH and a
+prekey server assign the roles. Epoch 0 is derivable from `S` (first message with no round trip,
+and deliberately no PFS, exactly like Signal's pre-reply message); from there
+`RK(e) = HKDF(X25519(…), salt = RK(e-1))`, HMAC chain per message, derived nonce, `MAX_SKIP`
+1000, 3 retired chains kept. A `lineage` (unix millis) in the header handles state loss: the
+higher one wins, and because epoch 0 is always derivable **a broken session is never permanent** —
+the property Signal cannot have without its server. `encrypt`/`decrypt` are **pure functions**
+`state → (state', bytes)`: that is what will let fase 3 commit the ratchet advance in the *same*
+Room transaction as the message (decrypting mutates state and burns the message key, so dying
+between decrypt and persist would lose a mailbox redelivery **for good** — the 5 Jul voice-note
+failure class), and it is also why a forged header can move nothing. Three things implementing
+it taught, pinned in `RatchetTest`: the epoch advances **per message received**, not per turn (a
+DH ratchet per message, one X25519 each — more than designed, not less); a 85-chunk file burst
+still costs **one** epoch, not 85; and the two sides never drift more than one epoch apart, which
+is the invariant `decrypt` relies on. **The structural consequence, which is the bulk of the
+remaining work**: `Message.ciphertext` stores the *wire* bytes and every read path (`decodeMessage`,
+`content`, `notificationText`, the conversation-list preview) decrypts on the fly with the static
+key — with a ratchet the key is gone after use, so the whole history, **own bubbles included**,
+would go unreadable on the next repaint. PFS forces separating transport keys from at-rest keys;
+decided: the history moves to **plaintext envelopes inside the SQLCipher-encrypted DB** (which is
+why the 9 Sep DB encryption was the prerequisite), lazily migrated row by row. Also decided:
+in-band capability announcement per contact (envelope `V`, ignored cleanly by current clients as
+`Decoded.Unsupported`) instead of a `BLIND_DEPOSIT`-style global flag; per-call random key inside
+the ratcheted invite (calls get PFS with zero streaming changes); and `krypta_files/` attachments
+encrypted at rest. Fase 1 = `Ratchet` + `RatchetState` in `:p2p-signaling` (Kotlin puro, 17
+tests). Fase 2 = `Bridge.RatchetKeyPair`/`RatchetAgree` in Go (AAR regenerated, 16 KB pages
+re-verified on the four ABIs) + `BridgeCurve25519`; `Curve25519` is an interface in `:core`
+because Android has no `XDH` until API 33 and `minSdk` is 30, with `JdkCurve25519` for JVM tests.
+**Fase 3 (same day)** = the state on disk, **DB v7**: `ratchet_sessions` (opaque blob, so `:data`
+never sees the crypto) + `ratchet_seen` (pre-decrypt dedup, pruned to 500 digests per
+conversation), `MIGRATION_6_7` (additive; verified on the TECNO with the real database, contacts
+and previews intact), and `RatchetSessions`, which is where the atomicity guarantee lives:
+`send`/`receive` **take the persistence as a lambda** and run it inside
+`TransactionRunner.inTransaction` together with the ratchet advance, so there is no way to write
+one without the other; decryption stays outside the transaction on purpose (pure, and may cost an
+X25519). An unreadable state blob **re-hooks the conversation instead of breaking it** (fresh
+lineage = now, which the peer adopts). 5 more JVM tests, whose fake runner **rolls back** on
+throw — without that the rollback test would pass by accident.
+
+**Fase 4 — the history left the transport key (9 Sep 2026, DB v8).** The structural consequence
+described above, done: `messages.ciphertext` is now `payload` and holds the **plaintext
+`MessageEnvelope`**, with a per-row `encrypted` flag marking the pre-v8 rows that are still
+ciphertext under the static key. Reading tolerates both **forever** (not just during the
+transition: a row that cannot be converted must never vanish from the conversation), and
+`ChatService.unsealHistory` converts in the background at startup. Three things worth keeping:
+(a) the pass goes in batches and **skips with an offset** what it cannot open (a deleted contact,
+a corrupt row) — without that, one unreadable row would make the query return it forever and the
+rest of the history would never convert; it has its own test; (b) `MIGRATION_7_8` **renames**
+(`ALTER TABLE … RENAME COLUMN`) instead of copying the table, so the same bytes stay put and there
+is no window where a history that has **no backup of any kind** exists only half-written;
+(c) `retry` now **re-encrypts** from the stored envelope (same id, so the receiver still dedups),
+while a pre-v8 row is resent byte-for-byte as before. `Message.payload`/`encrypted` ripple through
+`RoomMessageRepository`, `MessageDao` (`observeLastMessages` selects the new columns) and
+`ChatViewModel`'s decode cache key. Verified on the TECNO **over the real database**: the
+diagnostics logged "🗄 historial convertido: 47 mensaje(s)", both conversations render intact, and
+`grep` for the contact names and message content in `krypta.db` **and its `-wal`** returns 0 with
+a random file header — the check that matters now that the plaintext lives inside. 4 new JVM tests
+plus a `MigrationTest` case (v7→v8 keeps the bytes and marks the old rows).
+
+**Fase 5 — the client can receive v2, and says so (9 Sep 2026, DB v9).** `onReceived` now
+accepts **both** wire formats: `openRatchet` (through `RatchetSessions`, so persistence and the
+ratchet advance commit together) with a fallback to `openLegacy` (static key). Sending is still
+v1 — `ChatService.RATCHET_SEND = false` — because the version that knows how to receive has to be
+out there first. Capability discovery is **in band and per contact**: a new `V` envelope
+(`MessageEnvelope.encodeHello`) that current clients ignore cleanly as `Decoded.Unsupported`,
+`contacts.peerProtocol` (what they announced) and `contacts.announcedProtocol` (what we told
+them), `MIGRATION_8_9`, and a `capacidades` step in the WAN cycle that announces **once per
+contact per version** — marked only if the send actually succeeded, so an offline contact gets at
+most one mailbox deposit, not one per launch. That is what will let fase 6 turn sending on per
+contact instead of shipping a follow-up release to flip a constant. Three things worth keeping:
+(a) **the version byte is a hint, not a guarantee** — a v1 ciphertext is `nonce(12) ‖ ct+tag` with
+a random nonce, so **1 in 256 v1 messages over 86 bytes starts with the ratchet's version byte**
+(photos, file chunks, any two-line text ≈ 0.4% of traffic); hence the v2→v1 fallback, with a test
+that forges the disguise on purpose — written first with a short message, where it failed, because
+short ciphertexts never reach the minimum header size and can't be confused; (b) **an
+undecryptable message no longer paints a garbage bubble** — it used to persist the raw ciphertext
+as "legacy text"; now it is dropped with a diagnostics line, which is also what makes the v2→v1
+fallback safe; (c) the user-facing alert moved **out** of the transaction and to a single exit
+point in `onReceived` (`persistFile` used to notify on its own, which would now have notified
+twice for a file). Verified on the TECNO: the app runs on v9, the WAN cycle is healthy, and the
+announcement is sent once — the second and third launches log neither "anunciado" nor "pendiente",
+which is only possible if the flag persisted (both outcomes are logged precisely so that "nothing
+appears" is not ambiguous).
+
+**Fase 6 — sending, gated per contact (9 Sep 2026).** Every outgoing path now goes through two
+functions, `seal` (bytes only: file chunks and meta, call signals, read receipts, the capability
+announcement itself) and `sealAndPersist` (bytes + the Message, committed in one transaction with
+the ratchet advance), so "does this contact get v2?" is **one decision, not seven**. The gate is
+`usesRatchet(contact)` = the contact announced `peerProtocol >= 2` — it depends on *them*, not on
+which release is out, which is the whole point of fase 5. **`ChatService.RATCHET_SEND` is still
+`false`**: the design's own §10 condition (no enabling without a two-phone test of state loss,
+mailbox redelivery and a big chunked file crossing an epoch change) stands, and the steps are now
+written down in [docs/PRUEBAS-PENDIENTES.md](docs/PRUEBAS-PENDIENTES.md) §16. It is an `internal
+var` rather than a `const` so the tests can exercise the send path production still has off —
+nothing in production writes it. Two things worth keeping: (a) **the state is persisted before the
+bytes go out**; saving after would mean that a failed send leaves the next message encrypting from
+the same state — same message key, same AES-GCM nonce, which is the textbook way to break an AEAD
+completely (there's a test: a send that fails both ways still advances the ratchet); (b) the
+session is forgotten on `deleteContact` but **not** on `clearConversation` — emptying a chat is
+not breaking the session. New tests cover a full two-client conversation over the ratchet and a
+120 KB chunked file through it; one of them found a self-inflicted trap worth remembering — a test
+contact whose `id` was `"self"` collided with the outgoing-sender marker and made both halves of
+the conversation indistinguishable.
+
+**Fase 7 — the call key is negotiated (9 Sep 2026).** It used to be `HKDF(static secret, callId)`,
+so whoever stole the identity could decrypt **any recorded call**, past or future. Now each side
+draws 32 random bytes and sends them inside the `C` envelope — the invite carries the caller's
+half, the accept the callee's — and the key is `HKDF(k_caller ‖ k_callee, salt = shared secret)`.
+The streaming path does not change by a single byte. Three things worth keeping: (a) **the extra
+line can't be sent to just anyone** — the previous parser splits the `C` header into three, so
+five lines make `toLongOrNull` fail, the whole signal is dropped and **the call doesn't even
+ring**; it rides the same `peerProtocol` gate as the ratchet, and everyone else keeps the old
+path; (b) the callee's half is drawn **when the invite arrives**, not when the user accepts, so
+the key is settled before the stream opens — the first media byte already uses it; (c) there is a
+real gain today even with `RATCHET_SEND` off (an attacker now needs that call's signalling
+envelope too), and once sending is on, the invite has forward secrecy and the call inherits it.
+The test asserts the consequence rather than the mechanism: the frames on the wire **no longer
+open** with the key that used to be derived from the identity — and it was checked to fail
+against a non-negotiating peer. It also caught me hand-copying the salt literal (`krypta-call-v1`)
+wrong, which made the assertion pass for the wrong reason; it now uses the real constant, which is
+why `CallService`'s companion is `internal`.
+
+**Fase 8 — the attachments left the clear (9 Sep 2026).** `krypta_files/` was the last thing in
+the clear on the device, and with a ratchet the mismatch was glaring: protecting a photo's
+*journey* and leaving its *rest* readable. `FileVault` (`:app`, `data/`) encrypts everything the
+store writes — staging chunks and meta, the assembled file and the sender's own copy — with
+AES-256-GCM under a 32-byte key wrapped by the Keystore, same "never lose the key" discipline as
+the DB (an unreadable stored key **fails loudly** instead of minting a new one). Files carry a
+`KFV1` magic and **reads tolerate anything without it**: attachments already on the phone stay
+readable (verified live on the TECNO — the pre-existing GIF still animates, and reading it doesn't
+even need the key). The read side is where the work was: `FileStore` gained `read(path)`/
+`saveSent(name, bytes)`; `MediaRecorder` can only write plaintext, so voice notes now record into
+`cacheDir` and move into the store encrypted with the temp deleted; `MediaPlayer` can't open an
+encrypted file, so a voice note plays through a `MediaDataSource` over the decrypted bytes in
+memory (~360 KB per minute) instead of leaving a plaintext copy on disk; GIFs decode from a
+`ByteBuffer`; and the UI reaches all of it through a `LocalAttachmentReader` composition local
+provided from the ViewModel, because those bubbles sit deep in the tree. **Opening an attachment
+with another app hands it over in the clear** — unavoidable — so it stages a copy in
+`cacheDir/krypta_abrir/` (now the only path the FileProvider exposes) which is cleared at process
+start, not on resume: yanking a PDF out from under an open viewer would be worse. Old attachments
+are deliberately **not** converted: rewriting a user's whole store to cover what was already
+exposed isn't worth the risk, and clearing the chat deletes them.
+
+**Fase 9 — the user-facing docs (10 Sep 2026).** The rule while `RATCHET_SEND` is `false`: the
+help and the privacy policy **do not claim forward secrecy**. Both still warn that the key does
+not change over time and that whoever extracts the identity can decrypt the stored history —
+promising it before switching it on is exactly what this project has spent a year not doing. What
+was added is what is already true: the database and the attachments are encrypted at rest under
+Keystore-held keys, opening an attachment with another app hands that app a plaintext copy, and
+each call now uses its own randomly drawn key. `security-model.md` §7/§9/§10 updated to match,
+including that pre-existing attachments stay in the clear. One test lesson: `HelpContentTest`
+rejected the new answer with "respuesta demasiado corta" when it was in fact too **long** — the
+assertion covers a range but its message only described one end, and it sent me looking the wrong
+way; it now reports the actual length.
+
+**The ratchet is ON (10 Sep 2026): `ChatService.RATCHET_SEND = true`.** Turned on by the author's
+explicit decision **before** the two-phone test the design's §10 asked for — the collaborator who
+lends the second phone wasn't answering and it had the work stopped. What it actually means
+matters: who gets v2 is decided by `contact.peerProtocol`, so **nothing changes until the other
+end updates**; the moment it does, that pair goes to the ratchet without having passed the live
+test. The exposure while that's true: a v2 message the peer cannot open is **dropped and acked**,
+i.e. lost. It is bounded to pairs where *both* run this build, and `RATCHET_SEND = false` in a
+later publish returns everything to v1. The test is still owed —
+[docs/PRUEBAS-PENDIENTES.md](docs/PRUEBAS-PENDIENTES.md) §16, to be run with a throwaway contact
+before trusting a real conversation to it. Flipping the default also exposed a latent trap in the
+test suite: `conRatchet { }` restored the switch to a hardcoded `false`, so with production now
+`true` it would have silently turned sending off for every test after it; it saves and restores
+the previous value. **User-facing wording deliberately unchanged**: the help and the privacy
+policy still say the key does not change over time, which remains true for every real contact
+today, and understating protection is the safe direction to be wrong in — that text moves when the
+live test passes, not before.
+
+**A crash the ratchet work surfaced (9 Sep 2026): Krypta started once and never again.**
+`System.loadLibrary("sqlcipher")` sat *inside* `DatabaseEncryption.encryptInPlace`, **after its
+early return**. On the launch that converted the plaintext DB it loaded; on every launch after
+that — DB already encrypted, early return — it did not, and Room died opening the database with
+`UnsatisfiedLinkError: No implementation found for … nativeOpen`. `net.zetetic:sqlcipher-android`
+does not self-load. The bug is invisible to a verification done right after the conversion, which
+is exactly how the SQLCipher change was checked, and it had left the author's phone unable to open
+the app. Fixed **by construction** rather than by adding a call: a new `SqlCipher` object in
+`:data/crypto` whose `openHelperFactory(passphrase)` loads before building the factory, and that
+is now the only way `DatabaseModule` gets one. Regression test `SqlCipherTest` (instrumented,
+`:data`, so it never touches the app) reproduces the *second* launch — it was checked to fail with
+the real `UnsatisfiedLinkError` against the pre-fix code — and the app was re-verified live on the
+TECNO: it launches, the conversation list renders with both contacts and their decrypted previews,
+and the status reads "conectado".
+
 ## Module structure
 
 ```
@@ -1048,7 +1243,7 @@ compiled to an AAR with gomobile. Kotlin calls it through generated classes
 - **DI = Hilt, KSP not kapt.** Modules with Hilt/Room annotations apply both the
   `ksp` and (for Hilt) `hilt` plugins and use `ksp(...)` for the compilers. Put `@Module`
   bindings in a `di/` package. Components install in `SingletonComponent`.
-- **Room migrations, not destructive.** `KryptaDatabase` is at **v6** with real migrations
+- **Room migrations, not destructive.** `KryptaDatabase` is at **v9** with real migrations
   (`data/Migrations.kt`, wired in `DatabaseModule` via `addMigrations`); `exportSchema=true`
   writes `data/schemas/`. **Every schema change adds a `Migration` + bumps the version** —
   do not reintroduce `fallbackToDestructiveMigration` (it wipes user data). Destructive

@@ -154,4 +154,17 @@ class MessageEnvelopeTest {
         assertNull(MessageEnvelope.decode(ByteArray(0)))
         assertNull(MessageEnvelope.decode(byteArrayOf('T'.code.toByte()))) // sin salto
     }
+
+    @Test
+    fun `el anuncio de capacidad va y vuelve, y uno antiguo no lo entiende como texto`() {
+        val decoded = MessageEnvelope.decode(MessageEnvelope.encodeHello(2))
+        assertEquals(2, (decoded as MessageEnvelope.Decoded.Hello).protocol)
+
+        // Una versión futura puede añadir líneas detrás: el número sigue leyéndose.
+        val futuro = MessageEnvelope.decode("V\n3\ncosas-nuevas".toByteArray())
+        assertEquals(3, (futuro as MessageEnvelope.Decoded.Hello).protocol)
+
+        // Y algo que no es un número no se cuela como anuncio.
+        assertNull(MessageEnvelope.decode("V\nhola".toByteArray()))
+    }
 }

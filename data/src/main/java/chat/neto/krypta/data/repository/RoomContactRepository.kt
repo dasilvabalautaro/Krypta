@@ -42,6 +42,8 @@ class RoomContactRepository @Inject constructor(
         sharedSecret = runCatching { keyExchange.sharedSecretWith(e.peerId) }.getOrNull(),
         verified = e.verified,
         blocked = e.blocked,
+        peerProtocol = e.peerProtocol,
+        announcedProtocol = e.announcedProtocol,
     )
 
     private fun Contact.toEntity() = ContactEntity(
@@ -51,5 +53,7 @@ class RoomContactRepository @Inject constructor(
         publicKey = publicKey,
         verified = verified,
         blocked = blocked,
+        peerProtocol = peerProtocol,
+        announcedProtocol = announcedProtocol,
     )
 }

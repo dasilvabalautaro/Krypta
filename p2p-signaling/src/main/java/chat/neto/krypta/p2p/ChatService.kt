@@ -62,8 +62,9 @@ fun normalizeBootstrapList(raw: String): String? {
 /**
  * Orquesta la mensajería de extremo a extremo cerrando el lazo de dominio:
  * cifra (E2EE) → persiste (Room) → envía por la capa de señalización; y a la inversa,
- * recibe → resuelve el contacto por PeerID → persiste. Los `Message` guardan siempre el
- * `ciphertext`; el texto plano solo se obtiene bajo demanda con [decrypt].
+ * recibe → resuelve el contacto por PeerID → persiste. Desde la v8 de la base un `Message`
+ * guarda el **sobre en claro** y lo que protege el historial es el cifrado de la base; ver
+ * [Message] y `docs/DISENO-ratchet.md` §4 sobre por qué el secreto hacia adelante lo obliga.
  */
 @Singleton
 class ChatService @Inject constructor(
@@ -75,6 +76,7 @@ class ChatService @Inject constructor(
     private val rendezvous: RendezvousService,
     private val fileStore: FileStore,
     private val scope: CoroutineScope,
+    private val sessions: RatchetSessions,
 ) {
     private val _onlinePeers = MutableStateFlow<Set<String>>(emptySet())
     /** PeerIDs actualmente conectados (p. ej. encontrados por mDNS en LAN). */
@@ -221,6 +223,42 @@ class ChatService @Inject constructor(
         runCatching { signaling.bootstrap() }.getOrNull()
             ?.takeIf { it.isNotBlank() }
             ?.let(::startWan)
+        // En segundo plano y sin bloquear el arranque: nada depende de que termine, porque el
+        // historial se lee igual mientras esté a medias.
+        scope.launch { runCatching { unsealHistory() } }
+    }
+
+    /**
+     * Convierte el historial que aún se guarda cifrado con la clave estática (`encrypted`) al
+     * sobre en claro dentro de la base cifrada. Ver [Message] y `docs/DISENO-ratchet.md` §4.1.
+     *
+     * Va por lotes y **salta lo que no puede convertir** (un contacto que ya no está, una fila
+     * corrupta) avanzando el desplazamiento: si no, un solo mensaje ilegible dejaría el resto
+     * del historial sin convertir para siempre. Lo saltado se queda como está —y se sigue
+     * leyendo igual— y se vuelve a intentar en el siguiente arranque.
+     *
+     * Es idempotente y barato cuando no queda nada: una consulta que no devuelve filas.
+     */
+    internal suspend fun unsealHistory(batch: Int = UNSEAL_BATCH) {
+        var offset = 0
+        var converted = 0
+        while (true) {
+            val pending = messages.findEncrypted(batch, offset)
+            if (pending.isEmpty()) break
+            val abiertos = pending.mapNotNull { m ->
+                val contact = contacts.findById(m.conversationId) ?: return@mapNotNull null
+                val secret = contact.sharedSecret ?: return@mapNotNull null
+                runCatching { cipher.decrypt(secret, m.payload) }.getOrNull()
+                    ?.let { m.copy(payload = it, encrypted = false) }
+            }
+            if (abiertos.isNotEmpty()) messages.saveAll(abiertos)
+            converted += abiertos.size
+            // Los que no se pudieron abrir siguen siendo `encrypted`, así que la siguiente
+            // consulta los devolvería otra vez: hay que dejarlos atrás.
+            offset += pending.size - abiertos.size
+            if (pending.size < batch) break
+        }
+        if (converted > 0) logLine("🗄 historial convertido: $converted mensaje(s)")
     }
 
     suspend fun bootstrap(): String? = signaling.bootstrap()
@@ -333,6 +371,7 @@ class ChatService @Inject constructor(
             step("relay", RELAY_BUDGET_MS) { logRelayStatus() }
             step("rendezvous", RENDEZVOUS_BUDGET_MS) { announceAndFind() }
             step("reintentos", RETRY_BUDGET_MS) { retryFailed() }
+            step("capacidades", CAPABILITIES_BUDGET_MS) { announceCapabilities() }
         }
     }
 
@@ -360,10 +399,45 @@ class ChatService @Inject constructor(
             val contact = contacts.findById(message.conversationId) ?: continue
             if (contact.blocked || contact.sharedSecret == null) continue
             messages.updateStatus(message.id, MessageStatus.PENDING)
-            val result = transmit(contact, message.copy(status = MessageStatus.PENDING), message.ciphertext)
+            val result = transmit(contact, message.copy(status = MessageStatus.PENDING), wireBytes(contact, message))
             if (result.status == MessageStatus.SENT) sent++
         }
         if (sent > 0) logLine("↻ reenviados $sent de ${failed.size} mensaje(s) pendientes")
+    }
+
+    /**
+     * Anuncia a cada contacto qué versión de protocolo habla este cliente (sobre `V`), **una
+     * sola vez por contacto y por versión**: al recibir el suyo se apunta en `peerProtocol`, y
+     * eso es lo que permitirá encender el ratchet contacto a contacto en vez de esperar a que
+     * todo el mundo actualice (ver `docs/DISENO-ratchet.md` §5).
+     *
+     * Se marca como anunciado **solo si el envío salió** (directo o buzón). Si falla por las
+     * dos vías se reintenta en el próximo ciclo; si sale por buzón, ya está dicho y no se
+     * vuelve a depositar — repetirlo en cada arranque gastaría el cupo del destinatario.
+     *
+     * Un cliente anterior recibe el sobre como `Unsupported` y lo ignora sin pintar nada, que
+     * es lo que hace seguro empezar a anunciarlo desde ya.
+     */
+    internal suspend fun announceCapabilities() {
+        val pendientes = runCatching { contacts.observeAll().first() }.getOrDefault(emptyList())
+            .filter { !it.blocked && it.sharedSecret != null && it.announcedProtocol < PROTOCOL_VERSION }
+        var anunciados = 0
+        for (contact in pendientes) {
+            val enviado = runCatching { sendRaw(contact, MessageEnvelope.encodeHello(PROTOCOL_VERSION)) }
+                .isSuccess
+            if (enviado) {
+                contacts.upsert(contact.copy(announcedProtocol = PROTOCOL_VERSION))
+                anunciados++
+            }
+        }
+        // Se registran los dos desenlaces: sin la segunda línea, "no aparece nada" tanto puede
+        // significar "ya estaba dicho" como "falla siempre en silencio", y en el diagnóstico
+        // eso no se puede distinguir.
+        if (anunciados > 0) {
+            logLine("↔ protocolo v$PROTOCOL_VERSION anunciado a $anunciados contacto(s)")
+        } else if (pendientes.isNotEmpty()) {
+            logLine("↔ anuncio de protocolo pendiente para ${pendientes.size} contacto(s)")
+        }
     }
 
     /**
@@ -558,6 +632,60 @@ class ChatService @Inject constructor(
     }
 
     /**
+     * ¿Se le escribe a este contacto con ratchet? Depende de **él**, no de la versión que haya
+     * publicada: solo si ha anunciado que sabe recibirlo ([Contact.peerProtocol], sobre `V`).
+     * Así el encendido no necesita que actualice todo el mundo a la vez ni una publicación de
+     * seguimiento que cambie una constante — que es lo que sí necesita el depósito ciego.
+     *
+     * [RATCHET_SEND] queda por encima como interruptor de emergencia.
+     */
+    private fun usesRatchet(contact: Contact): Boolean =
+        RATCHET_SEND && contact.sharedSecret != null && contact.peerProtocol >= PROTOCOL_VERSION
+
+    /** Un envío ya cifrado: el mensaje persistido (si lo hay) y los bytes que van por la red. */
+    private class Outgoing(val message: Message, val wire: ByteArray)
+
+    /**
+     * Cifra [envelope] con la forma que hable [contact].
+     *
+     * Con ratchet, **el estado avanzado se guarda antes de que los bytes salgan**. El orden no
+     * es un detalle: si se enviara primero y el estado no llegara a guardarse, el siguiente
+     * mensaje reutilizaría la misma clave de mensaje —y con ella el mismo nonce de AES-GCM—,
+     * que es la forma clásica de romper del todo un cifrado autenticado.
+     */
+    private suspend fun seal(contact: Contact, envelope: ByteArray): ByteArray {
+        if (!usesRatchet(contact)) {
+            return cipher.encrypt(requireNotNull(contact.sharedSecret), envelope)
+        }
+        lateinit var wire: ByteArray
+        sessions.send(contact, envelope) { wire = it }
+        return wire
+    }
+
+    /**
+     * Como [seal], pero además persiste el mensaje que construya [build] **en la misma
+     * transacción** que el avance del ratchet: o se guardan los dos, o ninguno.
+     */
+    private suspend fun sealAndPersist(
+        contact: Contact,
+        envelope: ByteArray,
+        build: () -> Message,
+    ): Outgoing {
+        if (!usesRatchet(contact)) {
+            val wire = cipher.encrypt(requireNotNull(contact.sharedSecret), envelope)
+            val message = build()
+            messages.save(message)
+            return Outgoing(message, wire)
+        }
+        lateinit var wire: ByteArray
+        val message = sessions.send(contact, envelope) { ct ->
+            wire = ct
+            build().also { messages.save(it) }
+        }
+        return Outgoing(message, wire)
+    }
+
+    /**
      * Cifra [plaintext] para [contact], lo persiste (PENDING) y lo envía. Si el envío
      * directo falla (peer offline / NAT sin ruta), cae al **buzón** store-and-forward del
      * nodo (entrega offline) → `SENT`. Solo si el buzón también falla queda **FAILED** —
@@ -565,25 +693,26 @@ class ChatService @Inject constructor(
      */
     suspend fun send(contact: Contact, plaintext: ByteArray, replyTo: String? = null): Message {
         requireNotBlocked(contact)
-        val secret = requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
+        // Precondición, no valor: quién cifra y con qué depende ya de [seal].
+        requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
         // El ciphertext cifra un SOBRE que lleva el id del mensaje, para que el receptor
         // pueda acusar su lectura citándolo (marca de leído). Si es una respuesta, ese sobre
         // va envuelto en uno de cita, que solo lleva el id del mensaje citado.
         val msgId = UUID.randomUUID().toString()
-        val ciphertext = cipher.encrypt(
-            secret,
-            MessageEnvelope.wrapReply(replyTo, MessageEnvelope.encodeText(msgId, plaintext)),
-        )
-        val message = Message(
-            id = msgId,
-            conversationId = contact.id,
-            senderId = SELF,
-            ciphertext = ciphertext,
-            timestamp = System.currentTimeMillis(),
-            status = MessageStatus.PENDING,
-        )
-        messages.save(message)
-        return transmit(contact, message, ciphertext)
+        val envelope = MessageEnvelope.wrapReply(replyTo, MessageEnvelope.encodeText(msgId, plaintext))
+        val out = sealAndPersist(contact, envelope) {
+            Message(
+                id = msgId,
+                conversationId = contact.id,
+                senderId = SELF,
+                // Se guarda el **sobre en claro**, no lo que va por la red: ver [Message]. Lo
+                // que protege el historial es el cifrado de la base.
+                payload = envelope,
+                timestamp = System.currentTimeMillis(),
+                status = MessageStatus.PENDING,
+            )
+        }
+        return transmit(contact, out.message, out.wire)
     }
 
     /**
@@ -592,22 +721,21 @@ class ChatService @Inject constructor(
      */
     suspend fun sendImage(contact: Contact, jpeg: ByteArray, replyTo: String? = null): Message {
         requireNotBlocked(contact)
-        val secret = requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
+        // Precondición, no valor: quién cifra y con qué depende ya de [seal].
+        requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
         val msgId = UUID.randomUUID().toString()
-        val ciphertext = cipher.encrypt(
-            secret,
-            MessageEnvelope.wrapReply(replyTo, MessageEnvelope.encodeImage(msgId, jpeg)),
-        )
-        val message = Message(
-            id = msgId,
-            conversationId = contact.id,
-            senderId = SELF,
-            ciphertext = ciphertext,
-            timestamp = System.currentTimeMillis(),
-            status = MessageStatus.PENDING,
-        )
-        messages.save(message)
-        return transmit(contact, message, ciphertext)
+        val envelope = MessageEnvelope.wrapReply(replyTo, MessageEnvelope.encodeImage(msgId, jpeg))
+        val out = sealAndPersist(contact, envelope) {
+            Message(
+                id = msgId,
+                conversationId = contact.id,
+                senderId = SELF,
+                payload = envelope,
+                timestamp = System.currentTimeMillis(),
+                status = MessageStatus.PENDING,
+            )
+        }
+        return transmit(contact, out.message, out.wire)
     }
 
     /**
@@ -626,7 +754,8 @@ class ChatService @Inject constructor(
         replyTo: String? = null,
     ): Message {
         requireNotBlocked(contact)
-        val secret = requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
+        // Precondición, no valor: quién cifra y con qué depende ya de [seal].
+        requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
         val fileId = UUID.randomUUID().toString()
         val total = (bytes.size + CHUNK_SIZE - 1) / CHUNK_SIZE
         // La cita va en el descriptor local (burbuja propia) y en la meta que viaja: los
@@ -639,7 +768,7 @@ class ChatService @Inject constructor(
             id = fileId,
             conversationId = contact.id,
             senderId = SELF,
-            ciphertext = cipher.encrypt(secret, descriptor),
+            payload = descriptor,
             timestamp = System.currentTimeMillis(),
             status = MessageStatus.PENDING,
         )
@@ -673,8 +802,17 @@ class ChatService @Inject constructor(
      * Envía una señal de llamada E2EE a [contact] (directo → buzón). [kind] ∈
      * invite/accept/reject/hangup/busy. Lleva timestamp para descartar invites rancios.
      */
-    suspend fun sendCallSignal(contact: Contact, kind: String, callId: String) {
-        sendRaw(contact, MessageEnvelope.encodeCall(kind, callId, System.currentTimeMillis()))
+    suspend fun sendCallSignal(
+        contact: Contact,
+        kind: String,
+        callId: String,
+        key: ByteArray? = null,
+    ) {
+        // La mitad de clave solo viaja hacia quien haya anunciado que la entiende: un cliente
+        // anterior parte la cabecera `C` en tres trozos y descartaría la señal entera, con lo
+        // que la llamada no llegaría a sonar. Con el resto se sigue por el camino antiguo.
+        val negociada = key?.takeIf { contact.peerProtocol >= PROTOCOL_VERSION }
+        sendRaw(contact, MessageEnvelope.encodeCall(kind, callId, System.currentTimeMillis(), negociada))
     }
 
     /** Persiste una fila local "📞 Llamada perdida" en el chat de [contact] y la emite. */
@@ -685,7 +823,7 @@ class ChatService @Inject constructor(
             id = id,
             conversationId = contact.id,
             senderId = contact.id,
-            ciphertext = cipher.encrypt(secret, MessageEnvelope.encodeText(id, MISSED_CALL_TEXT.toByteArray())),
+            payload = MessageEnvelope.encodeText(id, MISSED_CALL_TEXT.toByteArray()),
             timestamp = System.currentTimeMillis(),
             status = MessageStatus.DELIVERED,
         )
@@ -697,7 +835,7 @@ class ChatService @Inject constructor(
     /** Cifra y envía un sobre "en crudo" (meta/trozo) sin crear un Message: directo → buzón. */
     private suspend fun sendRaw(contact: Contact, envelope: ByteArray) {
         requireNotBlocked(contact)
-        val ciphertext = cipher.encrypt(requireNotNull(contact.sharedSecret), envelope)
+        val ciphertext = seal(contact, envelope)
         try {
             signaling.send(contact, ciphertext)
         } catch (e: CancellationException) {
@@ -721,16 +859,31 @@ class ChatService @Inject constructor(
 
     /**
      * Reintenta enviar un mensaje **FALLIDO** (o cualquiera por id): lo vuelve a PENDING y
-     * repite el camino directo→buzón→FAILED, reusando su ciphertext ya persistido (mismo id,
-     * sin duplicar). Devuelve el mensaje con su estado final, o null si no existe.
+     * repite el camino directo→buzón→FAILED con el **mismo id** (el receptor deduplica por él,
+     * así que no se duplica). Desde la v8 el sobre se guarda en claro, así que reintentar
+     * **vuelve a cifrarlo**; una fila anterior, que aún guarda su ciphertext, se reenvía tal
+     * cual. Devuelve el mensaje con su estado final, o null si no existe.
      */
     suspend fun retry(contact: Contact, messageId: String): Message? {
         requireNotBlocked(contact)
         val message = messages.findById(messageId) ?: return null
         messages.updateStatus(messageId, MessageStatus.PENDING)
         logLine("↻ reintentando a ${short(contact.peerId)}")
-        return transmit(contact, message.copy(status = MessageStatus.PENDING), message.ciphertext)
+        return transmit(contact, message.copy(status = MessageStatus.PENDING), wireBytes(contact, message))
     }
+
+    /**
+     * Bytes listos para la red de un mensaje ya persistido. Una fila de la v8 en adelante
+     * guarda el sobre en claro y se cifra aquí; una anterior guarda ya el ciphertext de la
+     * clave estática y se reenvía tal cual, que es exactamente lo que se hacía antes.
+     */
+    private suspend fun wireBytes(contact: Contact, message: Message): ByteArray =
+        if (message.encrypted) message.payload else seal(contact, message.payload)
+
+    /** El sobre en claro de un mensaje persistido, descifrando solo si es una fila antigua. */
+    private fun envelopeOf(contact: Contact, message: Message): ByteArray =
+        if (message.encrypted) cipher.decrypt(requireNotNull(contact.sharedSecret), message.payload)
+        else message.payload
 
     /** Transmite un mensaje ya persistido: directo → buzón (offline) → FAILED. Nunca lanza. */
     private suspend fun transmit(contact: Contact, message: Message, ciphertext: ByteArray): Message =
@@ -778,11 +931,15 @@ class ChatService @Inject constructor(
     }
 
     /**
-     * Procesa un ciphertext entrante: resuelve el contacto por [peerId], descifra el sobre y
-     * ramifica: un **acuse de lectura** marca nuestros mensajes salientes como READ (no crea
-     * mensaje visible); un **texto** se persiste DELIVERED con el id del sobre (dedup ante
-     * reentregas). Si no lleva sobre (mensaje legado), se guarda como texto con [mailboxId] o
-     * un id generado. Devuelve el `Message` persistido, o null si es acuse/desconocido.
+     * Procesa un ciphertext entrante: resuelve el contacto por [peerId], lo abre y ramifica.
+     * Un **acuse de lectura** marca nuestros salientes como READ (no crea mensaje visible); un
+     * **anuncio de capacidad** apunta qué versión habla el contacto; un **texto** se persiste
+     * DELIVERED con el id del sobre (dedup ante reentregas). Devuelve el `Message` persistido,
+     * o null si era un acuse, un anuncio, algo ilegible o un remitente desconocido.
+     *
+     * Acepta **las dos formas**: el sobre de ratchet (v2) y el cifrado con la clave estática
+     * (v1). El byte de versión solo decide en qué orden se intentan — quien decide de verdad
+     * es el AEAD, porque un ciphertext v1 son bytes arbitrarios y puede empezar igual.
      */
     suspend fun onReceived(
         peerId: String,
@@ -800,17 +957,88 @@ class ChatService @Inject constructor(
         // en cada ciclo ocupando el cupo del destinatario. El bloqueado no se entera: sus
         // envíos le quedan como enviados, igual que si estuvieras desconectado.
         if (contact.blocked) return null
-        val secret = contact.sharedSecret ?: return null
-        val envelope = runCatching { MessageEnvelope.decode(cipher.decrypt(secret, ciphertext)) }.getOrNull()
+        if (contact.sharedSecret == null) return null
+
+        val message =
+            if (Ratchet.looksLikeRatchet(ciphertext)) openRatchet(contact, ciphertext, mailboxId, ts)
+            else openLegacy(contact, ciphertext, mailboxId, ts)
+        // El aviso al usuario va FUERA de la transacción del ratchet: dentro alargaría el
+        // bloqueo de la base por algo que no tiene nada que ver con persistir.
+        message?.let { emitIncoming(contact, it) }
+        return message
+    }
+
+    /**
+     * Camino v2 (ratchet). Persiste **dentro de la misma transacción** que el avance del
+     * ratchet (ver [RatchetSessions]); una reentrega ya procesada se reconoce y se descarta en
+     * vez de parecer basura, porque su clave ya está gastada.
+     *
+     * Si no se puede abrir se intenta el camino v1 antes de rendirse: la cabecera es una
+     * pista, no una garantía.
+     */
+    private suspend fun openRatchet(
+        contact: Contact,
+        ciphertext: ByteArray,
+        mailboxId: String?,
+        ts: Long?,
+    ): Message? {
+        val recibido = runCatching {
+            sessions.receive(contact, ciphertext) { plain -> persistEnvelope(contact, plain, mailboxId, ts) }
+        }.getOrElse { return openLegacy(contact, ciphertext, mailboxId, ts) }
+        return when (recibido) {
+            is RatchetSessions.Received.Opened -> recibido.value
+            // Ya procesado: devolver null lo ack'ea en el buzón, que es lo correcto — está
+            // entregado y su clave, gastada.
+            RatchetSessions.Received.Duplicate -> null
+        }
+    }
+
+    /** Camino v1: clave estática del contacto. */
+    private suspend fun openLegacy(
+        contact: Contact,
+        ciphertext: ByteArray,
+        mailboxId: String?,
+        ts: Long?,
+    ): Message? {
+        val plain = runCatching { cipher.decrypt(requireNotNull(contact.sharedSecret), ciphertext) }
+            .getOrNull()
+        if (plain == null) {
+            // No se puede abrir por ninguna vía. Antes se persistía el ciphertext como si fuera
+            // texto legado, lo que pintaba una burbuja de basura que no ayuda a nadie.
+            logLine("⚠ mensaje ilegible de ${short(contact.peerId)} (descartado)")
+            return null
+        }
+        return persistEnvelope(contact, plain, mailboxId, ts)
+    }
+
+    /**
+     * Ramifica por el contenido de un sobre **ya descifrado** y persiste lo que corresponda.
+     * No avisa al usuario: eso lo hace [onReceived] al salir, fuera de la transacción.
+     */
+    private suspend fun persistEnvelope(
+        contact: Contact,
+        plain: ByteArray,
+        mailboxId: String?,
+        ts: Long?,
+    ): Message? {
+        val envelope = MessageEnvelope.decode(plain)
         // La cita es un envoltorio: se abre aquí para que el resto ramifique por el contenido
         // real. El id citado solo hace falta en lo que crea burbuja (archivo); el texto y la
-        // imagen lo llevan en su propio ciphertext, que es lo que se persiste.
+        // imagen lo llevan en su propio sobre, que es lo que se persiste.
         val replyTo = (envelope as? MessageEnvelope.Decoded.Reply)?.replyTo
         val decoded = (envelope as? MessageEnvelope.Decoded.Reply)?.inner ?: envelope
 
         when (decoded) {
             is MessageEnvelope.Decoded.Read -> {
                 markOutgoingRead(contact.id, decoded.ids)
+                return null
+            }
+            is MessageEnvelope.Decoded.Hello -> {
+                // Nos dice qué versión habla. Se apunta y ya está: no crea burbuja.
+                if (decoded.protocol != contact.peerProtocol) {
+                    contacts.upsert(contact.copy(peerProtocol = decoded.protocol))
+                    logLine("↔ ${short(contact.peerId)} habla protocolo v${decoded.protocol}")
+                }
                 return null
             }
             is MessageEnvelope.Decoded.FileMeta -> {
@@ -854,16 +1082,21 @@ class ChatService @Inject constructor(
             id = msgId,
             conversationId = contact.id,
             senderId = contact.id,
-            ciphertext = ciphertext,
+            // El sobre ya descifrado: guardar el ciphertext de la red dejaría de servir en
+            // cuanto la clave del mensaje sea de un solo uso (ratchet). Ver [Message].
+            payload = plain,
             timestamp = ts ?: System.currentTimeMillis(),
             status = MessageStatus.DELIVERED,
         )
         messages.save(message)
-        emitIncoming(contact, message)
         return message
     }
 
-    /** Persiste un archivo ya reensamblado como Message (descriptor con path) y lo emite. */
+    /**
+     * Persiste un archivo ya reensamblado como Message (descriptor con path). **No avisa**: el
+     * aviso lo da [onReceived] con lo que devuelva esta rama, y hacerlo aquí también avisaría
+     * dos veces del mismo archivo.
+     */
     private suspend fun persistFile(contact: Contact, fileId: String, f: chat.neto.krypta.core.AssembledFile): Message? {
         // Misma guarda que en onReceived: ni el eco de un envío propio ni un id que ya es de
         // otra conversación pueden sobrescribir nada.
@@ -879,12 +1112,11 @@ class ChatService @Inject constructor(
             id = fileId,
             conversationId = contact.id,
             senderId = contact.id,
-            ciphertext = cipher.encrypt(requireNotNull(contact.sharedSecret), descriptor),
+            payload = descriptor,
             timestamp = System.currentTimeMillis(),
             status = MessageStatus.DELIVERED,
         )
         messages.save(message)
-        emitIncoming(contact, message)
         logLine("← archivo de ${short(contact.peerId)}: ${f.name}")
         return message
     }
@@ -935,7 +1167,7 @@ class ChatService @Inject constructor(
             .map { it.id }
         val newIds = received.filter { it !in ackedReceipts.keys }
         if (newIds.isEmpty()) return
-        val ciphertext = cipher.encrypt(secret, MessageEnvelope.encodeRead(newIds))
+        val ciphertext = seal(contact, MessageEnvelope.encodeRead(newIds))
         val ok = runCatching { signaling.send(contact, ciphertext); true }.getOrDefault(false) ||
             runCatching { signaling.sendOffline(contact, ciphertext, outboxLabel(contact)); true }.getOrDefault(false)
         if (ok) newIds.forEach { ackedReceipts[it] = Unit }
@@ -1036,6 +1268,10 @@ class ChatService @Inject constructor(
      */
     suspend fun deleteContact(contact: Contact) {
         clearConversation(contact)
+        // La sesión del ratchet se va con el contacto: volver a añadirlo arranca un linaje
+        // nuevo, y quedársela sería guardar material de una conversación que ya no existe.
+        // Vaciar el chat, en cambio, NO la toca: vaciar no es romper la sesión.
+        runCatching { sessions.forget(contact) }
         contacts.delete(contact.id)
         lastFound.remove(contact.peerId)
         _onlinePeers.update { it - contact.peerId }
@@ -1057,7 +1293,7 @@ class ChatService @Inject constructor(
      * (legado), devuelve el texto descifrado tal cual. Para imágenes usa [content].
      */
     fun decrypt(contact: Contact, message: Message): ByteArray {
-        val plain = cipher.decrypt(requireNotNull(contact.sharedSecret), message.ciphertext)
+        val plain = envelopeOf(contact, message)
         val decoded = MessageEnvelope.decode(plain)
         return when (val d = (decoded as? MessageEnvelope.Decoded.Reply)?.inner ?: decoded) {
             is MessageEnvelope.Decoded.Text -> d.body
@@ -1079,7 +1315,7 @@ class ChatService @Inject constructor(
      * una sola vez: la UI necesita las dos cosas por mensaje al pintar la conversación.
      */
     fun decodeMessage(contact: Contact, message: Message): DecodedMessage {
-        val plain = cipher.decrypt(requireNotNull(contact.sharedSecret), message.ciphertext)
+        val plain = envelopeOf(contact, message)
         val decoded = MessageEnvelope.decode(plain)
         val replyTo = (decoded as? MessageEnvelope.Decoded.Reply)?.replyTo
         val content = when (val d = (decoded as? MessageEnvelope.Decoded.Reply)?.inner ?: decoded) {
@@ -1087,7 +1323,8 @@ class ChatService @Inject constructor(
             is MessageEnvelope.Decoded.Image -> MessageContent.Image(d.bytes)
             is MessageEnvelope.Decoded.FileDescriptor ->
                 MessageContent.File(d.name, d.mime, d.size, d.path)
-            is MessageEnvelope.Decoded.Read -> MessageContent.Text("")
+            is MessageEnvelope.Decoded.Read, is MessageEnvelope.Decoded.Hello ->
+                MessageContent.Text("") // no crean burbuja
             is MessageEnvelope.Decoded.FileMeta, is MessageEnvelope.Decoded.FileChunk,
             is MessageEnvelope.Decoded.Call ->
                 MessageContent.Text("") // no deberían persistirse como Message
@@ -1113,7 +1350,9 @@ class ChatService @Inject constructor(
             null -> "Mensaje nuevo"
         }
 
-    private companion object {
+    // `internal` (no `private`): los tests del módulo fijan la versión de protocolo que se
+    // anuncia, y una constante de protocolo que nadie comprueba se desincroniza sola.
+    internal companion object {
         const val SELF = "self"
         /** Imágenes animadas: viajan como archivo pero se rotulan/pintan como imagen. */
         val ANIMATED_IMAGE_MIMES = setOf("image/gif", "image/webp")
@@ -1147,6 +1386,41 @@ class ChatService @Inject constructor(
          * que sabe recibir por etiquetas esté repartida entre los contactos; hasta entonces,
          * depositar a ciegas sería depositar donde el otro no mira.
          */
+        /**
+         * Versión de protocolo que habla este cliente y que se anuncia a cada contacto (sobre
+         * `V`). La 1 es implícita: no la anuncia nadie, es "lo que había antes".
+         */
+        const val PROTOCOL_VERSION = 2
+
+        /**
+         * ¿Se **envía** ya con ratchet? **Sí, desde el 10 sep 2026.**
+         *
+         * A quién se le envía así lo decide `contact.peerProtocol` —lo que cada contacto haya
+         * anunciado con el sobre `V`—, no esta constante: con un contacto que aún no lo
+         * anuncia se sigue en v1, y eso no cambia por encenderla. Es decir, **esto no empieza
+         * a tener efecto hasta que el otro extremo actualiza**.
+         *
+         * Se encendió **antes** de la prueba con dos móviles que pedía el §10 del diseño, a
+         * decisión del autor (10 sep 2026): la colaboradora que presta el segundo móvil no
+         * responde y eso tenía el trabajo parado. La prueba sigue pendiente y está en
+         * `docs/PRUEBAS-PENDIENTES.md` §16 — conviene hacerla **con un contacto desechable en
+         * cuanto los dos móviles tengan este build**, antes de fiarle una conversación real.
+         *
+         * Sigue siendo `var` y no `const` a propósito: es el **interruptor de emergencia**. Si
+         * algo va mal en vivo, ponerlo a `false` devuelve todo a v1 sin perder nada de lo que
+         * ya está guardado (lo que se hubiera enviado con ratchet y no se pudiera abrir, sí).
+         * Nada del código de producción lo escribe; los tests lo usan para cubrir los dos
+         * caminos.
+         */
+        @Volatile
+        internal var RATCHET_SEND = true
+
+        /** Mensajes por lote al convertir el historial a sobre en claro (ver `unsealHistory`). */
+        const val UNSEAL_BATCH = 200
+
+        /** Plazo del paso de anuncio de capacidades del ciclo WAN. */
+        const val CAPABILITIES_BUDGET_MS = 8_000L
+
         const val BLIND_DEPOSIT = false
         // Antigüedad máxima de un FALLIDO para reintentarlo solo (24 h).
         const val RETRY_MAX_AGE_MS = 24L * 60 * 60 * 1000

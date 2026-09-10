@@ -1,5 +1,6 @@
 package chat.neto.krypta.data.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -15,7 +16,9 @@ data class MessageEntity(
     @PrimaryKey val id: String,
     val conversationId: String,
     val senderId: String,
-    val ciphertext: ByteArray,
+    val payload: ByteArray,
+    /** El [payload] sigue siendo ciphertext de la clave estática (fila anterior a la v8). */
+    @ColumnInfo(defaultValue = "1") val encrypted: Boolean,
     val timestamp: Long,
     val status: MessageStatus,
 ) {
@@ -25,7 +28,8 @@ data class MessageEntity(
         return id == other.id &&
             conversationId == other.conversationId &&
             senderId == other.senderId &&
-            ciphertext.contentEquals(other.ciphertext) &&
+            payload.contentEquals(other.payload) &&
+            encrypted == other.encrypted &&
             timestamp == other.timestamp &&
             status == other.status
     }
@@ -34,7 +38,8 @@ data class MessageEntity(
         var result = id.hashCode()
         result = 31 * result + conversationId.hashCode()
         result = 31 * result + senderId.hashCode()
-        result = 31 * result + ciphertext.contentHashCode()
+        result = 31 * result + payload.contentHashCode()
+        result = 31 * result + encrypted.hashCode()
         result = 31 * result + timestamp.hashCode()
         result = 31 * result + status.hashCode()
         return result

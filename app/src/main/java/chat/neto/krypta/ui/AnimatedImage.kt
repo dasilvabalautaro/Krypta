@@ -7,6 +7,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -22,7 +24,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import java.io.File
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -50,9 +51,17 @@ fun AnimatedImage(
     maxSize: Dp = 240.dp,
     fallback: @Composable () -> Unit,
 ) {
-    val drawable: Drawable? = remember(path) {
+    // El adjunto está cifrado en reposo, así que se decodifica desde los bytes ya descifrados
+    // (`ByteBuffer`) y no desde el fichero. Mientras llegan se pinta el fallback: el GIF
+    // aparece cuando está listo, en vez de dejar un hueco.
+    val reader = LocalAttachmentReader.current
+    val bytes by produceState<ByteArray?>(initialValue = null, path) {
+        value = reader(path)
+    }
+    val datos = bytes ?: run { fallback(); return }
+    val drawable: Drawable? = remember(path, datos) {
         runCatching {
-            val source = ImageDecoder.createSource(File(path))
+            val source = ImageDecoder.createSource(java.nio.ByteBuffer.wrap(datos))
             ImageDecoder.decodeDrawable(source) { decoder, info, _ ->
                 // Submuestreo: acota la memoria del bitmap (un GIF grande a pantalla completa
                 // no aporta nada en una burbuja de ~240 dp).

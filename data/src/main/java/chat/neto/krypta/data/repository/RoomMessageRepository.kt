@@ -25,6 +25,11 @@ class RoomMessageRepository @Inject constructor(
 
     override suspend fun save(message: Message) = dao.upsert(message.toEntity())
 
+    override suspend fun saveAll(messages: List<Message>) = dao.upsertAll(messages.map { it.toEntity() })
+
+    override suspend fun findEncrypted(limit: Int, offset: Int): List<Message> =
+        dao.findEncrypted(limit, offset).map(::toDomain)
+
     override suspend fun findById(id: String): Message? = dao.findById(id)?.let(::toDomain)
 
     override suspend fun findByStatus(status: MessageStatus, limit: Int): List<Message> =
@@ -43,7 +48,8 @@ class RoomMessageRepository @Inject constructor(
         id = e.id,
         conversationId = e.conversationId,
         senderId = e.senderId,
-        ciphertext = e.ciphertext,
+        payload = e.payload,
+        encrypted = e.encrypted,
         timestamp = e.timestamp,
         status = e.status,
     )
@@ -52,7 +58,8 @@ class RoomMessageRepository @Inject constructor(
         id = id,
         conversationId = conversationId,
         senderId = senderId,
-        ciphertext = ciphertext,
+        payload = payload,
+        encrypted = encrypted,
         timestamp = timestamp,
         status = status,
     )

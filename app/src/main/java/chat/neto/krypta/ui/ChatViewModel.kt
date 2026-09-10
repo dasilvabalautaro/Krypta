@@ -80,8 +80,15 @@ class ChatViewModel @Inject constructor(
     private val video: chat.neto.krypta.video.MediaCodecVideoEngine,
     private val backup: chat.neto.krypta.p2p.BackupManager,
     private val notifier: chat.neto.krypta.IncomingNotifier,
+    private val files: chat.neto.krypta.core.FileStore,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
+
+    /**
+     * Bytes **en claro** de un adjunto. Desde que `krypta_files/` va cifrado en reposo, la UI
+     * no lee ficheros: los pide aquí y descifra el almacén.
+     */
+    suspend fun readAttachment(path: String): ByteArray? = runCatching { files.read(path) }.getOrNull()
 
     /** Estado de la llamada en curso (IDLE = sin llamada; la UI superpone CallScreen si no). */
     val callState: StateFlow<CallState> = calls.state
@@ -272,13 +279,14 @@ class ChatViewModel @Inject constructor(
      * entera, una cita a un mensaje que aún no había llegado se completa sola en cuanto llega.
      *
      * Dos cosas importantes aquí, ambas de la auditoría (A-2):
-     *  - **`flowOn(Dispatchers.Default)`**: cada mensaje son un descifrado AES-GCM y un
-     *    decodificado de sobre. Sin esto se ejecutaban en el hilo del colector, que es el
-     *    principal, y el coste crece con el historial: un chat largo bloqueaba la UI.
+     *  - **`flowOn(Dispatchers.Default)`**: cada mensaje es un decodificado de sobre (y, en
+     *    las filas anteriores a la v8, además un descifrado AES-GCM). Sin esto se ejecutaba en
+     *    el hilo del colector, que es el principal, y el coste crece con el historial: un chat
+     *    largo bloqueaba la UI.
      *  - **caché por mensaje** ([decodedCache]): Room reemite la conversación **entera** cada
      *    vez que cambia algo (un mensaje nuevo, un ✓✓), así que sin caché cada cambio volvía a
-     *    descifrar todo el historial. El ciphertext de un id no cambia nunca, así que la
-     *    caché es segura y basta con la clave (id + huella del ciphertext).
+     *    decodificar todo el historial. El contenido guardado de un id no cambia nunca, así
+     *    que la caché es segura y basta con la clave (id + huella del payload).
      *
      * La llamada desde Compose debe ir dentro de un `remember`: este método construye un Flow
      * nuevo en cada invocación y `collectAsState` reinicia la colección con cada instancia.
@@ -319,17 +327,17 @@ class ChatViewModel @Inject constructor(
         }.flowOn(Dispatchers.Default)
 
     /**
-     * Descifra [m] reutilizando el resultado anterior si ya se descifró ese mismo mensaje.
+     * Decodifica [m] reutilizando el resultado anterior si ya se decodificó ese mismo mensaje.
      *
      * Solo se cachean texto y archivo: la imagen en línea lleva sus bytes dentro, y guardar
-     * cientos en memoria sería peor que volver a descifrarla. La clave incluye una huella del
-     * ciphertext para que un id reutilizado con otro contenido nunca devuelva lo anterior.
+     * cientos en memoria sería peor que volver a decodificarla. La clave incluye una huella del
+     * payload para que un id reutilizado con otro contenido nunca devuelva lo anterior.
      */
     private fun decodeCached(
         contact: Contact,
         m: chat.neto.krypta.core.model.Message,
     ): chat.neto.krypta.core.model.DecodedMessage? {
-        val key = "${m.id}:${m.ciphertext.contentHashCode()}"
+        val key = "${m.id}:${m.payload.contentHashCode()}"
         decodedCache[key]?.let { return it }
         val decoded = runCatching { chat.decodeMessage(contact, m) }.getOrNull() ?: return null
         if (decoded.content !is MessageContent.Image) decodedCache[key] = decoded
@@ -421,14 +429,8 @@ class ChatViewModel @Inject constructor(
         }
         val extension = if (mime == "image/webp") "webp" else "gif"
         val name = picked.name.takeIf { it.contains('.') } ?: "animacion.$extension"
-        val localPath = withContext(Dispatchers.IO) {
-            runCatching {
-                val dir = java.io.File(context.filesDir, "krypta_files/sent").apply { mkdirs() }
-                java.io.File(dir, "${java.util.UUID.randomUUID()}.$extension")
-                    .apply { writeBytes(picked.bytes) }
-                    .absolutePath
-            }.getOrNull()
-        }
+        // La copia propia va por el almacén, que la deja cifrada en reposo como el resto.
+        val localPath = files.saveSent("${java.util.UUID.randomUUID()}.$extension", picked.bytes)
         runCatching { chat.sendFile(contact, name, mime, picked.bytes, localPath, replyTo) }
             .onFailure { _error.value = "No se pudo enviar el GIF" }
     }
@@ -457,9 +459,14 @@ class ChatViewModel @Inject constructor(
                 when {
                     bytes.isEmpty() -> _error.value = "Nota de voz vacía"
                     bytes.size > MAX_FILE_BYTES -> _error.value = "Nota de voz demasiado larga"
-                    else -> chat.sendFile(
-                        contact, file.name, "audio/mp4", bytes, file.absolutePath, replyTo,
-                    )
+                    else -> {
+                        // MediaRecorder solo sabe escribir en claro, así que graba en la caché
+                        // y la copia que se queda pasa por el almacén, ya cifrada. El
+                        // temporal se borra en cuanto está guardado.
+                        val guardada = files.saveSent(file.name, bytes)
+                        withContext(Dispatchers.IO) { file.delete() }
+                        chat.sendFile(contact, file.name, "audio/mp4", bytes, guardada, replyTo)
+                    }
                 }
             }.onFailure { _error.value = "No se pudo enviar la nota de voz" }
         }

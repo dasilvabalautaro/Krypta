@@ -57,9 +57,22 @@ data class CallState(
 /**
  * Orquesta las llamadas de voz (Fase 7b, Opción A): señalización por sobres E2EE `C`
  * (vía [ChatService], directo → buzón), medios por un stream libp2p `/krypta/call/1.0.0`
- * (directo por DCUtR o relayed), y cada frame de audio cifrado con una **clave por llamada**
- * `HKDF(sharedSecret, callId)`. El que llama abre el stream tras el accept y manda un
- * "hello" cifrado; el receptor lo valida (autentica la llamada) antes de arrancar el audio.
+ * (directo por DCUtR o relayed), y cada frame de audio cifrado con una **clave por llamada**.
+ * El que llama abre el stream tras el accept y manda un "hello" cifrado; el receptor lo valida
+ * (autentica la llamada) antes de arrancar el audio.
+ *
+ * **La clave de la llamada se negocia** (fase 7 del ratchet): cada lado sortea 32 bytes y los
+ * manda dentro del sobre `C` —el invite lleva la mitad de quien llama, el accept la del que
+ * contesta— y la clave sale de las dos, `HKDF(k_llamante ‖ k_contestador)`. Antes se derivaba
+ * de `HKDF(secreto_estático, callId)`, o sea que **quien robara la identidad podía descifrar
+ * cualquier llamada que hubiera grabado**, pasada o futura. Ahora hace falta además el sobre
+ * de señalización de esa llamada concreta; y en cuanto el envío por ratchet esté encendido,
+ * ese sobre tiene secreto hacia adelante y la llamada lo hereda entero, sin tocar el
+ * streaming ni un byte.
+ *
+ * Con un contacto que aún no lo entiende se sigue por el camino antiguo (ver
+ * `ChatService.sendCallSignal`): una llamada que suena vale más que una llamada perfecta que
+ * el otro no puede recibir.
  */
 @Singleton
 class CallService @Inject constructor(
@@ -74,6 +87,14 @@ class CallService @Inject constructor(
 
     private val mutex = Mutex()
     private var callKey: ByteArray? = null
+
+    /** Mitad de clave propia de la llamada en curso (la que se manda en el invite/accept). */
+    private var localHalf: ByteArray? = null
+
+    /** Mitad del otro extremo, si la mandó. Null = contacto antiguo, sin negociación. */
+    private var remoteHalf: ByteArray? = null
+
+    private val random = java.security.SecureRandom()
     private var stream: CallStream? = null
     private var txFrames: Channel<ByteArray>? = null
     private var mediaJobs: List<Job> = emptyList()
@@ -121,14 +142,18 @@ class CallService @Inject constructor(
         val started = mutex.withLock {
             if (!idle()) return@withLock false
             val callId = UUID.randomUUID().toString()
+            // Clave de respaldo por si el otro extremo no negocia (contacto antiguo). Si
+            // negocia, el accept la sustituye antes de que se abra el stream.
             callKey = deriveCallKey(secret, callId)
+            localHalf = ByteArray(HALF_BYTES).also(random::nextBytes)
+            remoteHalf = null
             _state.value = CallState(CallPhase.CALLING, contact, callId, outgoing = true)
             armTimeout(RING_TIMEOUT_MS) { onOutgoingTimeout() }
             true
         }
         if (!started) return
         chat.diagnose("📞 llamando a ${contact.displayName}…")
-        runCatching { chat.sendCallSignal(contact, KIND_INVITE, _state.value.callId) }
+        runCatching { chat.sendCallSignal(contact, KIND_INVITE, _state.value.callId, localHalf) }
             .onFailure { endCall("sin conexión", sendHangup = false) }
     }
 
@@ -141,7 +166,7 @@ class CallService @Inject constructor(
             armTimeout(CONNECT_TIMEOUT_MS) { endCall("no se pudo conectar", sendHangup = true) }
             s
         }
-        runCatching { chat.sendCallSignal(st.contact!!, KIND_ACCEPT, st.callId) }
+        runCatching { chat.sendCallSignal(st.contact!!, KIND_ACCEPT, st.callId, localHalf) }
             .onFailure { endCall("sin conexión", sendHangup = false) }
     }
 
@@ -182,7 +207,18 @@ class CallService @Inject constructor(
                 val proceed = mutex.withLock {
                     val s = _state.value
                     (s.phase == CallPhase.CALLING && s.callId == sig.callId && s.contact?.id == contact.id)
-                        .also { if (it) _state.value = s.copy(phase = CallPhase.CONNECTING) }
+                        .also {
+                            if (it) {
+                                // La otra mitad llega aquí, **antes** de abrir el stream: el
+                                // primer byte de medios ya va con la clave negociada.
+                                remoteHalf = sig.key
+                                negotiatedKey(
+                                    contact.sharedSecret, s.callId,
+                                    caller = localHalf, callee = sig.key,
+                                )?.let { negociada -> callKey = negociada }
+                                _state.value = s.copy(phase = CallPhase.CONNECTING)
+                            }
+                        }
                 }
                 if (proceed) connectAsCaller()
             }
@@ -220,7 +256,12 @@ class CallService @Inject constructor(
             if (!idle()) {
                 _state.value.callId != sig.callId // otra llamada distinta → ocupado
             } else {
-                callKey = deriveCallKey(secret, sig.callId)
+                remoteHalf = sig.key
+                localHalf = ByteArray(HALF_BYTES).also(random::nextBytes)
+                // Si el otro negoció, la clave sale ya de las dos mitades: quien contesta las
+                // tiene ambas desde este momento (la suya la acaba de sortear).
+                callKey = negotiatedKey(secret, sig.callId, caller = sig.key, callee = localHalf)
+                    ?: deriveCallKey(secret, sig.callId)
                 _state.value = CallState(CallPhase.RINGING, contact, sig.callId, outgoing = false)
                 armTimeout(RING_TIMEOUT_MS) { onRingingTimeout() }
                 chat.diagnose("📞 llamada entrante de ${contact.displayName}")
@@ -474,6 +515,8 @@ class CallService @Inject constructor(
         videoIn = null
         runCatching { audio.stop() }
         callKey = null
+        localHalf = null
+        remoteHalf = null
     }
 
     private suspend fun onOutgoingTimeout() {
@@ -515,8 +558,32 @@ class CallService @Inject constructor(
         }
     }
 
+    /** Camino antiguo: la clave es función del secreto estático, así que no tiene PFS. */
     private fun deriveCallKey(sharedSecret: ByteArray, callId: String): ByteArray =
         Hkdf.derive(sharedSecret, CALL_KEY_SALT, callId.toByteArray(Charsets.UTF_8), 32)
+
+    /**
+     * Clave negociada de la llamada: `HKDF(k_llamante ‖ k_contestador, salt = secreto)`. Null
+     * si falta alguna mitad (contacto que no negocia) → se usa el camino antiguo.
+     *
+     * El orden es siempre llamante-primero, que ambos extremos conocen sin hablarlo. Y el
+     * secreto compartido va de sal para que la clave siga atada a **esa pareja**: sin él, dos
+     * mitades interceptadas bastarían.
+     */
+    private fun negotiatedKey(
+        sharedSecret: ByteArray?,
+        callId: String,
+        caller: ByteArray?,
+        callee: ByteArray?,
+    ): ByteArray? {
+        if (sharedSecret == null || caller == null || callee == null) return null
+        return Hkdf.derive(
+            ikm = caller + callee,
+            salt = sharedSecret,
+            info = "krypta-call-key-v2:$callId".toByteArray(Charsets.UTF_8),
+            length = 32,
+        )
+    }
 
     private fun helloPayload(callId: String): ByteArray =
         "HELLO:$callId".toByteArray(Charsets.UTF_8)
@@ -525,7 +592,13 @@ class CallService @Inject constructor(
     private fun videoHelloPayload(callId: String): ByteArray =
         "VHELLO:$callId".toByteArray(Charsets.UTF_8)
 
-    private companion object {
+    // `internal` (no `private`): el test que fija que la clave ya NO sale del secreto estático
+    // tiene que usar la sal de verdad. Escribiéndola a mano, la aserción pasa por el motivo
+    // equivocado — ninguna clave inventada abre nada.
+    internal companion object {
+        /** Bytes que aporta cada lado a la clave de la llamada. */
+        const val HALF_BYTES = 32
+
         const val KIND_INVITE = "invite"
         const val KIND_ACCEPT = "accept"
         const val KIND_REJECT = "reject"

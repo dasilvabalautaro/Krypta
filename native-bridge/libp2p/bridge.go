@@ -142,6 +142,37 @@ func SharedSecretFor(identity []byte, peerID string) ([]byte, error) {
 	return curve25519.X25519(scalar[:], montPub)
 }
 
+// RatchetKeyPair sortea un par efímero X25519 para el ratchet y lo devuelve como
+// privada(32) || pública(32). Es material efímero de un solo uso: nunca se deriva de la
+// identidad, y borrarlo es lo que da el secreto hacia adelante (docs/DISENO-ratchet.md §0).
+//
+// Vive aquí y no en Kotlin porque Android no trae X25519 (`XDH`) hasta la API 33 y el minSdk
+// de Krypta es 30; en la JVM de los tests se usa el del JDK.
+func RatchetKeyPair() ([]byte, error) {
+	var priv [32]byte
+	if _, err := io.ReadFull(rand.Reader, priv[:]); err != nil {
+		return nil, err
+	}
+	// Clamp RFC 7748: descarta la cofactor-torsión y fija el bit alto.
+	priv[0] &= 248
+	priv[31] &= 127
+	priv[31] |= 64
+	pub, err := curve25519.X25519(priv[:], curve25519.Basepoint)
+	if err != nil {
+		return nil, err
+	}
+	return append(priv[:], pub...), nil
+}
+
+// RatchetAgree calcula X25519(priv, pub). Devuelve error con un punto de orden bajo (el
+// resultado sería todo ceros), que es justo lo que el ratchet no debe aceptar.
+func RatchetAgree(priv []byte, pub []byte) ([]byte, error) {
+	if len(priv) != 32 || len(pub) != 32 {
+		return nil, fmt.Errorf("X25519 espera claves de 32 bytes, no %d/%d", len(priv), len(pub))
+	}
+	return curve25519.X25519(priv, pub)
+}
+
 // MessageHandler is implemented on the Kotlin side to receive inbound messages.
 // gomobile binds this Go interface as a Java/Kotlin interface.
 type MessageHandler interface {

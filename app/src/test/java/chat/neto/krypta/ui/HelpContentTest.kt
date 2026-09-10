@@ -34,7 +34,12 @@ class HelpContentTest {
     fun `answers are concise but not stubs`() {
         HelpContent.items.forEach { item ->
             // Ni una respuesta de una palabra ni un muro de texto: la ayuda in-app es un resumen.
-            assertTrue("respuesta demasiado corta: ${item.question}", item.answer.length in 40..600)
+            // El mensaje dice la longitud real: decía solo "demasiado corta" y mandaba a
+            // buscar en la dirección contraria cuando lo que sobraba era texto.
+            assertTrue(
+                "respuesta de ${item.answer.length} caracteres (se esperan 40..600): ${item.question}",
+                item.answer.length in 40..600,
+            )
         }
     }
 

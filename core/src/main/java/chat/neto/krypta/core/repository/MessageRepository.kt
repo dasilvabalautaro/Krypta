@@ -24,6 +24,17 @@ interface MessageRepository {
      */
     suspend fun findByStatus(status: MessageStatus, limit: Int): List<Message>
 
+    /**
+     * Hasta [limit] mensajes que aún se guardan cifrados con la clave estática (`encrypted`),
+     * saltando los [offset] primeros, para convertirlos a sobre en claro dentro de la base
+     * cifrada. El desplazamiento existe para poder **dejar atrás** los que no se puedan
+     * convertir; sin él, uno solo bloquearía el resto del historial. Ver [Message].
+     */
+    suspend fun findEncrypted(limit: Int, offset: Int = 0): List<Message>
+
+    /** Guarda varios de una vez, en una sola transacción (la conversión del historial). */
+    suspend fun saveAll(messages: List<Message>)
+
     suspend fun updateStatus(id: String, status: MessageStatus)
 
     /**

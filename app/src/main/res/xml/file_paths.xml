@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- Archivos recibidos, reensamblados en el almacenamiento interno de la app. -->
-    <files-path name="krypta_files" path="krypta_files/" />
+    <!--
+      Copias EN CLARO que Krypta deja para "abrir con otra app". El almacén de adjuntos
+      (`files/krypta_files/`) va cifrado en reposo y **ya no se comparte por aquí**: un visor
+      externo no sabría qué hacer con un fichero cifrado, así que lo que se comparte es esta
+      copia temporal, que se limpia al volver a la app.
+    -->
+    <cache-path name="krypta_abrir" path="krypta_abrir/" />
 </paths>

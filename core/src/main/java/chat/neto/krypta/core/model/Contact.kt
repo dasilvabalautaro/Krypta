@@ -18,6 +18,14 @@ data class Contact(
     val sharedSecret: ByteArray?,
     val verified: Boolean = false,
     val blocked: Boolean = false,
+    /**
+     * Versión de protocolo que el contacto **ha anunciado** (0 = aún no ha dicho nada, o su
+     * cliente es anterior al anuncio). Es lo que permite encender el ratchet contacto a
+     * contacto en vez de esperar a que todo el mundo actualice.
+     */
+    val peerProtocol: Int = 0,
+    /** Versión que ya le hemos anunciado nosotros, para no repetirlo en cada arranque. */
+    val announcedProtocol: Int = 0,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -28,7 +36,9 @@ data class Contact(
             publicKey.contentEquals(other.publicKey) &&
             (sharedSecret?.contentEquals(other.sharedSecret) ?: (other.sharedSecret == null)) &&
             verified == other.verified &&
-            blocked == other.blocked
+            blocked == other.blocked &&
+            peerProtocol == other.peerProtocol &&
+            announcedProtocol == other.announcedProtocol
     }
 
     override fun hashCode(): Int {
@@ -39,6 +49,8 @@ data class Contact(
         result = 31 * result + (sharedSecret?.contentHashCode() ?: 0)
         result = 31 * result + verified.hashCode()
         result = 31 * result + blocked.hashCode()
+        result = 31 * result + peerProtocol
+        result = 31 * result + announcedProtocol
         return result
     }
 }

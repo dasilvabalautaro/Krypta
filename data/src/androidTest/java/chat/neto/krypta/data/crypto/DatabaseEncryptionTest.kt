@@ -59,7 +59,7 @@ class DatabaseEncryptionTest {
             db.readBytes().toString(Charsets.ISO_8859_1).contains("Ana"),
         )
 
-        System.loadLibrary("sqlcipher")
+        SqlCipher.load()
         val cifrada = net.zetetic.database.sqlcipher.SQLiteDatabase
             .openOrCreateDatabase(db, passphrase, null, null)
         try {

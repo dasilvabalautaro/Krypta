@@ -6,6 +6,7 @@ import chat.neto.krypta.core.FileStore
 import chat.neto.krypta.core.IncomingFileMeta
 import dagger.Binds
 import dagger.Module
+import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
@@ -24,15 +25,49 @@ import javax.inject.Singleton
  * Cuando están la meta y todos los trozos, se concatena en `<base>/<fileId>/<name>`, se
  * borra el staging y se devuelve el descriptor. Idempotente ante reentregas (reescribir un
  * trozo ya staged es inocuo; un fileId ya ensamblado se reensambla igual si reaparece).
+ *
+ * **Todo lo que escribe va cifrado en reposo** ([FileVault]): los trozos y la meta del staging
+ * y el archivo ensamblado. Era lo último que quedaba en claro en el dispositivo. La lectura
+ * ([read]) tolera los adjuntos anteriores, que no llevan la marca del almacén.
  */
 @Singleton
-class DiskFileStore(private val baseDir: File) : FileStore {
+class DiskFileStore(
+    private val baseDir: File,
+    private val vault: FileVault?,
+) : FileStore {
 
-    @Inject constructor(@ApplicationContext context: Context) :
-        this(File(context.filesDir, "krypta_files"))
+    @Inject constructor(@ApplicationContext context: Context, vault: FileVault) :
+        this(File(context.filesDir, "krypta_files"), vault)
 
     private val mutex = Mutex()
     private val stagingRoot get() = File(baseDir, "staging")
+    private val sentDir get() = File(baseDir, "sent")
+
+    /** Cifra si hay almacén; sin él (tests de la lógica de reensamblado) escribe tal cual. */
+    private fun seal(bytes: ByteArray): ByteArray = vault?.seal(bytes) ?: bytes
+
+    /** Descifra si hace falta. Un adjunto anterior al cifrado se devuelve tal cual. */
+    private fun open(bytes: ByteArray): ByteArray = vault?.open(bytes) ?: bytes
+
+    /** Lee y descifra un fichero del almacén. */
+    private fun readSealed(file: File): ByteArray = open(file.readBytes())
+
+    override suspend fun read(path: String): ByteArray? = mutex.withLock {
+        val file = File(path)
+        // Solo dentro del almacén: el path viene de un descriptor persistido y esto no debe
+        // convertirse en un lector de cualquier fichero del dispositivo.
+        if (!file.canonicalPath.startsWith(baseDir.canonicalPath + File.separator)) return@withLock null
+        runCatching { readSealed(file) }.getOrNull()
+    }
+
+    override suspend fun saveSent(name: String, bytes: ByteArray): String? = mutex.withLock {
+        runCatching {
+            sentDir.mkdirs()
+            val target = File(sentDir, sanitize(name))
+            writeAtomic(target, bytes)
+            target.absolutePath
+        }.getOrNull()
+    }
 
     /**
      * Registra la meta de un archivo entrante. **Valida los límites**: el emisor se acota en
@@ -59,7 +94,7 @@ class DiskFileStore(private val baseDir: File) : FileStore {
         if (index < 0 || index >= MAX_CHUNKS || bytes.size > MAX_CHUNK_BYTES) return@withLock null
         // Lectura de la meta SIN crear el directorio: un trozo que se va a rechazar no debe
         // dejar rastro en disco.
-        val announced = runCatching { decodeMeta(File(stagingPath(fileId), META_FILE).readBytes()) }.getOrNull()
+        val announced = runCatching { decodeMeta(readSealed(File(stagingPath(fileId), META_FILE))) }.getOrNull()
         if (announced != null && index >= announced.totalChunks) return@withLock null
         sweepStagingIfDue()
         val dir = stagingDir(fileId)
@@ -115,15 +150,20 @@ class DiskFileStore(private val baseDir: File) : FileStore {
     /** Si hay meta y todos los trozos en el staging, concatena, limpia y devuelve el archivo. */
     private fun tryAssemble(fileId: String): AssembledFile? {
         val dir = stagingPath(fileId)
-        val meta = runCatching { decodeMeta(File(dir, META_FILE).readBytes()) }.getOrNull() ?: return null
+        val meta = runCatching { decodeMeta(readSealed(File(dir, META_FILE))) }.getOrNull() ?: return null
         val chunks = (0 until meta.totalChunks).map { File(dir, "$it$CHUNK_EXT") }
         if (!chunks.all { it.isFile }) return null
         val outDir = File(baseDir, sanitize(fileId)).apply { mkdirs() }
         val out = File(outDir, sanitize(meta.name))
         val tmp = File(outDir, ".${out.name}.tmp")
-        tmp.outputStream().use { os ->
-            for (chunk in chunks) chunk.inputStream().use { it.copyTo(os) }
-        }
+        // Los trozos están cifrados uno a uno: se abren y se vuelve a cerrar el resultado
+        // entero. Un archivo de Krypta no pasa de 8 MB, así que cabe en memoria sin drama —
+        // pero se concatena en un buffer, no con `+` en un fold: 171 trozos encadenados así
+        // copiarían cientos de MB.
+        val completo = java.io.ByteArrayOutputStream(meta.size.toInt().coerceAtLeast(32)).apply {
+            for (chunk in chunks) write(readSealed(chunk))
+        }.toByteArray()
+        tmp.writeBytes(seal(completo))
         check(tmp.renameTo(out) || (out.delete() && tmp.renameTo(out))) { "no se pudo escribir ${out.name}" }
         dir.deleteRecursively()
         return AssembledFile(meta.name, meta.mime, meta.size, out.absolutePath, meta.replyTo)
@@ -137,7 +177,7 @@ class DiskFileStore(private val baseDir: File) : FileStore {
     /** Escritura atómica (tmp + rename): nunca queda un trozo/meta a medio escribir. */
     private fun writeAtomic(target: File, bytes: ByteArray) {
         val tmp = File(target.parentFile, ".${target.name}.tmp")
-        tmp.writeBytes(bytes)
+        tmp.writeBytes(seal(bytes))
         check(tmp.renameTo(target) || (target.delete() && tmp.renameTo(target))) {
             "no se pudo persistir ${target.name}"
         }
@@ -191,4 +231,23 @@ class DiskFileStore(private val baseDir: File) : FileStore {
 abstract class FileStoreModule {
     @Binds
     abstract fun bindFileStore(impl: DiskFileStore): FileStore
+}
+
+@Module
+@InstallIn(SingletonComponent::class)
+object FileVaultModule {
+
+    /** Clave de los adjuntos: aleatoria, envuelta por el Keystore, en sus propias prefs. */
+    @Provides
+    @Singleton
+    fun provideFileVault(@ApplicationContext context: Context): FileVault {
+        val prefs = context.getSharedPreferences("krypta_files", Context.MODE_PRIVATE)
+        return FileVault(
+            prefs = object : chat.neto.krypta.data.crypto.KeyPrefs {
+                override fun get(key: String): String? = prefs.getString(key, null)
+                override fun put(key: String, value: String) = prefs.edit().putString(key, value).apply()
+            },
+            vault = chat.neto.krypta.data.crypto.KeystoreVault(alias = "krypta_files_key"),
+        )
+    }
 }

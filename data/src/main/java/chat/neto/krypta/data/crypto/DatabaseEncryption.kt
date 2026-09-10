@@ -48,7 +48,7 @@ object DatabaseEncryption {
      */
     fun encryptInPlace(db: File, passphrase: ByteArray) {
         if (!needsEncrypting(db)) return
-        System.loadLibrary("sqlcipher")
+        SqlCipher.load()
 
         val encrypted = File(db.parentFile, db.name + ".cipher.tmp")
         listOf(encrypted, File(encrypted.path + "-journal"), File(encrypted.path + "-wal")).forEach { it.delete() }

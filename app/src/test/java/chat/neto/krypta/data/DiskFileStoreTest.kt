@@ -23,7 +23,31 @@ class DiskFileStoreTest {
     @get:Rule
     val tmp = TemporaryFolder()
 
-    private fun store() = DiskFileStore(File(tmp.root, "krypta_files"))
+    /**
+     * Almacén **con cifrado en reposo**, que es como corre en el móvil. La envoltura de
+     * mentira (XOR) sustituye al Keystore, que no existe en la JVM; el AES-GCM del almacén es
+     * el de verdad.
+     */
+    private fun store() = DiskFileStore(File(tmp.root, "krypta_files"), vault())
+
+    /**
+     * Las preferencias son **una sola para todo el test**, como en el móvil: la clave de los
+     * adjuntos vive entre arranques. Con unas nuevas por instancia, un almacén no podría abrir
+     * lo que escribió el anterior — que es justo el caso de "muere el proceso" de más abajo.
+     */
+    private val prefs = object : chat.neto.krypta.data.crypto.KeyPrefs {
+        val map = mutableMapOf<String, String>()
+        override fun get(key: String) = map[key]
+        override fun put(key: String, value: String) { map[key] = value }
+    }
+
+    private fun vault() = FileVault(
+        prefs = prefs,
+        vault = object : chat.neto.krypta.data.crypto.KeyVault {
+            override fun wrap(plain: ByteArray) = plain.map { (it.toInt() xor 0x5A).toByte() }.toByteArray()
+            override fun unwrap(wrapped: ByteArray) = wrap(wrapped)
+        },
+    )
 
     private val meta = IncomingFileMeta("doc.pdf", "application/pdf", 10L, 3)
     private val chunks = listOf("0123".toByteArray(), "4567".toByteArray(), "89".toByteArray())
@@ -37,7 +61,7 @@ class DiskFileStoreTest {
         val f = s.onChunk("f1", 1, chunks[1])!!
 
         assertEquals("doc.pdf", f.name)
-        assertArrayEquals("0123456789".toByteArray(), File(f.path).readBytes())
+        assertArrayEquals("0123456789".toByteArray(), s.read(f.path))
         // staging limpiado al completar
         assertFalse(File(tmp.root, "krypta_files/staging/f1").exists())
     }
@@ -53,7 +77,7 @@ class DiskFileStoreTest {
         // aquí porque los trozos vivían en memoria y los sobres ya estaban ack'd/borrados).
         val second = store()
         val f = second.onChunk("f2", 2, chunks[2])!!
-        assertArrayEquals("0123456789".toByteArray(), File(f.path).readBytes())
+        assertArrayEquals("0123456789".toByteArray(), second.read(f.path))
     }
 
     @Test
@@ -64,7 +88,7 @@ class DiskFileStoreTest {
         assertNull(s.onChunk("f3", 0, chunks[0])) // reentrega (ack perdido): inocua
         assertNull(s.onChunk("f3", 1, chunks[1]))
         val f = s.onChunk("f3", 2, chunks[2])!!
-        assertArrayEquals("0123456789".toByteArray(), File(f.path).readBytes())
+        assertArrayEquals("0123456789".toByteArray(), s.read(f.path))
     }
 
     /**
@@ -92,13 +116,16 @@ class DiskFileStoreTest {
         // Se reescribe la meta como la escribía la versión anterior (4 líneas, sin cita).
         val metaFile = File(tmp.root, "krypta_files/staging/f-vieja/meta.txt")
         assertTrue(metaFile.isFile)
-        metaFile.writeText(metaFile.readLines().take(4).joinToString("\n", postfix = "\n"))
+        // Se reescribe **en claro** y con 4 líneas: cubre a la vez el formato anterior (sin
+        // cita) y un staging escrito antes de que los adjuntos se cifraran.
+        val enClaro = String(vault().open(metaFile.readBytes())).lines()
+        metaFile.writeText(enClaro.take(4).joinToString("\n", postfix = "\n"))
 
         assertNull(s.onChunk("f-vieja", 0, chunks[0]))
         assertNull(s.onChunk("f-vieja", 1, chunks[1]))
         val f = s.onChunk("f-vieja", 2, chunks[2])!!
         assertNull(f.replyTo)
-        assertArrayEquals("0123456789".toByteArray(), File(f.path).readBytes())
+        assertArrayEquals("0123456789".toByteArray(), s.read(f.path))
     }
 
     @Test
@@ -110,7 +137,7 @@ class DiskFileStoreTest {
 
         val base = File(tmp.root, "krypta_files").canonicalFile
         assertTrue(File(f.path).canonicalPath.startsWith(base.path)) // no escapa del dir
-        assertArrayEquals("data".toByteArray(), File(f.path).readBytes())
+        assertArrayEquals("data".toByteArray(), s.read(f.path))
     }
 
     @Test
@@ -120,7 +147,7 @@ class DiskFileStoreTest {
         assertNull(s.onChunk("f5", 0, "abc".toByteArray()))
         val f = s.onMeta("f5", one)!!
         assertEquals("audio/mp4", f.mime)
-        assertArrayEquals("abc".toByteArray(), File(f.path).readBytes())
+        assertArrayEquals("abc".toByteArray(), s.read(f.path))
     }
 
     @Test
@@ -219,5 +246,66 @@ class DiskFileStoreTest {
 
         assertFalse("una transferencia abandonada no debe quedarse para siempre", viejo.exists())
         assertTrue("una transferencia en curso no se toca", nuevo.exists())
+    }
+
+    // --- cifrado en reposo (fase 8 del ratchet) ---
+
+    @Test
+    fun `el archivo ensamblado no queda en claro en el disco`() = runBlocking {
+        val s = store()
+        s.onMeta("f-cifrado", meta)
+        s.onChunk("f-cifrado", 0, chunks[0])
+        s.onChunk("f-cifrado", 1, chunks[1])
+        val f = s.onChunk("f-cifrado", 2, chunks[2])!!
+
+        val enDisco = File(f.path).readBytes()
+        assertFalse(
+            "el contenido no puede leerse del fichero tal cual",
+            String(enDisco).contains("0123456789"),
+        )
+        assertTrue("debe llevar la marca del almacén", vault().isSealed(enDisco))
+        // Y lo que devuelve el almacén sigue siendo el archivo original.
+        assertArrayEquals("0123456789".toByteArray(), s.read(f.path))
+    }
+
+    @Test
+    fun `los trozos y la meta del staging tampoco quedan en claro`() = runBlocking {
+        val s = store()
+        s.onMeta("f-staging", meta)
+        s.onChunk("f-staging", 0, "0123".toByteArray())
+
+        val dir = File(tmp.root, "krypta_files/staging/f-staging")
+        assertTrue(vault().isSealed(File(dir, "meta.txt").readBytes()))
+        val trozo = File(dir, "0.chunk").readBytes()
+        assertTrue(vault().isSealed(trozo))
+        assertFalse(String(trozo).contains("0123"))
+    }
+
+    /** Un adjunto de antes del cifrado sigue abriéndose: no se pierde nada al actualizar. */
+    @Test
+    fun `un adjunto anterior, en claro, se sigue leyendo`() = runBlocking {
+        val s = store()
+        val viejo = File(tmp.root, "krypta_files/f-viejo/foto.jpg").apply {
+            parentFile!!.mkdirs()
+            writeBytes("JPEG de toda la vida".toByteArray())
+        }
+        assertArrayEquals("JPEG de toda la vida".toByteArray(), s.read(viejo.absolutePath))
+    }
+
+    @Test
+    fun `la copia del emisor se guarda cifrada y se puede volver a leer`() = runBlocking {
+        val s = store()
+        val path = s.saveSent("nota-voz.m4a", "audio crudo".toByteArray())!!
+
+        assertFalse(String(File(path).readBytes()).contains("audio crudo"))
+        assertArrayEquals("audio crudo".toByteArray(), s.read(path))
+    }
+
+    /** `read` no puede convertirse en un lector de cualquier fichero del dispositivo. */
+    @Test
+    fun `read no sale del almacen`() = runBlocking {
+        val s = store()
+        val fuera = File(tmp.root, "secreto.txt").apply { writeBytes("nada que ver".toByteArray()) }
+        assertNull(s.read(fuera.absolutePath))
     }
 }

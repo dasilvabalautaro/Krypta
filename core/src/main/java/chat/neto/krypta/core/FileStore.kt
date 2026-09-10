@@ -37,6 +37,19 @@ interface FileStore {
     suspend fun onChunk(fileId: String, index: Int, bytes: ByteArray): AssembledFile?
 
     /**
+     * Contenido **en claro** de un adjunto del almacén, o null si no está (o no es del
+     * almacén). Los adjuntos se guardan cifrados en reposo, así que la UI no puede leer el
+     * fichero por su cuenta: tiene que pedirlo aquí.
+     */
+    suspend fun read(path: String): ByteArray?
+
+    /**
+     * Guarda la copia del emisor de un adjunto (nota de voz, GIF) **ya cifrada** y devuelve su
+     * ruta, o null si no se pudo. Es lo que hace reproducible la burbuja propia.
+     */
+    suspend fun saveSent(name: String, bytes: ByteArray): String?
+
+    /**
      * Borra los restos locales de un archivo al vaciar su chat: el staging pendiente y el
      * ensamblado de [fileId], y la copia local en [path] (p. ej. una nota de voz enviada)
      * si pertenece al almacén. No lanza si no existen.

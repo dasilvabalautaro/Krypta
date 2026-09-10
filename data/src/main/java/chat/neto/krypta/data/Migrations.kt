@@ -82,3 +82,73 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
         db.execSQL("CREATE INDEX IF NOT EXISTS `index_contacts_peerId` ON `contacts` (`peerId`)")
     }
 }
+
+/**
+ * v6→v7: **estado del ratchet** (secreto hacia adelante). Dos tablas nuevas, ninguna columna
+ * tocada: `ratchet_sessions` guarda el estado de cada conversación como blob opaco, y
+ * `ratchet_seen` las huellas de los ciphertext ya procesados.
+ *
+ * La segunda no es un detalle de rendimiento: con ratchet la clave de un mensaje **se borra al
+ * usarla**, así que una reentrega del buzón —que es lo normal cuando un acuse se pierde— ya no
+ * se puede descifrar. Sin reconocerla antes de intentarlo parecería un mensaje corrupto.
+ *
+ * Aditiva y sin riesgo: una base v6 sube sin tocar contactos ni mensajes, y una sesión que no
+ * exista se crea sola en la época 0, que es derivable del secreto compartido.
+ */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `ratchet_sessions` (" +
+                "`conversationId` TEXT NOT NULL, `state` BLOB NOT NULL, " +
+                "`updatedAt` INTEGER NOT NULL, PRIMARY KEY(`conversationId`))",
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `ratchet_seen` (" +
+                "`conversationId` TEXT NOT NULL, `digest` TEXT NOT NULL, " +
+                "`seenAt` INTEGER NOT NULL, PRIMARY KEY(`conversationId`, `digest`))",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_ratchet_seen_conversationId_seenAt` " +
+                "ON `ratchet_seen` (`conversationId`, `seenAt`)",
+        )
+    }
+}
+
+/**
+ * v7→v8: **el historial deja de guardarse cifrado con la clave estática**. `messages.ciphertext`
+ * pasa a llamarse `payload` y aparece `encrypted`, que marca las filas que todavía son de antes.
+ *
+ * Es el cambio que exige el secreto hacia adelante (`docs/DISENO-ratchet.md` §4): con ratchet la
+ * clave de cada mensaje se borra al usarla, así que guardar el ciphertext de la red significaría
+ * guardar algo que dentro de un minuto ya no se puede abrir —tampoco los mensajes propios—. Lo
+ * que protege el historial pasa a ser el cifrado de la base entera, que existe desde el 9 sep.
+ *
+ * **No se descifra nada aquí**: dentro de una `Migration` no hay identidad ni claves. Las filas
+ * viejas se quedan con `encrypted = 1` y se convierten después, en segundo plano y de una en
+ * una, con el historial siempre legible mientras tanto (`ChatService.unsealHistory`). Renombrar
+ * en vez de copiar la tabla es a propósito: mueve el mismo dato sin reescribir el fichero, así
+ * que no hay ventana en la que el historial —que no tiene copia de seguridad de ninguna clase—
+ * exista solo a medias.
+ */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `messages` RENAME COLUMN `ciphertext` TO `payload`")
+        db.execSQL("ALTER TABLE `messages` ADD COLUMN `encrypted` INTEGER NOT NULL DEFAULT 1")
+    }
+}
+
+/**
+ * v8→v9: **anuncio de capacidad por contacto**. `peerProtocol` es la versión de protocolo que el
+ * contacto ha anunciado y `announcedProtocol` la que ya le anunciamos nosotros.
+ *
+ * Es lo que permite encender el ratchet **contacto a contacto** en vez de esperar a que todo el
+ * mundo actualice y cambiar una constante en una publicación posterior (la lección del depósito
+ * ciego, `docs/DISENO-ratchet.md` §5). Ambas arrancan en 0 = «no se sabe / nunca», que es
+ * exactamente lo que corresponde a un contacto de antes.
+ */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `contacts` ADD COLUMN `peerProtocol` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE `contacts` ADD COLUMN `announcedProtocol` INTEGER NOT NULL DEFAULT 0")
+    }
+}

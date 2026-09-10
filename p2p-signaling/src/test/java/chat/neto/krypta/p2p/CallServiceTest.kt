@@ -20,6 +20,8 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -39,8 +41,13 @@ class CallServiceTest {
     private class MemoryCallStream(
         private val inbox: Channel<ByteArray>,
         private val outbox: Channel<ByteArray>,
+        /** Lo que pasa por el cable, **cifrado**: es lo que ve quien esté escuchando. */
+        val wire: MutableList<ByteArray> = mutableListOf(),
     ) : CallStream {
-        override suspend fun sendFrame(frame: ByteArray) = outbox.send(frame)
+        override suspend fun sendFrame(frame: ByteArray) {
+            wire.add(frame)
+            outbox.send(frame)
+        }
         override suspend fun receiveFrame(): ByteArray? = runCatching { inbox.receive() }.getOrNull()
         override suspend fun close() {
             outbox.close()
@@ -51,7 +58,8 @@ class CallServiceTest {
             fun pair(): Pair<MemoryCallStream, MemoryCallStream> {
                 val ab = Channel<ByteArray>(Channel.UNLIMITED)
                 val ba = Channel<ByteArray>(Channel.UNLIMITED)
-                return MemoryCallStream(ba, ab) to MemoryCallStream(ab, ba)
+                val cable = mutableListOf<ByteArray>()
+                return MemoryCallStream(ba, ab, cable) to MemoryCallStream(ab, ba, cable)
             }
         }
     }
@@ -75,8 +83,13 @@ class CallServiceTest {
 
         override suspend fun sendOffline(contact: Contact, ciphertext: ByteArray, label: String) = send(contact, ciphertext)
 
+        /** El cable de la última llamada abierta, para inspeccionar lo cifrado. */
+        var callWire: MutableList<ByteArray> = mutableListOf()
+
         override suspend fun openCallStream(contact: Contact): CallStream {
             val (mine, theirs) = MemoryCallStream.pair()
+            callWire = mine.wire
+            other.callWire = mine.wire
             check(other.incomingCallStreams.tryEmit(myPeerId to theirs)) { "receptor sin colector" }
             return mine
         }
@@ -123,6 +136,9 @@ class CallServiceTest {
             val i = saved.indexOfFirst { it.id == message.id }
             if (i >= 0) saved[i] = message else saved.add(message)
         }
+        override suspend fun saveAll(messages: List<Message>) { messages.forEach { save(it) } }
+        override suspend fun findEncrypted(limit: Int, offset: Int): List<Message> =
+            saved.filter { it.encrypted }.drop(offset).take(limit)
         override suspend fun findById(id: String): Message? = saved.find { it.id == id }
         override suspend fun findByStatus(status: MessageStatus, limit: Int): List<Message> =
             saved.filter { it.status == status }.take(limit)
@@ -150,6 +166,8 @@ class CallServiceTest {
     private class FakeFileStore : chat.neto.krypta.core.FileStore {
         override suspend fun onMeta(fileId: String, m: chat.neto.krypta.core.IncomingFileMeta) = null
         override suspend fun onChunk(fileId: String, index: Int, bytes: ByteArray) = null
+        override suspend fun read(path: String): ByteArray? = null
+        override suspend fun saveSent(name: String, bytes: ByteArray): String? = null
         override suspend fun deleteLocal(fileId: String, path: String?) = Unit
     }
 
@@ -172,15 +190,19 @@ class CallServiceTest {
         val chat = ChatService(
             signaling, cipher, messages, FakeContacts(listOf(otherContact)),
             FakeKeyExchange(peerId), RendezvousService(), FakeFileStore(), scope,
+            testSessions(FakeKeyExchange(peerId)),
         )
         val audio = FakeAudioEngine()
         val calls = CallService(chat, signaling, cipher, audio, scope)
     }
 
-    /** Construye A y B cruzados (cada uno tiene al otro como contacto). */
-    private fun buildPair(scope: CoroutineScope): Pair<Party, Party> {
-        val contactB = Contact("b", "Bea", "12D3KooWBBB", ByteArray(0), secret)
-        val contactA = Contact("a", "Ana", "12D3KooWAAA", ByteArray(0), secret)
+    /**
+     * Construye A y B cruzados (cada uno tiene al otro como contacto). [protocolo] es la
+     * versión que cada uno ha anunciado: 0 = contacto anterior a la negociación de clave.
+     */
+    private fun buildPair(scope: CoroutineScope, protocolo: Int = 0): Pair<Party, Party> {
+        val contactB = Contact("b", "Bea", "12D3KooWBBB", ByteArray(0), secret, peerProtocol = protocolo)
+        val contactA = Contact("a", "Ana", "12D3KooWAAA", ByteArray(0), secret, peerProtocol = protocolo)
         val a = Party("12D3KooWAAA", contactB, scope)
         val b = Party("12D3KooWBBB", contactA, scope)
         a.signaling.other = b.signaling
@@ -228,6 +250,90 @@ class CallServiceTest {
         assertEquals("finalizada", b.calls.state.value.endReason)
         assertTrue(a.audio.stopped >= 1)
         assertTrue(b.audio.stopped >= 1)
+    }
+
+    /**
+     * Fase 7: con un contacto que lo entiende, la clave de la llamada **se negocia** (media
+     * mitad cada uno, dentro del sobre `C`) en vez de derivarse del secreto estático. Lo que
+     * se comprueba no es que "haya una clave distinta" sino la consecuencia: los frames de
+     * esa llamada **ya no se abren** con la clave que se derivaba antes de la identidad. Ahí
+     * está el cambio — quien robe la identidad y tenga una llamada grabada se queda fuera.
+     */
+    @Test
+    fun `la clave de la llamada se negocia y deja de salir del secreto estático`() = runTest {
+        val (a, b) = buildPair(backgroundScope, protocolo = ChatService.PROTOCOL_VERSION)
+        runCurrent()
+
+        a.calls.startCall(a.contact)
+        runCurrent()
+        b.calls.accept()
+        runCurrent()
+        assertEquals(CallPhase.ACTIVE, a.calls.state.value.phase)
+
+        val frame = "paquete-opus".toByteArray()
+        a.audio.capture!!.invoke(frame)
+        runCurrent()
+        assertArrayEquals("la llamada tiene que seguir funcionando", frame, b.audio.played.single())
+
+        // Lo que viajó por el stream, cifrado con la clave de la llamada.
+        val enElCable = b.signaling.callWire.last()
+        // Se usa la constante de verdad y no una copia del literal: escribí la sal a mano y
+        // no coincidía, así que la aserción pasaba por el motivo equivocado (ninguna clave
+        // inventada abre nada).
+        val claveVieja = Hkdf.derive(
+            secret, CallService.CALL_KEY_SALT,
+            a.calls.state.value.callId.toByteArray(Charsets.UTF_8), 32,
+        )
+        assertNull(
+            "con la clave derivada de la identidad ya no debe abrirse",
+            runCatching { cipher.decrypt(claveVieja, enElCable) }.getOrNull(),
+        )
+    }
+
+    /** Dos llamadas seguidas entre los mismos dos no comparten clave. */
+    @Test
+    fun `cada llamada negocia una clave nueva`() = runTest {
+        val (a, b) = buildPair(backgroundScope, protocolo = ChatService.PROTOCOL_VERSION)
+        runCurrent()
+
+        fun unaLlamada(): ByteArray {
+            kotlinx.coroutines.runBlocking { a.calls.startCall(a.contact) }
+            runCurrent()
+            kotlinx.coroutines.runBlocking { b.calls.accept() }
+            runCurrent()
+            a.audio.capture!!.invoke("mismo frame".toByteArray())
+            runCurrent()
+            val cable = b.signaling.callWire.last()
+            kotlinx.coroutines.runBlocking { a.calls.hangup() }
+            runCurrent()
+            return cable
+        }
+
+        val primera = unaLlamada()
+        b.signaling.callWire.clear()
+        val segunda = unaLlamada()
+        assertFalse(
+            "el mismo frame cifrado dos veces no puede salir igual",
+            primera.contentEquals(segunda),
+        )
+    }
+
+    /** Con un contacto que no negocia (versión anterior) la llamada sigue funcionando. */
+    @Test
+    fun `una llamada con un contacto antiguo sigue el camino de siempre`() = runTest {
+        val (a, b) = buildPair(backgroundScope) // protocolo 0 en los dos
+        runCurrent()
+
+        a.calls.startCall(a.contact)
+        runCurrent()
+        b.calls.accept()
+        runCurrent()
+        assertEquals(CallPhase.ACTIVE, b.calls.state.value.phase)
+
+        val frame = byteArrayOf(9, 9, 9)
+        a.audio.capture!!.invoke(frame)
+        runCurrent()
+        assertArrayEquals(frame, b.audio.played.single())
     }
 
     @Test

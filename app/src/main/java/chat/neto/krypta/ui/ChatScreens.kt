@@ -204,6 +204,9 @@ fun KryptaApp(
     // Reenlaza al contacto vivo de la lista: así la insignia de verificado y el nombre en el
     // chat reflejan cambios (verificar, renombrar) sin depender de la instantánea guardada.
     val openContact = current?.let { c -> contacts.find { it.id == c.id } ?: c }
+    // Los adjuntos van cifrados en reposo: quien los lea (burbuja de nota de voz, GIF, abrir
+    // con otra app) los pide por aquí en vez de tocar el fichero.
+    CompositionLocalProvider(LocalAttachmentReader provides viewModel::readAttachment) {
     when {
         openContact != null -> {
             BackHandler { current = null }
@@ -259,6 +262,7 @@ fun KryptaApp(
                 onSetBlocked = viewModel::setBlocked,
             )
         }
+    }
     }
 }
 
@@ -1521,10 +1525,26 @@ private fun QuotedPreview(
 private fun FileAttachment(file: FileInfo) {
     val context = LocalContext.current
     val openable = file.localPath != null
+    val reader = LocalAttachmentReader.current
+    val scope = rememberCoroutineScope()
+    // Abrir con otra app implica dárselo **en claro**: no hay forma de que un visor externo
+    // lea un adjunto cifrado. Se descifra a una copia en la caché, que se limpia al volver a
+    // la app. El cifrado en reposo protege el almacén de Krypta, no lo que el usuario saque
+    // de él a propósito.
+    val abrirAdjunto: () -> Unit = {
+        val path = file.localPath
+        if (path != null) {
+            scope.launch {
+                val bytes = reader(path)
+                val copia = bytes?.let { stageForExternalApp(context, file.name, it) }
+                if (copia != null) FilePicker.open(context, copia.absolutePath, file.mime)
+            }
+        }
+    }
     Row(
         modifier = Modifier
             .then(
-                if (openable) Modifier.clickable { FilePicker.open(context, file.localPath!!, file.mime) }
+                if (openable) Modifier.clickable { abrirAdjunto() }
                 else Modifier,
             )
             .padding(vertical = 2.dp),
@@ -1559,6 +1579,11 @@ private fun AudioNote(file: FileInfo) {
     var prepared by remember(path) { mutableStateOf(false) }
     var durationMs by remember(path) { mutableIntStateOf(0) }
     val player = remember(path) { android.media.MediaPlayer() }
+    // El adjunto está cifrado en reposo: `setDataSource(path)` ya no vale. Los bytes se
+    // descifran al pulsar play y se le sirven al MediaPlayer desde memoria, sin dejar una
+    // copia en claro en disco (que es justo lo que este cifrado viene a evitar).
+    val reader = LocalAttachmentReader.current
+    val scope = rememberCoroutineScope()
     DisposableEffect(path) { onDispose { runCatching { player.release() } } }
 
     // Barra y contador avanzan solo mientras suena.
@@ -1571,23 +1596,26 @@ private fun AudioNote(file: FileInfo) {
 
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
         IconButton(onClick = {
-            runCatching {
-                if (playing) {
-                    player.pause()
-                    playing = false
-                } else {
-                    if (!prepared) {
-                        player.setDataSource(path)
-                        player.prepare()
-                        durationMs = player.duration
-                        player.setOnCompletionListener {
-                            playing = false
-                            progress = 1f
+            if (playing) {
+                runCatching { player.pause() }
+                playing = false
+            } else {
+                scope.launch {
+                    runCatching {
+                        if (!prepared) {
+                            val bytes = reader(path) ?: return@runCatching
+                            player.setDataSource(BytesMediaSource(bytes))
+                            player.prepare()
+                            durationMs = player.duration
+                            player.setOnCompletionListener {
+                                playing = false
+                                progress = 1f
+                            }
+                            prepared = true
                         }
-                        prepared = true
+                        player.start()
+                        playing = true
                     }
-                    player.start()
-                    playing = true
                 }
             }
         }) {
