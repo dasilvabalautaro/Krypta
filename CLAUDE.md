@@ -1208,7 +1208,12 @@ separate code — padded and unpadded mixed in one session, and tampering with t
 actually break: out-of-order delivery, duplicates, retired epochs and state loss. JVM suite
 **237 tests, 0 failures**. Also corrected while in there: `DISENO-ratchet.md` §1.7 documented an
 86-byte header as 70 bytes and put `next_pub` at the wrong offset — the real overhead is 102
-bytes per message (header + GCM tag) against v1's 28.
+bytes per message (header + GCM tag) against v1's 28. **Verified live on the TECNO** right after
+installing: the diagnostics log `03:01:57 ↔ protocolo v3 anunciado a 2 contacto(s)` — the
+re-announcement fires by itself on a version bump (`announcedProtocol` 2 < 3) and only once —
+alongside `DHT: conectado`, `relay: OK`, rendezvous to both contacts and `wake activo`, i.e. the
+bump broke nothing. Note **no real contact is padded yet**: `pads()` needs the peer to announce 3,
+so padding only engages when the second phone updates — same shape as the ratchet rollout.
 
 **A crash the ratchet work surfaced (9 Sep 2026): Krypta started once and never again.**
 `System.loadLibrary("sqlcipher")` sat *inside* `DatabaseEncryption.encryptInPlace`, **after its

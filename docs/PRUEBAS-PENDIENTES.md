@@ -722,6 +722,12 @@ Usar contactos desechables si se puede.
      que tiene su propio mínimo (`RATCHET_MIN_PROTOCOL = 2`); lo único que no tendrá esa pareja
      es el relleno. O sea: ver `v2` en un móvil viejo **no es un fallo**, y como los dos móviles
      deben llevar el mismo build, aquí lo que toca ver es `v3`.
+
+     **Media prueba hecha (11 sep 2026)**: en el TECNO, recién instalado, el Diagnóstico registra
+     `03:01:57  ↔ protocolo v3 anunciado a 2 contacto(s)` **una sola vez**, con `DHT: conectado`,
+     `relay: OK` y `wake activo`. Falta la otra mitad, que necesita el segundo móvil: que allí
+     aparezca `↔ …<peer> habla protocolo v3`. Hasta entonces **ningún contacto real va relleno**,
+     porque el relleno lo decide lo que anuncie el otro.
 2. - [x] **Conversación normal.** ✅ **10 sep 2026**: texto en los dos sentidos, sin pérdidas,
      con los dos móviles en el build del día. Falta repetirlo con **foto, nota de voz y
      respuesta con cita**, que van por caminos distintos (envelope `I`, troceado y `Y`).
