@@ -53,6 +53,9 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // SQLite de verdad en la JVM: la poda de `ratchet_seen` es SQL, y probarla en el móvil
+    // costó dos intentos y horas de reloj (desconexión del USB y luego el proceso muerto).
+    testImplementation(libs.sqlite.jdbc)
 
     // Pruebas de migración (instrumentadas: Room necesita un SQLite de verdad).
     androidTestImplementation(libs.androidx.room.testing)
