@@ -418,6 +418,15 @@ escrituras.
    encontró la prueba de propiedades del ratchet; el detalle está en
    [DISENO-ratchet.md](DISENO-ratchet.md) §1.9, incluido por qué la poda no corre en cada mensaje
    (hacerlo tumbaba el proceso con una ráfaga de archivo troceado).
+10. **Un adversario cuántico futuro que haya grabado tu tráfico hoy** (*harvest now, decrypt
+    later*). **Krypta no tiene nada post-cuántico**, y encaja peor que en otros sistemas: el
+    **PeerID *es* la clave pública**, así que no hay que robar nada para tenerla; `S` se deriva de
+    dos identidades de larga vida; y todo el material del ratchet —la época 0 y el DH de cada
+    época— es X25519 sobre una raíz que encadena. O sea que **el ratchet no ayuda aquí**: quien
+    rompa la curva abre una conversación grabada de principio a fin. No es una vulnerabilidad
+    presente, es una apuesta sobre cuándo existe la máquina, y equivocarse no tiene arreglo
+    retroactivo. Diseñado y medido el 11 sep 2026 en
+    [DISENO-postcuantico.md](DISENO-postcuantico.md), **sin implementar** a propósito (ver §10).
 
 ---
 
@@ -430,6 +439,17 @@ escrituras.
   [DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) — con una
   advertencia importante: **el relay filtra ese mismo grafo** y eso no lo arregla, así que lo
   que se gana es que no quede en disco, no que el operador no pueda saberlo en vivo.
+- **Híbrido post-cuántico** (ML-KEM-768 mezclado en la raíz del ratchet), que es lo que cierra el
+  punto 10 del §9. **Diseñado y medido el 11 sep 2026, y deliberadamente no implementado**:
+  [DISENO-postcuantico.md](DISENO-postcuantico.md). El orden es intencionado — el plan pide una
+  **revisión externa del protocolo antes** de tocar esto, y un documento revisable sin código es
+  la forma barata de respetarlo. Al medir cambió el diseño: el coste de CPU es despreciable
+  (40–60 µs, como X25519) pero el tamaño no (1184 B de clave + 1088 B de ciphertext), así que
+  llevarlo en cada mensaje pondría un acuse de lectura en 2434 B frente a 162; la solución es un
+  **ratchet PQ lento**, porque al encadenar la raíz **una sola inyección protege todo lo
+  posterior**. Dos huecos que quedarán igual: la **época 0 seguirá siendo clásica** (Signal sí
+  cubre el acuerdo inicial, con servidor de prekeys) y la **autenticación tampoco** será
+  post-cuántica.
 - **PFS** (doble ratchet). Implementado entero el 9 sep 2026 —ver
   [DISENO-ratchet.md](DISENO-ratchet.md)— y con el **envío encendido el 10 sep 2026**
   (`RATCHET_SEND = true`), aunque **por pareja**: se usa solo con los contactos que también

@@ -128,11 +128,27 @@ también le pasa a Signal.
    y desde octubre de 2025 también el ratchet (SPQR, con ML-KEM-768). Krypta no tiene nada, y
    como `S` es función pura de dos identidades X25519, un adversario cuántico futuro que haya
    **grabado tráfico hoy** podrá descifrar todo lo de clave estática y la época 0: *harvest
-   now, decrypt later* aplica de lleno. Plan: mezclar **ML-KEM-768** en la raíz del ratchet,
-   con reencapsulado por época. Detalle práctico que lo hace viable: **Go 1.26 trae
-   `crypto/mlkem` en la librería estándar**, así que va por el puente igual que X25519 y **sin
-   dependencias nuevas** (Android no lo trae, como ya pasó con X25519). La época 0 seguiría
-   siendo clásica.
+   now, decrypt later* aplica de lleno — y peor que en otros sistemas, porque **el PeerID *es* la
+   clave pública**: no hay que robar nada para tenerla.
+
+   **Diseño cerrado y medido el 11 sep 2026**, sin código:
+   [DISENO-postcuantico.md](DISENO-postcuantico.md). Lo que cambió al medir de verdad:
+   - **El coste de CPU es un no-problema** (ML-KEM-768 va en 40–60 µs, el mismo orden que
+     X25519). Todo lo que cuesta este cambio es **tamaño**: 1184 B de clave + 1088 B de
+     ciphertext.
+   - Por eso **se descarta el «reencapsulado por época»** que decía este plan: pondría un acuse
+     de lectura en 2434 B frente a 162, **×15**. En su lugar, un **ratchet PQ lento** — la raíz
+     ya encadena (`salt = RK(e-1)`), así que **una sola inyección con éxito protege todo lo que
+     venga después**, y basta con entrar pronto y refrescar de vez en cuando.
+   - Primitiva disponible en los dos lados sin dependencias nuevas: `crypto/mlkem` en Go 1.26 y
+     **ML-KEM-768 nativo en el JDK 25** (`SunJCE`), así que los tests siguen corriendo en JVM.
+     Android no lo trae a ninguna API, igual que pasó con X25519.
+   - Dos huecos que hay que decir en voz alta: la época 0 **sigue siendo clásica** (Signal sí
+     cubre el acuerdo inicial con PQXDH, porque tiene servidor de prekeys y nosotros no), y la
+     **autenticación tampoco** pasa a ser post-cuántica.
+   - Y una condición que no es burocracia: **ser híbrido esconde los errores**. Si ML-KEM
+     estuviera mal implementado, el resultado sería una app que funciona y es igual de segura que
+     hoy — nada falla, nada avisa. De ahí que el vector de prueba conocido sea obligatorio.
 3. **Modelo formal ligero** (ProVerif/Tamarin) del ratchet por épocas, si aparece quien lo haga.
 
 ---

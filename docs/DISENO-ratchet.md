@@ -624,6 +624,13 @@ Lo que enseñó:
    ya estuvo a la vista no compensa el riesgo, y vaciar el chat los borra.
 4. **El historial anterior al cambio**, que sigue abriéndose con la clave estática.
 5. **Un atacante dentro del proceso o con root.** Como siempre.
+6. **Un adversario cuántico futuro.** Y conviene entender por qué el ratchet no ayuda **nada**
+   aquí: todo su material es X25519 —`S`, la época 0 y el DH de cada época—, y la raíz encadena,
+   así que quien rompa la curva lo abre todo de principio a fin. Como el **PeerID *es* la clave
+   pública**, no hace falta robar nada: basta con haber **grabado el tráfico**. El ratchet
+   protege del robo de la identidad *hoy*; esto es otra amenaza y pide otra cosa. Diseñada y
+   medida el 11 sep 2026 en [DISENO-postcuantico.md](DISENO-postcuantico.md), a propósito **sin
+   implementar** hasta que haya revisión externa.
 
 ---
 

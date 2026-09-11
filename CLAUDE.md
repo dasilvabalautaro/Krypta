@@ -1215,6 +1215,38 @@ alongside `DHT: conectado`, `relay: OK`, rendezvous to both contacts and `wake a
 bump broke nothing. Note **no real contact is padded yet**: `pads()` needs the peer to announce 3,
 so padding only engages when the second phone updates — same shape as the ratchet rollout.
 
+**Post-quantum: designed and measured, deliberately not built (11 Sep 2026).**
+[docs/DISENO-postcuantico.md](docs/DISENO-postcuantico.md) closes fase 3.2 of the privacy plan as
+a *reviewable document with no code*, because the plan's own §3.1 asks for an external protocol
+review **before** touching post-quantum and that does not depend on us. The threat is concrete
+here and worse than elsewhere: **the PeerID *is* the public key**, `S = X25519(identity, PeerID)`
+is a pure function of two long-lived identities, epoch 0 derives from `S` and every later epoch
+chains from it with the same curve — so a conversation recorded today is decryptable end to end by
+a future quantum adversary without stealing a single device. Measured (Go 1.26.4 `crypto/mlkem`,
+JDK 25 `SunJCE`): ML-KEM-768 is **1184 B** of encapsulation key + **1088 B** of ciphertext, and
+costs **40–60 µs** — the same order as X25519. **So CPU is a non-issue and size is the entire
+problem**: at 2272 B per message a read receipt goes 162 → 2434 B, **×15**, and receipts are not a
+rare case (they are what advances epochs just by opening a chat). That kills the plan's original
+"re-encapsulate per epoch" wording. The design instead is a **slow PQ ratchet decoupled from the
+epoch ratchet**, resting on a property the ratchet already has: the root *chains*
+(`salt = RK(e-1)`), so **one successful PQ injection protects everything after it, forever** —
+enter early, refresh every ~20 epochs, 2272 B per round instead of per message. Hybrid is
+**concatenation, never replacement** (`ikm = X25519(…) ‖ pq`), so a broken ML-KEM leaves exactly
+today's security. Feasibility checked rather than assumed: the JDK has ML-KEM-768 natively so JVM
+tests keep working (`JdkKem` mirroring `JdkCurve25519`), the **public key is portable** between Go
+and the JDK as raw 1184 B plus a fixed 22-byte SPKI prefix (verified both ways), and the **private
+key is not** (Go gives a 64 B seed, the JDK a 2400 B expanded key) — which turned out not to
+matter, because the ratchet state never travels: it is written and read by the same implementation
+on the same device, so the private half stays opaque exactly like `Curve25519.KeyPair` today. Two
+gaps stated plainly in the doc: **epoch 0 stays classical** (Signal *does* cover the initial
+agreement via PQXDH, because it has a prekey server and we deliberately don't), and
+**authentication does not become post-quantum** (that needs ML-DSA and a new PeerID format; Signal
+lacks it too). The uncomfortable lesson that shapes its phase 1: **being hybrid hides bugs** — if
+ML-KEM were broken, or one AAR ABI shipped garbage, the app would work perfectly and be exactly as
+secure as today, with nothing failing and nothing warning, so the property you think you bought
+simply wouldn't exist. Hence a FIPS 203 known-answer test is **not optional**; it is the only thing
+separating "hybrid" from "classical with 2 KB of expensive padding".
+
 **A crash the ratchet work surfaced (9 Sep 2026): Krypta started once and never again.**
 `System.loadLibrary("sqlcipher")` sat *inside* `DatabaseEncryption.encryptInPlace`, **after its
 early return**. On the launch that converted the plaintext DB it loaded; on every launch after
