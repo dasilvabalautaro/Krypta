@@ -1247,6 +1247,29 @@ secure as today, with nothing failing and nothing warning, so the property you t
 simply wouldn't exist. Hence a FIPS 203 known-answer test is **not optional**; it is the only thing
 separating "hybrid" from "classical with 2 KB of expensive padding".
 
+**And its phases 1–2 are built (11 Sep 2026), deliberately: they encode no protocol decision.**
+Only the primitive and its vector, so they prejudge nothing the design's §7 leaves open. `Kem` in
+`:core` (interface, because **Android has ML-KEM at no API level** — X25519 at least arrives at
+33), `BridgeKem` over Go `crypto/mlkem` for the device, `JdkKem` over JDK 25's `SunJCE` for tests,
+bound in `SignalingModule` (nothing injects it yet; the consumer is fase 4). JVM suite **246
+tests, 0 failures** (`KemTest` 9) plus 4 Go tests, AAR regenerated and re-verified: the three
+`kem*` functions are in the generated API and all four ABIs still link at `0x4000`. Four things
+worth keeping: (a) **the KAT turned out better than designed** — it is a *cross-implementation*
+vector (`native-bridge/libp2p/testdata/mlkem-kat.txt`): the ciphertext was produced by the **JDK**
+encapsulating against the raw key **Go** derives from a fixed seed, and the Go test checks Go
+recovers the same secret, so if the wire format ever stops matching between the two
+implementations the test fails — which is exactly the claim the whole design rests on; (b) **the
+unit tests were not running on the JDK everyone assumed**: `KemTest` failed wholesale with
+`NoSuchAlgorithmException: ML-KEM-768 KeyPairGenerator not available`, which reads as "this JDK
+lacks it", and a throwaway probe showed the test task was on an **autodetected Temurin 21** even
+though Gradle's own launcher is 25 — **rule: when an algorithm "doesn't exist", first check which
+JVM you are looking at**; (c) fixing that needs `serviceOf<JavaToolchainService>()`, because an
+**Android library module under AGP 9 does not apply the `java` plugin**, so
+`extensions.getByType<JavaToolchainService>()` dies with "Currently registered extension types:
+[ExtraPropertiesExtension]"; (d) **ML-KEM is implicit-rejection** and that is pinned on both sides
+on purpose — a tampered ciphertext yields a *different* secret, never an error, so wrapping
+`decapsulate` in a `runCatching` validates nothing.
+
 **A crash the ratchet work surfaced (9 Sep 2026): Krypta started once and never again.**
 `System.loadLibrary("sqlcipher")` sat *inside* `DatabaseEncryption.encryptInPlace`, **after its
 early return**. On the launch that converted the plaintext DB it loaded; on every launch after

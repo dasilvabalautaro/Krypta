@@ -233,15 +233,48 @@ que nada se rompa ni se pierda.
 | Fase | Qué | Dónde | Riesgo |
 |---|---|---|---|
 | 0 | Decidir el §7 | — | conversación |
-| 1 | `Kem` en `:core` + `JdkKem` + tests (tamaños, ida y vuelta, conversión del prefijo, **KAT**) | `:core`, `:p2p-signaling` | nada observable |
-| 2 | `KemKeyPair`/`KemEncapsulate`/`KemDecapsulate` en Go + AAR + `BridgeKem` | `:native-bridge` | regenerar AAR (4 ABIs, 16 KB) |
+| 1 | ✅ `Kem` en `:core` + `JdkKem` + `KemTest` (9) | `:core`, `:p2p-signaling` | hecho, 11 sep 2026 |
+| 2 | ✅ `KemKeyPair`/`KemEncapsulate`/`KemDecapsulate` en Go + **KAT** + AAR + `BridgeKem` + enlace Hilt | `:native-bridge` | hecho, 11 sep 2026 |
 | 3 | Cabecera variable + validación de longitudes + tests de los dos bordes | `:p2p-signaling` | **parseo de datos de red** |
 | 4 | Máquina de la ronda PQ + inyección en `RK` + estado `FORMAT_VERSION = 2` leyendo v1 | `:p2p-signaling` | el núcleo |
 | 5 | `RatchetPropertyTest` sorteando rondas PQ; test de presupuesto de tamaño | tests | — |
 | 6 | `PROTOCOL_VERSION = 4` + `PQ_MIN_PROTOCOL` + puerta por contacto | `ChatService` | despliegue |
 | 7 | Docs y redacción honesta de cara al usuario | `docs/` | — |
 
-Las fases 1 y 2 no cambian nada observable y se pueden hacer sin riesgo, como pasó con el ratchet.
+Las fases 1 y 2 no cambian nada observable y se pueden hacer sin riesgo, como pasó con el
+ratchet. **Se hicieron el 11 sep 2026**, y a propósito: no codifican **ninguna** decisión de
+protocolo —solo la primitiva y su vector— así que no prejuzgan nada de lo que el §7 deja abierto
+ni de lo que diga una revisión. La fase 3 en adelante sí espera.
+
+### 8.1 Lo que enseñó hacer las fases 1 y 2 (11 sep 2026)
+
+1. **El vector conocido ya sirvió para algo mejor de lo previsto: fija la interoperabilidad.**
+   El §9 lo pedía contra implementaciones roas; lo que acabó siendo es un vector
+   **cruzado**: el `ct` de `native-bridge/libp2p/testdata/mlkem-kat.txt` lo produjo el **JDK 25**
+   encapsulando contra la clave cruda que genera **Go** desde una semilla fija, y
+   `TestKemVectorConocido` comprueba que Go saca el mismo secreto. O sea que si el formato del
+   cable dejara de coincidir entre las dos implementaciones —que es la afirmación de la que
+   depende todo el §1.2— el test falla. La generación desde semilla es determinista, así que de
+   paso detecta un conjunto de parámetros equivocado (768 contra 512) o un puente que devuelva
+   basura.
+2. **Los tests unitarios no corrían en el JDK que todo el mundo creía.** `KemTest` falló entero
+   con `NoSuchAlgorithmException: ML-KEM-768 KeyPairGenerator not available`, que parece «este
+   JDK no lo trae». Medido con una sonda desechable: la tarea de test corría en un **Temurin 21**
+   elegido por autodetección, aunque el lanzador de Gradle sea un 25. El error no mentía, pero
+   apuntaba al sitio equivocado. Arreglado fijando la JVM de los tests del módulo en
+   `p2p-signaling/build.gradle.kts`. **Regla: cuando un algoritmo "no existe", comprobar primero
+   en qué JVM se está mirando.**
+3. **Un módulo de librería Android bajo AGP 9 no aplica el plugin `java`.** Así que
+   `extensions.getByType<JavaToolchainService>()` falla con «Currently registered extension
+   types: [ExtraPropertiesExtension]». El servicio hay que sacarlo del **registro de servicios**
+   (`serviceOf<JavaToolchainService>()`), no de las extensiones del proyecto.
+4. **`ML-KEM` es de rechazo implícito**, y está fijado en los dos lados (`KemTest` y
+   `TestKemRechazoImplicito`) porque es una trampa para quien venga después: un ciphertext
+   manipulado **no da error**, da un secreto distinto. Quien detecta el engaño es el AEAD que use
+   ese secreto, así que envolver `decapsulate` en un `runCatching` no valida nada.
+5. La privada quedó **opaca** en la interfaz, y eso resolvió el único problema de formato que
+   parecía serio: Go guarda 64 B de semilla y el JDK 2400 de clave expandida, pero el estado del
+   ratchet nunca sale del dispositivo que lo escribió.
 
 ---
 
