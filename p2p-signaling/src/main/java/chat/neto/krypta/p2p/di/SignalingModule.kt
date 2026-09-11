@@ -2,10 +2,12 @@ package chat.neto.krypta.p2p.di
 
 import chat.neto.krypta.core.Curve25519
 import chat.neto.krypta.core.ISignalingService
+import chat.neto.krypta.core.Kem
 import chat.neto.krypta.core.KeyExchange
 import chat.neto.krypta.core.MessageCipher
 import chat.neto.krypta.p2p.AesGcmMessageCipher
 import chat.neto.krypta.nativebridge.BridgeCurve25519
+import chat.neto.krypta.nativebridge.BridgeKem
 import chat.neto.krypta.p2p.Libp2pKeyExchange
 import chat.neto.krypta.p2p.SignalingService
 import dagger.Binds
@@ -30,4 +32,11 @@ abstract class SignalingModule {
     // hasta la API 33 y el minSdk es 30 (ver [Curve25519]).
     @Binds
     abstract fun bindCurve25519(impl: BridgeCurve25519): Curve25519
+
+    // ML-KEM-768 para la parte post-cuántica, también del puente Go — aquí no hay alternativa
+    // que esperar: Android no lo trae a **ninguna** API (ver [Kem] y
+    // docs/DISENO-postcuantico.md). Todavía no lo inyecta nadie: el protocolo que lo usará es la
+    // fase 4 de ese diseño, que espera revisión externa.
+    @Binds
+    abstract fun bindKem(impl: BridgeKem): Kem
 }
