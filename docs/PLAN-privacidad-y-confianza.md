@@ -82,10 +82,16 @@ tiene un directorio central que proteger.
    registro, así que hay que combinarlo con el punto 4.
 2. **Encender el depósito ciego** (`BLIND_DEPOSIT`), que ya está construido y probado contra
    los tres nodos. Condición: que la versión que sabe recibir esté repartida.
-3. **Relleno por tramos** dentro del cifrado, para que el tamaño no delate si es texto, foto o
-   nota de voz. Signal rellena a múltiplos de 160 bytes; Krypta no oculta el tamaño y así se
-   dice en el §4 del modelo de seguridad. Requiere versión de protocolo anunciada, el mismo
-   mecanismo que ya usa el ratchet.
+3. ~~**Relleno por tramos** dentro del cifrado, para que el tamaño no delate si es texto, foto o
+   nota de voz.~~ **Hecho el 11 sep 2026** (`Padding`, §1.10 de
+   [DISENO-ratchet.md](DISENO-ratchet.md)): 160 B hasta 4 KiB —el grano de Signal, y por lo
+   mismo: ahí vive el tráfico de control— y 1 KiB hasta 64 KiB. Va **dentro del ratchet**, no
+   dentro del sobre, para cubrir de una sola decisión todos los tipos (acuse de lectura, hello,
+   señal de llamada, trozo de archivo), y lo marca un bit de la cabecera que **ya iba
+   autenticado como AAD**, así que nadie puede tocarlo por el camino. Lo que se gana es que el
+   tráfico de control deje de distinguirse por el tamaño; lo que **no** se gana, y hay que
+   decirlo, es esconder un archivo troceado: 48 KiB rellenados a un tramo de 1 KiB siguen
+   siendo 48 KiB. Eso pide tráfico de relleno y batching, que siguen sin hacerse.
 4. **La IP** ([security-model.md](security-model.md) §5.1):
    - ✅ **Hecho el 10 sep**: el `ConnectionGater` corta al extraño que marcaba por el relay, que
      era la vía por la que se entregaba la IP pública en 1,7 s.

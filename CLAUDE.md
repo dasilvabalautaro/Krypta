@@ -1167,6 +1167,49 @@ probe instead of reasoning about it; those tests now inject a
 `CoroutineScope(Dispatchers.Unconfined)` and put the service's own diagnostics log in the failure
 message, which is what finally distinguished "not called" from "called and failed".
 
+**The size no longer says what it is (11 Sep 2026, protocol v3).** Fase 2.3 of the privacy plan:
+the plaintext is now **padded into bands** inside the encryption (`Padding`, `DISENO-ratchet.md`
+§1.10). What it fixes: the node never sees content but always saw **how many bytes**, and that
+alone separated a read receipt (~60 B) from a capability announcement (~4 B) from a short "ok" —
+i.e. the *structure* of the conversation, who read what and when, legible without decrypting
+anything. All of those now measure 160 bytes. Bands are **160 B up to 4 KiB** (Signal's grain,
+and for the same reason: that is where control traffic lives) and **1 KiB up to 64 KiB** (covers
+the inline photo ≤58 KiB and the 48 KiB file chunk at <2% overhead); **above 64 KiB nothing is
+padded**, deliberately — nothing legitimate goes there (the mailbox refuses larger blobs) and the
+only thing that can is a huge direct text, where the receiver cuts at 1 MiB, so padding would
+risk crossing that cap to hide nothing. Three placement decisions are what make it cheap:
+(a) **inside the ratchet, not the envelope**, so one decision covers every type (receipt, hello,
+call signal, file meta and chunks, text, photo) — the seven send paths already funnelled through
+`seal`/`sealAndPersist` from fase 6, so none of them changed; (b) **the marker is bit 0 of the
+header flags**, a byte that was already reserved *and already the AAD*, so it costs nothing and
+is authenticated for free — turning it on in transit would eat the message's tail, turning it off
+would deliver padding as content, and **both break the AEAD** (there's a test); (c) format
+`texto ‖ 0x80 ‖ 0x00…`, Signal's scheme, chosen for its reason too: no explicit length field,
+which would be one more thing in the clear. It survives content that ends in zeros (its own stay
+*before* the 0x80) and content ending in 0x80 itself.
+
+**The lesson from this one is the version gate, which came within one line of a silent security
+regression.** Padding needs the peer to know how to strip it, so it needs a new version —
+`PROTOCOL_VERSION = 3`. But `usesRatchet` and the negotiated call key compared
+`peerProtocol >= PROTOCOL_VERSION`, so bumping that constant would have **switched the ratchet and
+the per-call key negotiation off for every contact that announced 2**, falling back to the static
+key: a security regression caused by adding a privacy feature, and invisible, because the v1 path
+works fine. Hence a **per-capability minimum** (`RATCHET_MIN_PROTOCOL = 2`,
+`PADDING_MIN_PROTOCOL = 3`) with `PROTOCOL_VERSION` now meaning only *what we announce*. **Rule: a
+new protocol version is not the threshold of anything — each capability owns its own.** What
+padding does **not** fix, said plainly in `security-model.md` §4: a chunked file is still
+recognizable (48 KiB padded to a 1 KiB band is still 48 KiB, and a burst still looks like a file)
+and a photo still differs from a text; hiding that needs cover traffic and batching, which do not
+exist. Covered by `PaddingTest` (8: band edges, content that mimics padding, bounded overhead,
+and that a padded chunk **still fits** the mailbox's 64 KiB blob) and `RatchetPaddingTest` (6: the
+bit across **both** decrypt paths — the normal one and `openOld` for a retired epoch, which is
+separate code — padded and unpadded mixed in one session, and tampering with the bit), plus
+`RatchetPropertyTest` now **drawing padding per message**, so the chaos covers it where it can
+actually break: out-of-order delivery, duplicates, retired epochs and state loss. JVM suite
+**237 tests, 0 failures**. Also corrected while in there: `DISENO-ratchet.md` §1.7 documented an
+86-byte header as 70 bytes and put `next_pub` at the wrong offset — the real overhead is 102
+bytes per message (header + GCM tag) against v1's 28.
+
 **A crash the ratchet work surfaced (9 Sep 2026): Krypta started once and never again.**
 `System.loadLibrary("sqlcipher")` sat *inside* `DatabaseEncryption.encryptInPlace`, **after its
 early return**. On the launch that converted the plaintext DB it loaded; on every launch after

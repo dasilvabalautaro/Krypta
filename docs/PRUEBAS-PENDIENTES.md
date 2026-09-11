@@ -682,6 +682,13 @@ Usar un contacto desechable, no uno real.
 > del punto 1 ya había salido del buffer. Que ambos móviles lleven el build del día es lo que
 > hace que la pareja use v2.
 >
+> **Añadido el 11 sep 2026:** la versión anunciada pasa a ser la **v3**, que suma el **relleno
+> por tramos** del tamaño (`DISENO-ratchet.md` §1.10). Para esta prueba no cambia ningún paso,
+> pero sí lo que se está probando: con los dos móviles en un build nuevo, **todo lo que viaje va
+> además relleno**, así que el punto 4 (archivo grande cruzando época) pasa a cubrir de paso el
+> relleno en el peor caso real que existe — una ráfaga de trozos de 48 KiB atravesando un cambio
+> de época.
+>
 > **Sigue pendiente lo que de verdad podía romper**: reentrega del buzón (3), archivo grande
 > cruzando época (4), pérdida de estado e importación de `.krbk` (5) y llamada (7).
 
@@ -706,9 +713,15 @@ devuelve todo a v1).
 Usar contactos desechables si se puede.
 
 1. - [ ] **Se anuncian y se reconocen.** Con los dos actualizados, esperar un ciclo de WAN y
-     mirar el Diagnóstico: debe salir `↔ protocolo v2 anunciado a N contacto(s)` en cada uno, y
+     mirar el Diagnóstico: debe salir `↔ protocolo v3 anunciado a N contacto(s)` en cada uno, y
      **una sola vez** — si reaparece en cada arranque, la marca no está persistiendo. En el otro
-     móvil debe aparecer `↔ …<peer> habla protocolo v2`.
+     móvil debe aparecer `↔ …<peer> habla protocolo v3`.
+
+     **Ojo con la versión**: desde el 11 sep 2026 se anuncia la **v3** (trae el relleno por
+     tramos), no la v2. Un build anterior anunciaba `v2` y **sigue valiendo para el ratchet**,
+     que tiene su propio mínimo (`RATCHET_MIN_PROTOCOL = 2`); lo único que no tendrá esa pareja
+     es el relleno. O sea: ver `v2` en un móvil viejo **no es un fallo**, y como los dos móviles
+     deben llevar el mismo build, aquí lo que toca ver es `v3`.
 2. - [x] **Conversación normal.** ✅ **10 sep 2026**: texto en los dos sentidos, sin pérdidas,
      con los dos móviles en el build del día. Falta repetirlo con **foto, nota de voz y
      respuesta con cita**, que van por caminos distintos (envelope `I`, troceado y `Y`).

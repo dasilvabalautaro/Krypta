@@ -96,8 +96,16 @@ vuelvan a añadir. Por eso el §7 (identidad en reposo) es la parte más crític
   - **no es retroactivo**: los mensajes anteriores no ganan PFS, y el historial guardado se
     protege con el cifrado de la base (§7), no con el ratchet.
 - **No hay negación (deniability) ni protección de metadatos por diseño.** Ver §5 y §6.
-- **No se oculta el tamaño.** Un mensaje corto y una foto se distinguen por el número de bytes
-  que pasan por el relay, y un archivo troceado se ve como una ráfaga de depósitos de 48 KiB.
+- **El tamaño se cuantiza, no se oculta.** Desde el 11 sep 2026 el texto en claro va **relleno
+  por tramos** dentro del cifrado (160 B hasta 4 KiB, 1 KiB hasta 64 KiB), así que los mensajes
+  de control —acuses de lectura, anuncios de capacidad, señales de llamada— y los textos cortos
+  **pasan a medir todos lo mismo**, y con ellos se va la estructura que antes se leía sin abrir
+  nada (quién leyó qué y cuándo). Tres límites que hay que decir: solo aplica con los contactos
+  que anuncian la v3 del protocolo (con el resto el tamaño sigue siendo el real); un **archivo
+  troceado sigue siendo reconocible**, porque 48 KiB rellenados a un tramo de 1 KiB siguen
+  siendo 48 KiB y una ráfaga de ellos sigue pareciendo lo que es; y **una foto sigue
+  distinguiéndose** de un mensaje corto. Ocultar eso pide tráfico de relleno y batching, que no
+  están hechos (ver el punto 6 de §9).
 
 ---
 
@@ -445,8 +453,9 @@ escrituras.
      esté repartida la versión que sabe recibir — con el primario en un proveedor ajeno, un
      volcado de ese disco es hoy el grafo social con horas —; medir y subir la tasa de
      conexión directa (la prueba de NAT con dos SIM, nunca hecha), porque cada conexión
-     directa es una conversación que el relay no ve; y rellenar los blobs a tamaños fijos
-     para que el tamaño no delate si es texto, foto o nota de voz.
+     directa es una conversación que el relay no ve. El **relleno por tramos** de este punto
+     está **hecho el 11 sep 2026** (§4): lo que se ganó es que el tráfico de control deje de
+     distinguirse por el tamaño; lo que no, que un archivo troceado siga siendo reconocible.
   2. **Infraestructura** — *hecho en lo principal el 10 sep 2026*: los nodos caseros (Mac tras
      Cloudflare Tunnel, PC Windows de uso diario) salieron de `DEFAULT_BOOTSTRAP` y los
      sustituye un VPS en **otro proveedor** (InterServer, Dallas, EE. UU.), con SSH solo por

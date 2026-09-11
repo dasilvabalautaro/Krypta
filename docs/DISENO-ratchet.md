@@ -153,18 +153,25 @@ duplicado antes de mirarlo. Forjar uno nuevo exige `S`, y quien tiene `S` ya tie
 Va **en claro** (el AEAD la autentica como AAD, así que no se puede tocar) delante del ciphertext:
 
 ```
-0        0x02          versión del sobre de transporte (hoy: nonce(12) ‖ ct+tag)
-1        flags         reservado, 0
+0        0x02          versión del sobre de transporte (v1 era: nonce(12) ‖ ct+tag)
+1        flags         bit 0 = el texto en claro va relleno por tramos (§1.10)
+                       el resto, reservado; un receptor ignora los que no conoce
 2..9     lineage       u64 BE, unix millis
 10..13   epoch         u32 BE
 14..17   N             u32 BE, nº de mensaje en la cadena
 18..21   PN            u32 BE, mensajes de la cadena de la época anterior
-22..53   next_pub      X25519 (32), mi propuesta para epoch+1
-54..     ct ‖ tag       AES-256-GCM con AAD = bytes 0..53
+22..53   cur_pub       X25519 (32), mi pública de ESTA época
+54..85   next_pub      X25519 (32), mi propuesta para epoch+1
+86..     ct ‖ tag      AES-256-GCM con AAD = bytes 0..85
 ```
 
-70 bytes de sobrecoste por mensaje frente a los 28 de hoy. Irrelevante para un trozo de 48 KiB;
-para un acuse de lectura, que hoy son ~60 bytes, lo dobla — y sigue siendo irrelevante.
+**Corrección respecto al diseño sobre el papel** (que decía 70 bytes y ponía `next_pub` en
+22..53): la cabecera son **86 bytes**, porque hace falta mandar *además* la pública de la época
+actual — sin ella, un lado que no hubiera recibido ningún mensaje de la época anterior no podría
+alcanzar la del otro. Con el tag de GCM son **102 bytes** de sobrecoste por mensaje frente a los
+28 de la v1. Irrelevante para un trozo de 48 KiB; para un acuse de lectura, que eran ~60 bytes,
+lo triplica — y sigue siendo irrelevante, porque desde §1.10 ese acuse se rellena hasta 160
+bytes de todas formas.
 
 **Compatibilidad**: un ciphertext v1 son bytes arbitrarios, así que no hay magia que distinga uno
 de otro con certeza. No hace falta: se intenta v2 y, si el AEAD falla, se intenta v1. **El AEAD
@@ -272,6 +279,64 @@ dos épocas nunca se separan más de una, y tras el caos la conversación se rec
 ronda**: si al que quedó atrasado no se le lee, basta con que hable el otro.
 
 ---
+
+### 1.10 Relleno por tramos (11 sep 2026)
+
+Fase 2.3 de [PLAN-privacidad-y-confianza.md](PLAN-privacidad-y-confianza.md), implementada en
+`Padding` + el bit 0 de los flags de la cabecera.
+
+**Qué arreglaba.** El nodo nunca ve el contenido, pero sí **cuántos bytes** tiene cada depósito.
+Con eso distinguía un acuse de lectura (~60 B) de un anuncio de capacidad (~4 B) de un «vale» —
+es decir, **la estructura de la conversación**: quién leyó qué y cuándo, legible sin romper nada
+y sin necesidad de descifrar. Cuantizar el tamaño borra esa diferencia: todos esos mensajes pasan
+a medir 160 bytes.
+
+**Los tramos.** 160 B hasta 4 KiB, 1 KiB hasta 64 KiB, y por encima nada. Los 160 son los de
+Signal y valen por lo mismo: es el grano donde vive casi todo el tráfico de control. El de 1 KiB
+cubre la foto en línea (≤58 KiB) y el trozo de archivo (48 KiB) con menos del 2 % de sobrecoste.
+Por encima de 64 KiB **no se rellena**, y no es pereza: nada legítimo pasa de ahí —el buzón
+rechaza blobs mayores— y lo único que puede llegar tan grande es un texto enorme por envío
+directo, donde el receptor corta en 1 MiB; rellenar ahí arriesgaría cruzar ese tope para no
+esconder nada, porque un mensaje de ese tamaño ya se delata solo.
+
+**Tres decisiones de sitio**, que son lo que hace que esto sea barato:
+
+1. **Dentro del ratchet, no dentro del sobre.** Así una sola decisión cubre *todos* los tipos
+   —acuse de lectura, hello, señal de llamada, meta y trozos de archivo, texto, foto— en vez de
+   una por camino de envío. Los siete caminos de envío ya pasaban por `seal`/`sealAndPersist`
+   (fase 6), así que no hubo que tocar ninguno.
+2. **El bit va en la cabecera**, que ya era el AAD. Hay que saber si el texto va relleno
+   **antes** de interpretar lo que sale del AEAD, y ponerlo ahí lo deja autenticado sin gastar
+   un byte más: encenderlo por el camino haría que se comiera el final del mensaje, apagarlo que
+   se entregara el relleno como contenido, y **las dos cosas rompen el AEAD**. Los bits que una
+   versión no conoce se ignoran, para que otra futura pueda usarlos.
+3. **`texto ‖ 0x80 ‖ 0x00…`**, el esquema de Signal, y por su misma razón: no necesita un campo
+   de longitud explícito, que sería un dato más a la vista. Se recupera buscando el último byte
+   no nulo, que tiene que ser el terminador. Funciona con contenido que **acabe en ceros** (los
+   suyos quedan antes del `0x80`) y con uno que acabe **en el propio `0x80`**; los dos casos
+   están fijados en `PaddingTest`.
+
+**La trampa de la versión, que es lo que más cerca estuvo de costar un fallo de seguridad.**
+Rellenar exige que el otro sepa quitarlo, así que hay versión nueva: `PROTOCOL_VERSION = 3`. Pero
+`usesRatchet` y la clave de llamada negociada comparaban `peerProtocol >= PROTOCOL_VERSION`, de
+modo que subir la constante **habría apagado el ratchet y la negociación de clave con todos los
+contactos que anunciaron 2** — una regresión de seguridad por añadir una función de privacidad, y
+silenciosa, porque el camino v1 funciona. De ahí que ahora haya un mínimo **por capacidad**
+(`RATCHET_MIN_PROTOCOL = 2`, `PADDING_MIN_PROTOCOL = 3`) y que `PROTOCOL_VERSION` sea solo *lo que
+se anuncia*. **Regla: una versión nueva no es el umbral de nada; cada capacidad tiene el suyo.**
+
+**Qué no arregla**, y hay que decirlo igual de claro: un **archivo troceado sigue siendo
+reconocible** (48 KiB rellenados a un tramo de 1 KiB siguen siendo 48 KiB, y una ráfaga sigue
+pareciendo un archivo) y una foto sigue distinguiéndose de un texto. Para eso hace falta tráfico
+de relleno y batching, que es otra cosa y no está hecha.
+
+Cubierto por `PaddingTest` (los bordes de tramo, el contenido que se parece al relleno, el
+sobrecoste acotado y que un trozo relleno **siga cabiendo** en el blob de 64 KiB del buzón) y
+`RatchetPaddingTest` (el bit atravesando los **dos** caminos de descifrado —el normal y el de una
+época ya retirada, que es código aparte—, relleno y sin relleno mezclados en la misma sesión, y
+que tocar el bit rompa la autenticación). Además `RatchetPropertyTest` ahora **sortea el relleno
+por mensaje**, así que el caos lo cubre donde de verdad puede romperse: entregas desordenadas,
+duplicados, épocas retiradas y pérdidas de estado.
 
 ## 2. Por qué no el doble ratchet tal cual
 
