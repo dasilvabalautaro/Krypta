@@ -211,10 +211,33 @@ más viejo que esas 500 lo volvería a entregar, y el usuario vería un mensaje 
 falsificación —hace falta un sobre genuino, capturado del buzón o de la red— pero sí un mensaje
 que aparece dos veces, y con la marca de tiempo del original.
 
-Qué se podría hacer, si algún día se decide: acotar la deduplicación por **tiempo** en vez de por
-cantidad (el TTL del buzón son 7 días, así que ahí hay un tope natural), o rechazar de plano los
-sobres de época 0 cuyo linaje ya no es el vigente y que llegan cuando la sesión lleva épocas
-avanzadas. Queda anotado y sin hacer.
+**La ventana se arregló el mismo día.** La poda pasa a ser la **unión** de dos reglas: se
+conserva una huella si es más nueva que **8 días** (margen sobre el TTL de 7 del buzón, que es lo
+que de verdad acota la reentrega legítima) **o** si está entre las **500 últimas**. Antes solo
+había la de cantidad, y se comportaba al revés de lo que hace falta: en una pareja muy activa 500
+mensajes pueden ser medio día, así que dejaba de proteger justo a quien más habla; en una
+tranquila podían ser meses. Con la unión, ningún caso empeora. Va en `RatchetDao.pruneSeen`
+—borra solo lo que es **a la vez** viejo y sobrante— y no cambia el esquema: la tabla ya tenía
+`seenAt` con su índice.
+
+**Y un hallazgo de producción que salió al probarlo (11 sep 2026): podar en cada mensaje era
+demasiado caro.** `markSeen` se llama una vez por mensaje recibido, dentro de la transacción, y
+la poda lleva un `ORDER BY seenAt DESC LIMIT 500` dentro. Una ráfaga de 600 —un archivo
+troceado— **mató el proceso** en el TECNO. Eso no era una molestia del test: lo pagaba el usuario
+en cada mensaje. Ahora se poda **una de cada 64 inserciones** (`RoomRatchetStore.PRUNE_EVERY`),
+que no cambia lo que se conserva —la ventana sigue siendo "8 días o 500 últimas" y la tabla nunca
+crece más de 64 filas por encima del tope— y convierte esa ráfaga en 9 podas en vez de 600.
+
+Cubierto por `RatchetSeenPruneSqlTest`, que ejecuta **la misma cadena** que va en el `@Query`
+(`RatchetDao.PRUNE_SEEN_SQL`) contra SQLite en la JVM, en 0,6 s. Empezó siendo un test
+instrumentado y verificar cuatro líneas de SQL costó dos corridas y horas de reloj: la primera
+murió porque el móvil se desconectó del USB —Gradle esperó 1h 21m y reportó `FAILED` **sin
+mensaje**, con el motivo real (`device not found`) escondido en `system-err`— y la segunda mató
+el proceso en el dispositivo. La lección, más allá de este caso: **si la lógica es SQL, se prueba
+donde se pueda repetir**.
+
+Queda sin hacer la otra salida posible: rechazar de plano los sobres de época 0 cuyo linaje ya no
+es el vigente y que llegan cuando la sesión lleva épocas avanzadas.
 
 **Y una asimetría de la regla del linaje que tampoco estaba escrita.** Cuando un extremo pierde
 el estado, su linaje nuevo es mayor, y el §1.6 dice que **un linaje menor se descarta**. O sea

@@ -402,11 +402,14 @@ escrituras.
    activas de cada día. Es el hueco que el depósito ciego **no** cierra.
 9. **La reproducción de un mensaje muy viejo** (10 sep 2026): quien haya capturado un sobre
    genuino de la **época 0** de una conversación puede hacer que se entregue otra vez, porque esa
-   época se re-deriva del secreto compartido. Lo para la deduplicación previa, que conserva las
-   **500 huellas más recientes por conversación**: más allá de esa ventana, el mensaje se
-   volvería a mostrar (repetido, con la fecha del original). No permite falsificar nada, solo
-   repetir algo que ya se dijo. Lo encontró la prueba de propiedades del ratchet; el detalle y
-   las salidas posibles están en [DISENO-ratchet.md](DISENO-ratchet.md) §1.9.
+   época se re-deriva del secreto compartido. Lo para la deduplicación previa, que desde el 10 sep
+   2026 conserva una huella si es de los **últimos 8 días** (margen sobre el TTL de 7 del buzón)
+   **o** está entre las **500 últimas**: antes solo lo segundo, que en una conversación muy activa
+   podía ser medio día. Más allá de esa ventana, el mensaje se volvería a mostrar (repetido, con
+   la fecha del original). No permite falsificar nada, solo repetir algo que ya se dijo. Lo
+   encontró la prueba de propiedades del ratchet; el detalle está en
+   [DISENO-ratchet.md](DISENO-ratchet.md) §1.9, incluido por qué la poda no corre en cada mensaje
+   (hacerlo tumbaba el proceso con una ráfaga de archivo troceado).
 
 ---
 

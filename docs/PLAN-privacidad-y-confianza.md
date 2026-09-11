@@ -56,9 +56,12 @@ ni nonce se reutiliza.
 **Y encontraron dos cosas**, ambas en [DISENO-ratchet.md](DISENO-ratchet.md) §1.9:
 
 - El ratchet **no** detecta la reproducción de un mensaje de la época 0, porque esa época se
-  re-deriva del secreto compartido. Lo para la deduplicación previa, que conserva 500 huellas
-  por conversación — así que esa deduplicación es una pieza de seguridad con ventana finita, no
-  una comodidad. **Pendiente**: decidir si se acota por tiempo en vez de por cantidad.
+  re-deriva del secreto compartido. Lo para la deduplicación previa — o sea que esa
+  deduplicación es una pieza de seguridad, no una comodidad. **Arreglado**: la poda pasa a ser la
+  unión de "últimos 8 días" (margen sobre el TTL del buzón) y "últimas 500", porque solo por
+  cantidad dejaba de proteger justo a las parejas más activas. Al probarlo salió además un
+  **hallazgo de producción**: podar en cada mensaje recibido tumbaba el proceso con una ráfaga de
+  600 (un archivo troceado); ahora se poda una de cada 64.
 - La regla del linaje perdía mensajes en silencio tras una reinstalación. **Arreglado el mismo
   día** (`ChatService.rehook`): el receptor que falla al abrir reengancha al otro sin esperar a
   que nadie escriba, con tope por contacto. La ventana pasa de "hasta que la otra persona

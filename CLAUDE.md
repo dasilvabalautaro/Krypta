@@ -1135,8 +1135,24 @@ action script, because a property test that fails without the sequence is useles
 things on its first runs, both in `DISENO-ratchet.md` §1.9: (a) **an epoch-0 message can be
 replayed** — that epoch is re-derivable from the shared secret, so once its chain is evicted from
 the retired ones `openOld` re-derives it and opens the message again; replay protection therefore
-rests on the **pre-decrypt dedup** (`RoomRatchetStore`, 500 digests per conversation), which is a
-security component with a finite window, not a convenience; and (b) **the lineage rule lost
+rests on the **pre-decrypt dedup** (`RoomRatchetStore`), which is a security component, not a
+convenience — its pruning was count-only (newest 500 per conversation), which is backwards for
+the real threat: for a chatty pair 500 messages can be half a day, so it stopped protecting
+exactly the people who talk most. Fixed the same day to the **union** of two rules — keep a digest
+if it is newer than **8 days** (margin over the mailbox's 7-day TTL, which is what actually bounds
+legitimate redelivery) **or** among the newest 500 — in `RatchetDao.pruneSeen` (deletes only rows
+that are *both* old and surplus; no schema change, the table already had `seenAt` indexed).
+**Testing it surfaced a production bug**: `markSeen` runs once per received message and the prune
+carries an `ORDER BY seenAt DESC LIMIT 500`, so a 600-message burst (a chunked file) **killed the
+test process on the TECNO** — a cost the user was paying per message. It now prunes **one in 64**
+inserts (`RoomRatchetStore.PRUNE_EVERY`), which changes nothing about what is kept (the window is
+still "8 days or newest 500"; the table just runs up to 64 rows over the cap). Verified by
+`RatchetSeenPruneSqlTest`, a **JVM** test that runs the *same string* as the `@Query`
+(`RatchetDao.PRUNE_SEEN_SQL`) against sqlite-jdbc in 0.6 s. It started as an instrumented test and
+verifying four lines of SQL cost two runs and hours of wall clock: the first died because the
+phone dropped off USB — Gradle waited 1h 21m and reported `FAILED` with an **empty** message, the
+real cause (`device not found`) buried in `system-err` — and the second killed the process on the
+device. **Rule of thumb earned: if the logic is SQL, test it where it can be repeated**; and (b) **the lineage rule lost
 messages silently** after a reinstall: the peer who hasn't noticed keeps writing in the old
 lineage and everything he sends is dropped (and acked) until the reinstalled side writes.
 (b) was fixed the same day with `ChatService.rehook`: the receiver that *fails* to open a
