@@ -68,9 +68,17 @@ class RatchetPropertyTest {
         private fun send(fromAlice: Boolean) {
             val who = if (fromAlice) "A" else "B"
             val text = "$who#${sent++}"
-            val sealed = if (fromAlice) ratchet.encrypt(a, text.toByteArray()) else ratchet.encrypt(b, text.toByteArray())
+            // La mitad de los mensajes van **rellenos** (fase 2.3 del plan), sorteado por
+            // mensaje: así el caos cubre el relleno donde de verdad puede romperse —entregas
+            // desordenadas, duplicados, una época ya retirada, una pérdida de estado— y no solo
+            // el ida y vuelta feliz de [RatchetPaddingTest]. Entra en el guion porque si falla
+            // hay que poder repetirlo tal cual.
+            val pad = rnd.nextBoolean()
+            val sealed =
+                if (fromAlice) ratchet.encrypt(a, text.toByteArray(), pad)
+                else ratchet.encrypt(b, text.toByteArray(), pad)
             if (fromAlice) a = sealed.state else b = sealed.state
-            script += "$who envía $text"
+            script += "$who envía $text${if (pad) " (relleno)" else ""}"
 
             // Propiedad 2: ninguna clave de mensaje se usa dos veces. La forma observable es que
             // la terna (linaje, época, N) de un mismo emisor sea única — es lo que identifica la

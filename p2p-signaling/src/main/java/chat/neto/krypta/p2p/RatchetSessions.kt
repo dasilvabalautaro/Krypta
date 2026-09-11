@@ -41,13 +41,17 @@ class RatchetSessions @Inject constructor(
     /**
      * Cifra [plaintext] para [contact] y persiste con [persist] (que recibe el ciphertext ya
      * listo para la red) en la misma transacción que el avance del ratchet.
+     *
+     * [pad] rellena el texto en claro por tramos para que su tamaño no delate qué es (ver
+     * [Padding]); al recibir no hace falta decirlo, porque lo dice la cabecera del mensaje.
      */
     suspend fun <T> send(
         contact: Contact,
         plaintext: ByteArray,
+        pad: Boolean = false,
         persist: suspend (ciphertext: ByteArray) -> T,
     ): T {
-        val sealed = ratchet.encrypt(stateFor(contact), plaintext)
+        val sealed = ratchet.encrypt(stateFor(contact), plaintext, pad)
         return transactions.inTransaction {
             val value = persist(sealed.ciphertext)
             store.save(contact.id, sealed.state.encode())

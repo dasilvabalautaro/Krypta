@@ -57,8 +57,14 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
         return epochZero(sharedSecret, lineage, sendDir, past = emptyList(), skipped = emptyList())
     }
 
-    /** Cifra [plaintext]; devuelve el ciphertext (cabecera ‖ AEAD) y el estado avanzado. */
-    fun encrypt(state: RatchetState, plaintext: ByteArray): Sealed {
+    /**
+     * Cifra [plaintext]; devuelve el ciphertext (cabecera ‖ AEAD) y el estado avanzado.
+     *
+     * Con [pad] el texto en claro va **relleno por tramos** (ver [Padding]) y la cabecera lo
+     * marca. Es un parámetro y no una decisión de aquí porque depende del contacto: solo se le
+     * rellena a quien haya anunciado que sabe quitarlo (ver `ChatService.PADDING_MIN_PROTOCOL`).
+     */
+    fun encrypt(state: RatchetState, plaintext: ByteArray, pad: Boolean = false): Sealed {
         val st = maybeAdvance(state)
         val header = Header(
             lineage = st.lineage,
@@ -67,9 +73,10 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
             pn = st.sendPN,
             curPub = st.myCurPub,
             nextPub = st.nextPub,
+            flags = if (pad) FLAG_PADDED else 0,
         ).encode()
         val mk = messageKey(st.sendChain)
-        val body = seal(mk, header, plaintext)
+        val body = seal(mk, header, if (pad) Padding.pad(plaintext) else plaintext)
         return Sealed(
             st.copy(sendChain = nextChainKey(st.sendChain), sendN = st.sendN + 1),
             header + body,
@@ -102,7 +109,7 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
         }
 
         val (advanced, mk) = takeReceiveKey(st, header)
-        val plaintext = open(mk, aad, body)
+        val plaintext = unpad(header, open(mk, aad, body))
         // Solo después de que el AEAD haya validado se apunta su propuesta y se avanza.
         return Opened(maybeAdvance(advanced.copy(peerNextPub = header.nextPub)), plaintext)
     }
@@ -227,7 +234,7 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
         }
         if (skipped != null) {
             val (dropped, mk) = takeSkipped(st, header.lineage, header.epoch, header.n)
-            return Opened(dropped, open(mk, aad, body))
+            return Opened(dropped, unpad(header, open(mk, aad, body)))
         }
 
         val chain = st.past.firstOrNull { it.lineage == header.lineage && it.epoch == header.epoch }
@@ -255,7 +262,7 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
             ck = nextChainKey(ck)
         }
         val mk = messageKey(ck)
-        val plaintext = open(mk, aad, body)
+        val plaintext = unpad(header, open(mk, aad, body))
         val updated = RatchetState.PastChain(header.lineage, header.epoch, nextChainKey(ck), header.n + 1)
         return Opened(
             st.copy(
@@ -274,6 +281,18 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
     }
 
     // --- primitivas ---------------------------------------------------------------------
+
+    /**
+     * Quita el relleno si la cabecera dice que lo lleva.
+     *
+     * El bit vive **dentro del AAD**, así que para cuando se llega aquí el propio AEAD ya ha
+     * garantizado que lo puso quien cifró: nadie puede encenderlo ni apagarlo por el camino
+     * (encenderlo haría que se comiera el final del mensaje; apagarlo, que se entregara el
+     * relleno como si fuera contenido). Los bits que esta versión no conoce se ignoran a
+     * propósito, para que una futura pueda usarlos sin romper a esta.
+     */
+    private fun unpad(header: Header, plaintext: ByteArray): ByteArray =
+        if (header.padded) Padding.strip(plaintext) else plaintext
 
     private fun seal(messageKey: ByteArray, aad: ByteArray, plaintext: ByteArray): ByteArray {
         val (key, nonce) = keyAndNonce(messageKey)
@@ -327,11 +346,15 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
         val pn: Int,
         val curPub: ByteArray,
         val nextPub: ByteArray,
+        val flags: Int = 0,
     ) {
+        /** ¿El texto en claro va relleno por tramos? (bit 0 de los flags, ver [Padding]). */
+        val padded: Boolean get() = flags and FLAG_PADDED != 0
+
         fun encode(): ByteArray {
             val out = ByteArray(HEADER_BYTES)
             out[0] = WIRE_VERSION
-            out[1] = 0
+            out[1] = flags.toByte()
             putLong(out, 2, lineage)
             putInt(out, 10, epoch)
             putInt(out, 14, n)
@@ -356,6 +379,7 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
                     pn = pn,
                     curPub = wire.copyOfRange(22, 54),
                     nextPub = wire.copyOfRange(54, 86),
+                    flags = wire[1].toInt() and 0xFF,
                 )
             }
 
@@ -394,6 +418,15 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
 
         /** `versión(1) ‖ flags(1) ‖ linaje(8) ‖ época(4) ‖ N(4) ‖ PN(4) ‖ pub(32) ‖ siguiente(32)`. */
         const val HEADER_BYTES = 86
+
+        /**
+         * Bit 0 de los flags: el texto en claro va **relleno por tramos** (ver [Padding]).
+         *
+         * Va en la cabecera y no en el texto cifrado porque hay que saberlo **antes** de
+         * interpretar lo que salga del AEAD; y como la cabecera entera es el AAD, el bit está
+         * autenticado sin costar un byte más.
+         */
+        const val FLAG_PADDED = 0x01
 
         /** Tope de claves derivadas de golpe para cubrir un hueco (anti-abuso, §1.5). */
         const val MAX_SKIP = 1000

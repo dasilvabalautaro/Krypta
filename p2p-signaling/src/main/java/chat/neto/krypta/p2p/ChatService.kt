@@ -708,7 +708,17 @@ class ChatService @Inject constructor(
      * [RATCHET_SEND] queda por encima como interruptor de emergencia.
      */
     private fun usesRatchet(contact: Contact): Boolean =
-        RATCHET_SEND && contact.sharedSecret != null && contact.peerProtocol >= PROTOCOL_VERSION
+        RATCHET_SEND && contact.sharedSecret != null && contact.peerProtocol >= RATCHET_MIN_PROTOCOL
+
+    /**
+     * ¿Se le **rellena** el tamaño a este contacto? (ver [Padding]). Mismo criterio que el
+     * ratchet pero con su propio mínimo: el relleno llegó después, y enviárselo a quien no sabe
+     * quitarlo le entregaría el relleno pegado al final del mensaje.
+     *
+     * Solo tiene sentido con ratchet: el camino v1 no tiene dónde marcar que va relleno.
+     */
+    private fun pads(contact: Contact): Boolean =
+        usesRatchet(contact) && contact.peerProtocol >= PADDING_MIN_PROTOCOL
 
     /** Un envío ya cifrado: el mensaje persistido (si lo hay) y los bytes que van por la red. */
     private class Outgoing(val message: Message, val wire: ByteArray)
@@ -726,7 +736,7 @@ class ChatService @Inject constructor(
             return cipher.encrypt(requireNotNull(contact.sharedSecret), envelope)
         }
         lateinit var wire: ByteArray
-        sessions.send(contact, envelope) { wire = it }
+        sessions.send(contact, envelope, pads(contact)) { wire = it }
         return wire
     }
 
@@ -746,7 +756,7 @@ class ChatService @Inject constructor(
             return Outgoing(message, wire)
         }
         lateinit var wire: ByteArray
-        val message = sessions.send(contact, envelope) { ct ->
+        val message = sessions.send(contact, envelope, pads(contact)) { ct ->
             wire = ct
             build().also { messages.save(it) }
         }
@@ -879,7 +889,7 @@ class ChatService @Inject constructor(
         // La mitad de clave solo viaja hacia quien haya anunciado que la entiende: un cliente
         // anterior parte la cabecera `C` en tres trozos y descartaría la señal entera, con lo
         // que la llamada no llegaría a sonar. Con el resto se sigue por el camino antiguo.
-        val negociada = key?.takeIf { contact.peerProtocol >= PROTOCOL_VERSION }
+        val negociada = key?.takeIf { contact.peerProtocol >= RATCHET_MIN_PROTOCOL }
         sendRaw(contact, MessageEnvelope.encodeCall(kind, callId, System.currentTimeMillis(), negociada))
     }
 
@@ -1515,8 +1525,27 @@ class ChatService @Inject constructor(
         /**
          * Versión de protocolo que habla este cliente y que se anuncia a cada contacto (sobre
          * `V`). La 1 es implícita: no la anuncia nadie, es "lo que había antes".
+         *
+         * **Esta constante no es el umbral de ninguna capacidad**, y la distinción cuesta un
+         * fallo silencioso si se olvida: cuando subió a 3 (relleno por tramos), comparar
+         * `peerProtocol >= PROTOCOL_VERSION` habría **apagado el ratchet y la negociación de
+         * clave de llamada** con todos los contactos que anunciaron 2 — una regresión de
+         * seguridad por añadir una función. Cada capacidad tiene su propio mínimo.
          */
-        const val PROTOCOL_VERSION = 2
+        const val PROTOCOL_VERSION = 3
+
+        /**
+         * Mínimo para el **ratchet** y para la **clave de llamada negociada**: las dos llegaron
+         * con la v2, así que quien anuncie 2 o más las entiende.
+         */
+        const val RATCHET_MIN_PROTOCOL = 2
+
+        /**
+         * Mínimo para el **relleno por tramos** (ver [Padding]), que llegó con la v3. A quien
+         * anuncie 2 se le sigue enviando sin relleno: no sabría quitarlo y se comería el final
+         * del mensaje como si fuera contenido.
+         */
+        const val PADDING_MIN_PROTOCOL = 3
 
         /** Tope del reengache de sesiones desincronizadas: uno por contacto cada 5 min. */
         internal const val REHOOK_MIN_INTERVAL_MS = 5 * 60 * 1000L
