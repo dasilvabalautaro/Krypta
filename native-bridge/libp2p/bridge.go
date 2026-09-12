@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"filippo.io/edwards25519"
@@ -197,6 +198,9 @@ type Node struct {
 	// contactos y los nodos; vacío = abierto.
 	gater *peerGater
 
+	// Conexiones WebSocket cerradas por sobrar junto a una directa (ver conn_prune.go).
+	wsPruned atomic.Int64
+
 	mailboxHandler MailboxHandler
 
 	// Servicio mDNS, guardado para poder **pararlo**. Antes era una variable local, así que
@@ -271,7 +275,10 @@ func newNode(priv crypto.PrivKey, relayAddrs string) (*Node, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Node{h: h, ctx: ctx, cancel: cancel, gater: gater}, nil
+	n := &Node{h: h, ctx: ctx, cancel: cancel, gater: gater}
+	// Si con un nodo hay conexión directa, la WebSocket sobra (ver conn_prune.go).
+	installWebsocketPruner(h, &n.wsPruned)
+	return n, nil
 }
 
 // circuitAddrsFactory devuelve un AddrsFactory que AÑADE, a las direcciones anunciadas del
@@ -460,6 +467,12 @@ func (n *Node) StartDHT(bootstrap string, server bool) error {
 	// → rendezvous) se alargaba hasta varios minutos; medido el 2 sep 2026: 37 min sin un
 	// solo ciclo, con el buzón lleno y el móvil sin recoger nada. En paralelo el coste del
 	// paso es el del nodo más lento, no la suma.
+	//
+	// Las líneas se agrupan **por PeerID** (cada nodo va dos veces en DEFAULT_BOOTSTRAP: la
+	// directa y la wss/443). Un Connect por línea serían dos dials concurrentes al mismo peer,
+	// y el de la wss llegaría al ranker (dial_ranker.go) sin ninguna directa contra la que
+	// retrasarse. Con un solo AddrInfo por nodo, el ranker ve las dos vías y decide.
+	byID := map[peer.ID]*peer.AddrInfo{}
 	var ais []*peer.AddrInfo
 	for _, line := range strings.Split(bootstrap, "\n") {
 		line = strings.TrimSpace(line)
@@ -470,6 +483,11 @@ func (n *Node) StartDHT(bootstrap string, server bool) error {
 		if err != nil {
 			return fmt.Errorf("bootstrap %q: %w", line, err)
 		}
+		if existing, ok := byID[ai.ID]; ok {
+			existing.Addrs = append(existing.Addrs, ai.Addrs...)
+			continue
+		}
+		byID[ai.ID] = ai
 		ais = append(ais, ai)
 	}
 	// Sin bootstrap no hay nada que conectar y NO es un error: es el caso del propio nodo
@@ -529,7 +547,11 @@ func (n *Node) ReserveRelay(relayAddrs string) string {
 		}(i, ai)
 	}
 	wg.Wait()
-	return strings.Join(parts, " | ")
+	summary := strings.Join(parts, " | ")
+	if pruned := n.wsPruned.Load(); pruned > 0 {
+		summary += fmt.Sprintf(" | wss redundantes cerradas: %d", pruned)
+	}
+	return summary
 }
 
 func (n *Node) reserveOne(ai peer.AddrInfo) string {
@@ -544,7 +566,33 @@ func (n *Node) reserveOne(ai peer.AddrInfo) string {
 	if err != nil {
 		return fmt.Sprintf("reserve: %v", err)
 	}
-	return fmt.Sprintf("OK (%d addrs, exp %s)", len(res.Addrs), res.Expiration.Format("15:04:05"))
+	return fmt.Sprintf("OK (%d addrs, exp %s, %s)", len(res.Addrs), res.Expiration.Format("15:04:05"), n.connSummary(ai.ID))
+}
+
+// connSummary describe las conexiones abiertas con un peer por su vía ("1 conn: tcp",
+// "2 conns: tcp+ws"), para que el diagnóstico de la app deje ver si alguna va por Caddy.
+func (n *Node) connSummary(p peer.ID) string {
+	conns := n.h.Network().ConnsToPeer(p)
+	var vias []string
+	for _, c := range conns {
+		a := c.RemoteMultiaddr()
+		switch {
+		case isCircuitAddr(a):
+			vias = append(vias, "relay")
+		case isWebsocketAddr(a):
+			vias = append(vias, "ws")
+		default:
+			if _, err := a.ValueForProtocol(multiaddr.P_QUIC_V1); err == nil {
+				vias = append(vias, "quic")
+			} else {
+				vias = append(vias, "tcp")
+			}
+		}
+	}
+	if len(conns) == 1 {
+		return "1 conn: " + vias[0]
+	}
+	return fmt.Sprintf("%d conns: %s", len(conns), strings.Join(vias, "+"))
 }
 
 // PingProbe mide la latencia RTT (ms) hasta el primer peer de addrs (típicamente el nodo

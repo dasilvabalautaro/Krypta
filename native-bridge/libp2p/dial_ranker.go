@@ -27,6 +27,11 @@ const wsDialDelay = 1 * time.Second
 // de una red que filtra el 4001. Si un peer solo tiene direcciones WebSocket, se marcan al
 // instante como antes.
 //
+// Esto decide el **orden**, no garantiza que quede una sola conexión: si la directa tarda más
+// de ese segundo, la wss también se marca, y con dials solapados de varios llamadores pueden
+// quedar las dos abiertas (visto en el TECNO el 12 sep 2026). De eso se ocupa conn_prune.go:
+// con una directa abierta, la WebSocket se cierra.
+//
 // Los dos grupos se ordenan **por separado**. Retrasar solo las WebSocket sobre el resultado
 // del ranker estándar no basta: ahí la TCP ya viene 250 ms por detrás del `wss` (mismo grupo,
 // puerto más alto), y seguiría esperando sin motivo — el test lo cazó en la primera versión.
