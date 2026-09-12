@@ -196,6 +196,27 @@ Tres cosas que el diseño sobre el papel no decía, y que están fijadas en `Rat
    validado. Un linaje altísimo inventado —el ataque de degradación del §1.6— muere ahí. Lo que
    queda es la **reproducción de un mensaje genuino de época 0**, y de eso se encarga la
    deduplicación del §4.2, que hay que hacer igualmente.
+4. **Al añadirse dos contactos, si el primer mensaje del usuario tiene secreto hacia adelante
+   depende de los relojes, y no se puede arreglar en el ratchet sin romper otra cosa** (12 sep
+   2026). Cada lado crea su sesión por su cuenta con su hora local como linaje. En el caso
+   normal, quien recibe el anuncio del otro crea la suya **después**, con linaje mayor: abre el
+   sobre por `openOld` (la época 0 de cualquier linaje es derivable) pero no adopta el linaje
+   menor ni consume la propuesta que venía, así que lo primero que escriba va en la época 0 de
+   su propio linaje, y solo la primera respuesta del otro saca a los dos. Si en cambio su reloj
+   va por detrás, el linaje del otro es mayor, lo adopta, consume la propuesta y su primer
+   mensaje ya sale en la época 1. Se creía que el intercambio de anuncios de capacidad (§5)
+   hacía esa ida y vuelta solo; dos tests de `ChatService` fijan los dos casos (el primer
+   intento del test **pasaba o fallaba según el milisegundo**, que fue la pista). Se probó a que una sesión **que aún no ha cifrado nada**
+   adoptara el linaje menor, y `RatchetPropertyTest` lo tumbó en su primera corrida (semilla
+   102): tras una reinstalación la sesión también está «virgen», y adoptar un linaje viejo del
+   otro reutiliza ternas `(linaje, época, N)` que esta identidad ya gastó antes de perder el
+   estado. **Los linajes tienen que ser monótonos por identidad**, y como el estado perdido no
+   puede decir qué linajes usó, la regla «un linaje menor no se adopta nunca» no admite
+   excepciones. Lo que sí sería sano, si algún día se quiere cerrar el hueco: que el receptor,
+   al abrir por `openOld` un sobre de linaje menor sin tener sesión, **conteste** con un sobre
+   de control en su linaje (mayor), para que el otro lo adopte y responda con material
+   efímero antes de que el usuario escriba — dos sobres de 160 B, sin cambio de formato. No se
+   ha hecho: es más código en el camino sensible antes de la revisión externa.
 
 ---
 

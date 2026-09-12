@@ -67,6 +67,9 @@ El **PeerID es la clave pública** (va embebida en él), así que:
 **Consecuencia dura:** el PeerID *es* la identidad y **no hay revocación**. Si alguien te roba
 la identidad, no puedes invalidarla: hay que generar otra y que todos los contactos te
 vuelvan a añadir. Por eso el §7 (identidad en reposo) es la parte más crítica del modelo.
+(Una rotación y revocación firmadas con la identidad anterior están **diseñadas, sin
+implementar**, en [DISENO-rotacion-identidad.md](DISENO-rotacion-identidad.md); este párrafo
+sigue siendo cierto hasta que pasen las pruebas con dos móviles.)
 
 ---
 
@@ -85,14 +88,18 @@ vuelvan a añadir. Por eso el §7 (identidad en reposo) es la parte más crític
 
 ### Lo que NO se garantiza (importante)
 
-- **El secreto hacia adelante (PFS) existe, pero solo por pareja y sin probar en vivo.** Krypta
-  tiene un **doble ratchet por épocas** (ver [DISENO-ratchet.md](DISENO-ratchet.md)) y el envío
-  se encendió el 10 sep 2026. Ahora bien:
+- **El secreto hacia adelante (PFS) existe, pero solo por pareja y probado en vivo a medias.**
+  Krypta tiene un **doble ratchet por épocas** (ver [DISENO-ratchet.md](DISENO-ratchet.md)) y el
+  envío se encendió el 10 sep 2026. Ahora bien:
   - **se usa solo con los contactos cuya app también lo anuncia**; con el resto la clave sigue
     siendo estática mientras dure la identidad, y para ellos sigue siendo cierto que **quien
-    obtenga tu identidad puede descifrar todo lo que tengas guardado**;
-  - **no se ha verificado todavía entre dos móviles reales** (`PRUEBAS-PENDIENTES` §16), así que
-    este documento no lo cuenta aún como una garantía, solo como un mecanismo desplegado;
+    obtenga tu identidad puede descifrar lo que haya capturado de la red** (lo guardado en el
+    móvil lo protege el cifrado de la base, §7 y §9.2);
+  - **entre dos móviles reales solo se ha verificado la conversación normal** (10 sep 2026). Los
+    escenarios que de verdad podían romperlo —reentrega del buzón, un archivo grande cruzando un
+    cambio de época, pérdida de estado con importación de `.krbk`, y una llamada— siguen
+    pendientes (`PRUEBAS-PENDIENTES` §16), así que este documento no lo cuenta aún como una
+    garantía, solo como un mecanismo desplegado;
   - **no es retroactivo**: los mensajes anteriores no ganan PFS, y el historial guardado se
     protege con el cifrado de la base (§7), no con el ratchet.
 - **No hay negación (deniability) ni protección de metadatos por diseño.** Ver §5 y §6.
@@ -135,8 +142,12 @@ registros viven en memoria del nodo), pero está ahí. **El depósito ciego no a
 
 ### 5.1 Tu IP queda expuesta (verificado el 10 sep 2026)
 
-**Cualquiera que conozca tu PeerID puede sacar tu IP pública en segundos**, sin ser contacto
-tuyo y sin que tú hagas nada. El PeerID no es un secreto: se comparte por WhatsApp o por QR.
+> **Estado:** la vía que entregaba la IP a un desconocido (la 2, abajo) **está cerrada desde el
+> mismo 10 sep 2026** con un `ConnectionGater`. Sigue abierta la 1, pedirle tus direcciones al
+> nodo, que hoy solo da direcciones de relay. Lo que sigue es cómo se encontró y cómo se cerró.
+
+**Cualquiera que conozca tu PeerID podía sacar tu IP pública en segundos**, sin ser contacto
+tuyo y sin que tú hicieras nada. El PeerID no es un secreto: se comparte por WhatsApp o por QR.
 
 Reproducido contra el móvil del autor con dos sondas
 (`native-bridge/libp2p/ip_leak_probe_test.go`), desde una identidad efímera cuya única ventaja
@@ -159,8 +170,8 @@ Contribuye a que sea tan fácil que el móvil **anuncie todas sus direcciones**:
 dos sentidos, y al apagarlo se suelta el `MulticastLock`).
 
 Aparte de esto, tus **contactos** ven tu IP por diseño en cuanto hay conexión directa, y el
-operador del nodo la ve siempre (como el servidor de Signal). La diferencia con Signal es que
-allí un desconocido con tu número no puede sacarte la IP, y aquí uno con tu PeerID sí.
+operador del nodo la ve siempre (como el servidor de Signal). La diferencia con Signal era que
+allí un desconocido con tu número no puede sacarte la IP, y aquí uno con tu PeerID sí podía.
 
 **Estado (10 sep 2026, el mismo día): el vector 2 está cerrado.** El puente instala un
 `ConnectionGater` (`native-bridge/libp2p/gater.go`): las **salidas** nunca se filtran —hay que
@@ -228,9 +239,13 @@ destinatario lo retira o hasta 7 días. Con eso se reconstruye el grafo social y
 horarios de quienes usan la entrega diferida. El contenido, no.
 
 Que el nodo fije `from` es deliberado y bueno para la seguridad (nadie puede suplantar a un
-remitente), pero tiene este coste en privacidad. Un diseño que lo evitara —depósitos ciegos
-bajo una etiqueta derivada del secreto compartido, estilo rendezvous— es posible y no está
-hecho; sería el siguiente paso natural de esta sección.
+remitente), pero tiene este coste en privacidad. El diseño que lo evita —depósitos ciegos bajo
+una etiqueta derivada del secreto compartido, estilo rendezvous— está implementado y **encendido
+desde el 12 sep 2026, por contacto**: se deposita bajo etiqueta a quien haya anunciado protocolo
+≥ 2 (su cliente ya retira por etiquetas), y por PeerID al resto. Para un contacto sin actualizar,
+**la tabla de arriba sigue siendo lo que hay en el disco del nodo**; para una pareja actualizada
+el nodo guarda una etiqueta opaca y el sobre, sin `from` ni `to`. Ver
+[DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) y §10.
 
 ### 6.2 Wake
 
@@ -357,12 +372,14 @@ El nodo es infraestructura pública: cualquiera de internet puede hablarle. Lo q
 | Depósito en buzón, **por remitente** | Un remitente puede llenar el buzón solo si es el único que ha depositado; en cuanto hay otro, ninguno pasa de la mitad, y si el buzón se llena se desaloja lo más antiguo de quien se pasó de su reparto (`mailbox.store`) |
 | Retirada del buzón | Solo entrega los sobres cuyo `to` es el PeerID autenticado del stream |
 | Depósito en buzón, **por ritmo** | Cubo de fichas por remitente: ráfaga de 256 depósitos y una ficha por segundo. La ráfaga cubre de sobra un archivo troceado (~110 trozos); el régimen sostenido corta la avalancha |
+| Retirada del buzón, **por ritmo** (12 sep 2026) | Cubo por PeerID del stream, aparte del de depósitos: ráfaga de 60 y una ficha cada 5 s (v1 y v2 comparten cubo; un cliente abre las dos en cada retirada). Más un cubo **global** de 2000 con 200/s, porque las identidades libp2p son gratis y un cubo por peer no frena a quien las rota. Pasado el límite se contesta una retirada **vacía siguiendo el protocolo** (fin de lista + lectura del ack): el correo se queda en el nodo y sale en la siguiente, sin tocar disco |
 | Wake | Una suscripción por peer; máximo 2000 simultáneas |
 | Relay | 8 GiB y 6 h por conexión relayada; 4096 reservas, 256 por IP, 2048 por ASN |
 | Lecturas de línea (buzón/wake en el móvil) | Búfer fijo (128 KiB / 4 KiB): un nodo que no cierre línea no puede hacer crecer la memoria |
 
-**Vigilancia**: [`infra/node/check-nodes.sh`](../infra/node/check-nodes.sh) comprueba los tres
-nodos —buzón, wake, relay con límites finitos e ida y vuelta real— y sale con error si alguno
+**Vigilancia**: [`infra/node/check-nodes.sh`](../infra/node/check-nodes.sh) comprueba los
+nodos de `DEFAULT_BOOTSTRAP` (lee la constante, así que sigue a la lista: hoy, los dos VPS)
+—buzón, wake, relay con límites finitos e ida y vuelta real— y sale con error si alguno
 falla, pensado para cron/launchd. Existe porque hasta ahora nadie se enteraba de nada: el 8 sep
 2026 el nodo primario pasó dos días con un binario viejo y se descubrió mirando a mano.
 
@@ -372,11 +389,18 @@ y el cupo de 256 reservas de relay por IP se reparte entre todos ellos. Quien qu
 límites por IP puede entrar por el 443. Lo que no cambia son los límites que no dependen de la IP:
 el ritmo y el reparto del buzón van por remitente autenticado, y el relay sigue con sus topes por
 conexión y totales. Para que los usuarios legítimos no acaben ahí, el puente marca la vía
-WebSocket 1 s por detrás de la directa (`dial_ranker.go`).
+WebSocket 1 s por detrás de la directa (`dial_ranker.go`) y, desde el 12 sep 2026, **cierra la
+WebSocket si con ese nodo ya hay una conexión directa** (`conn_prune.go`): se vio en el móvil del
+autor que en un arranque en frío podían quedar las dos abiertas a la vez, y con la de Caddy el nodo
+lo veía llegar desde `127.0.0.1`. El diagnóstico de la app muestra ahora las conexiones por nodo
+(`1 conn: tcp`) y cuántas WebSocket sobrantes ha cerrado.
 
-**Lo que sigue abierto**: no hay lista de control de acceso, ni límite de ritmo en la
-*retirada* del buzón (solo en el depósito), ni alertas automáticas —el chequeo hay que
-programarlo—. Un atacante decidido puede seguir generando carga; lo que ya no puede es **dejar
+**Lo que sigue abierto**: no hay lista de control de acceso. El límite de ritmo de la *retirada*
+existe desde el 12 sep 2026 (tabla de arriba); su coste es que, durante una ráfaga de avisos de
+wake (un archivo troceado), algunas retiradas vuelven vacías y lo depositado llega unos segundos
+más tarde, sin perderse. El chequeo corre cada 15 min desde la Mac de
+desarrollo con aviso al cambiar el estado (12 sep 2026). Solo vigila mientras la Mac está
+despierta; se decidió dejarla sin suspensión en vez de montar un canal de alerta externo. Un atacante decidido puede seguir generando carga; lo que ya no puede es **dejar
 a un usuario sin entrega**, usar el relay como proxy ilimitado ni machacar el nodo a
 escrituras.
 
@@ -401,10 +425,12 @@ escrituras.
    diferida y el relay se detienen (la entrega directa entre dos móviles alcanzables, no).
 6. **El análisis de tráfico a gran escala**: no hay tráfico de relleno, ni batching, ni mezcla.
    Quien observe la red y el nodo a la vez puede correlacionar por tiempos.
-7. **Tu dirección IP, ni siquiera frente a desconocidos** (§5.1, verificado el 10 sep 2026):
-   quien tenga tu PeerID se la saca en segundos, porque el nodo entrega tus direcciones por
-   `FindPeer` y tu móvil, ante una conexión entrante por el relay, inicia el hole punching y
-   manda sus direcciones públicas antes de que la app pueda descartar a un desconocido.
+7. **Tu dirección IP frente a tus contactos y al operador** (§5.1): los contactos la ven por
+   diseño en cuanto hay conexión directa, y el operador del nodo siempre. Frente a
+   **desconocidos**, la vía que la entregaba en segundos (marcar al móvil por el relay y dejar
+   que libp2p iniciara el hole punching) está **cerrada desde el 10 sep 2026** con el
+   `ConnectionGater`. Lo que sigue abierto es que el nodo reparta tus direcciones por
+   `FindPeer`: hoy solo son de relay, pero una pública confirmada se repartiría igual.
 8. **Quiénes son tus contactos, frente al operador del nodo** (§5): los dos lados de cada
    pareja anuncian la misma clave de rendezvous, así que los nodos tienen el grafo de parejas
    activas de cada día. Es el hueco que el depósito ciego **no** cierra.
@@ -432,13 +458,13 @@ escrituras.
 
 ## 10. Cambios que este documento pide (pendientes)
 
-- **Depósito ciego en el buzón** (etiqueta derivada del secreto compartido en lugar de PeerID
-  en claro), para que el grafo social deje de quedar escrito en el disco del nodo. Diseño
-  implementado —mecanismo completo y verificado contra el nodo real— pero con el **envío aún
-  apagado** a la espera de que la versión que sabe recibir esté repartida; ver
-  [DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) — con una
-  advertencia importante: **el relay filtra ese mismo grafo** y eso no lo arregla, así que lo
-  que se gana es que no quede en disco, no que el operador no pueda saberlo en vivo.
+- ~~**Depósito ciego en el buzón**~~ (etiqueta derivada del secreto compartido en lugar de
+  PeerID en claro), para que el grafo social deje de quedar escrito en el disco del nodo.
+  **Encendido el 12 sep 2026, por contacto** (a quien anuncie protocolo ≥ 2; ver
+  [DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) §6). Con una advertencia que sigue en pie:
+  **el relay filtra ese mismo grafo** y eso no lo arregla, así que lo que se gana es que no
+  quede en disco, no que el operador no pueda saberlo en vivo. Y falta la prueba con dos
+  móviles (PRUEBAS-PENDIENTES §16.10).
 - **Híbrido post-cuántico** (ML-KEM-768 mezclado en la raíz del ratchet), que es lo que cierra el
   punto 10 del §9. **Diseñado y medido el 11 sep 2026, y deliberadamente no implementado**:
   [DISENO-postcuantico.md](DISENO-postcuantico.md). El orden es intencionado — el plan pide una
@@ -454,24 +480,26 @@ escrituras.
   [DISENO-ratchet.md](DISENO-ratchet.md)— y con el **envío encendido el 10 sep 2026**
   (`RATCHET_SEND = true`), aunque **por pareja**: se usa solo con los contactos que también
   tengan una versión que lo anuncie, así que mientras el resto no actualice, §4 sigue siendo
-  cierto para ellos. Y sigue **sin haberse probado con dos móviles reales** (esa prueba se
-  debe: `PRUEBAS-PENDIENTES` §16), así que este documento no lo cuenta todavía como una
-  garantía. Lo que sí cambió para todos es la clave de las llamadas, que se negocia por
-  llamada.
+  cierto para ellos. Con dos móviles reales **solo se ha probado la conversación normal** (10 sep
+  2026); los escenarios límite se deben (`PRUEBAS-PENDIENTES` §16), así que este documento no lo
+  cuenta todavía como una garantía. La clave de las llamadas también se negocia por llamada con
+  esos mismos contactos; con el resto sigue el camino antiguo (§4).
 - ~~**Cifrar los adjuntos** de `krypta_files/`.~~ **Hecho el 9 sep 2026**: lo que escribe el
   almacén va cifrado (AES-256-GCM, clave envuelta en el Keystore). Dos límites que hay que
   decir: **abrir un adjunto con otra app le entrega una copia en claro** (queda en la caché
   hasta el siguiente arranque), y **los adjuntos que ya estaban en el móvil no se convierten**
   — se siguen leyendo, pero siguen en claro; vaciar el chat los borra.
-- **Alertas** de verdad para el chequeo de nodos (hoy es un script que hay que programar), y
-  límite de ritmo también en la retirada del buzón.
+- **Alertas** de verdad para el chequeo de nodos (desde el 12 sep 2026 corre solo cada 15 min en
+  la Mac de desarrollo, que se deja sin suspensión, y avisa al cambiar el estado). ~~Límite
+  de ritmo también en la retirada del buzón.~~ Hecho y desplegado en los dos VPS el 12 sep 2026.
 - **Confianza operativa** (hoja de ruta, 10 sep 2026). Hoy el nivel es «aficionado sin
   transparencia»: un solo operador, sin nada publicado sobre cómo opera. No se sale de ahí
   imitando el tamaño de Signal, sino haciendo que haga falta confiar menos en el operador y
   que lo que quede se pueda comprobar. Por orden de impacto:
-  1. **Reducir lo que el nodo sabe**: encender el depósito ciego (`BLIND_DEPOSIT`) en cuanto
-     esté repartida la versión que sabe recibir — con el primario en un proveedor ajeno, un
-     volcado de ese disco es hoy el grafo social con horas —; medir y subir la tasa de
+  1. **Reducir lo que el nodo sabe**: el depósito ciego está **encendido por contacto desde el
+     12 sep 2026** — con el primario en un proveedor ajeno, un volcado de ese disco era el grafo
+     social con horas; ahora lo es solo para las parejas donde uno de los dos no ha
+     actualizado —; medir y subir la tasa de
      conexión directa (la prueba de NAT con dos SIM, nunca hecha), porque cada conexión
      directa es una conversación que el relay no ve. El **relleno por tramos** de este punto
      está **hecho el 11 sep 2026** (§4): lo que se ganó es que el tráfico de control deje de
@@ -486,7 +514,8 @@ escrituras.
      concentración de operador: sigue siendo una persona. Logs sin identificadores (§6.5) y
      `node.key` respaldado fuera de cada máquina, hechos; quedan las alertas reales.
   3. **Transparencia del cliente**, que es la confianza más grande de todas — quien firma la
-     APK puede leerlo todo, con E2EE o sin él —: código público del cliente y del nodo, builds
+     APK puede leerlo todo, con E2EE o sin él —: código público del cliente y del nodo (**hecho
+     el 12 sep 2026**: el repositorio de GitHub es público, con licencia MIT o Apache-2.0 a elección), builds
      reproducibles (APK, AAR y binario del nodo) con distribución por F-Droid a medio plazo, y
      custodia seria de la clave de firma.
   4. **Una página de operador**: quién opera cada nodo, en qué proveedor y país, qué se

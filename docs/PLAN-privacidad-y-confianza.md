@@ -45,7 +45,7 @@ Dos cosas que conviene tener claras al leer el plan, porque son las que más pes
 | §13 entrega en 2.º plano | ✅ una muestra el 10 sep; falta la medición de no regresión |
 | Failover São Paulo → Dallas | 🟡 media prueba, ocurrió sola; falta que el destinatario retire del segundo nodo |
 | Tests de propiedades del ratchet (pérdidas, desorden, duplicados, envíos simultáneos, pérdida de estado) | ✅ 10 sep 2026 (`RatchetPropertyTest`) — y encontró algo en su primera corrida: ver abajo |
-| `check-nodes.sh` programado con aviso | ⬜ |
+| `check-nodes.sh` programado con aviso | ✅ 12 sep 2026: cargado en launchd en la Mac (cada 15 min, aviso al cambiar el estado, 1,2 s de CPU por pasada en vez de 84). Decidido dejar la Mac sin suspensión en vez de un canal de alerta externo; detectó sola la caída de Dallas durante su redespliegue |
 
 Los tests de propiedades ya están (`RatchetPropertyTest`): sortean secuencias de envíos,
 entregas desordenadas, pérdidas, duplicados y pérdidas de estado con semillas fijas, y fijan que
@@ -80,8 +80,13 @@ tiene un directorio central que proteger.
    identidad libp2p **desechable**, de modo que el registro no lleve el PeerID real y la
    identidad de verdad se autentique después, al conectar. Límite honesto: la IP sigue en el
    registro, así que hay que combinarlo con el punto 4.
-2. **Encender el depósito ciego** (`BLIND_DEPOSIT`), que ya está construido y probado contra
-   los tres nodos. Condición: que la versión que sabe recibir esté repartida.
+2. ~~**Encender el depósito ciego** (`BLIND_DEPOSIT`), que ya está construido y probado contra
+   los tres nodos. Condición: que la versión que sabe recibir esté repartida.~~ **Hecho el 12
+   sep 2026, por contacto**: la condición se cumple contacto a contacto (quien anuncia
+   protocolo ≥ 2 ya retira por etiquetas, porque esa capacidad entró en el cliente antes que
+   el anuncio), así que `outboxLabel` decide con `peerProtocol >= BLIND_MIN_PROTOCOL` y no hacía
+   falta otra publicación. Verificado contra los dos VPS; pendiente con dos móviles
+   (PRUEBAS-PENDIENTES §16.10).
 3. ~~**Relleno por tramos** dentro del cifrado, para que el tamaño no delate si es texto, foto o
    nota de voz.~~ **Hecho el 11 sep 2026** (`Padding`, §1.10 de
    [DISENO-ratchet.md](DISENO-ratchet.md)): 160 B hasta 4 KiB —el grano de Signal, y por lo
@@ -158,11 +163,23 @@ también le pasa a Signal.
 Es el eje que sostiene «puedes confiar en la implementación, no solo en el diseño», y hoy Krypta
 no tiene nada de esto.
 
-1. **Decidir si se abre el código.** Es requisito para la auditoría del OTF, para que los builds
-   reproducibles signifiquen algo y para que la comparación con Signal deje de ser desigual por
-   fuerza. Hay que valorar el efecto sobre Nyx, que comparte transporte y criptografía.
-2. **`SECURITY.md` y `security.txt`** con un contacto. Nota: Signal **tampoco** tiene programa
-   de recompensas, solo un correo de seguridad; lo que falta aquí es la vía, no el dinero.
+1. ~~**Decidir si se abre el código.**~~ **Abierto el 12 sep 2026**: el repositorio de GitHub
+   (`dasilvabalautaro/Krypta`) es público. Era requisito para la auditoría del OTF, para que los
+   builds reproducibles signifiquen algo y para que la comparación con Signal deje de ser
+   desigual por fuerza. La **licencia** quedó puesta el mismo día: doble, **MIT o Apache-2.0** a
+   elección (`LICENSE-MIT`, `LICENSE-APACHE`), con un `README.md` en la raíz. Lo que sigue
+   pendiente aquí: valorar el efecto sobre Nyx, que comparte transporte y
+   criptografía, y que el historial público no filtre nada (revisado el mismo día, ver
+   REVISION-comparacion-signal §4.8).
+2. ~~**`SECURITY.md` y `security.txt`** con un contacto.~~ **Hecho el 12 sep 2026.**
+   [SECURITY.md](../SECURITY.md) (es/en): contacto `info@4000msnm.com`, acuse en 7 días,
+   divulgación coordinada a 90 días, sin recompensas, qué entra, qué es límite conocido (§9 del
+   modelo de seguridad) y la regla de no hacer pruebas de carga contra los nodos públicos.
+   `security.txt` (RFC 9116) servido en `https://krypta-sp.neto.chat/.well-known/security.txt` y
+   en el de Dallas, desde `infra/node/security.txt` vía `deploy-caddy.sh`; **caduca el 1 sep
+   2027** y hay que renovarlo. Con el repo público desde el mismo día, `SECURITY.md` también se
+   ve en GitHub. Nota: Signal **tampoco** tiene programa de
+   recompensas, solo un correo de seguridad; lo que faltaba aquí era la vía, no el dinero.
 3. **Builds reproducibles** de APK, AAR y binario del nodo.
 4. **Página de operador** e informe de transparencia, aunque diga «0 peticiones».
 5. **Un segundo operador ajeno** en la lista de nodos por defecto.
@@ -176,7 +193,11 @@ identidad.
 
 1. **Rotación voluntaria** firmada con la identidad anterior: los contactos migran con aviso y
    el número de seguridad cambia. Sirve para una migración planificada, no contra un ladrón
-   (que también podría rotar). Hay que decirlo así.
+   (que también podría rotar). Hay que decirlo así. **Diseñada el 12 sep 2026, sin código**:
+   [DISENO-rotacion-identidad.md](DISENO-rotacion-identidad.md). Aviso `M` dentro del E2EE con
+   doble firma (clave vieja y nueva), gracia de 14 días, detección de bifurcación (dos rotaciones
+   de la misma clave congelan la conversación) y revocación sin sustituto. Las fases que tocan el
+   protocolo esperan a §16 y a la revisión externa.
 2. **Recordatorio periódico** de exportar el `.krbk`, que hoy es la única recuperación.
 
 ---

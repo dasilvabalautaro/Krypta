@@ -84,10 +84,12 @@ object HelpContent {
         HelpItem(
             category = "Privacidad y seguridad",
             question = "¿Puedo recuperar mi cuenta si pierdo o cambio de teléfono?",
-            answer = "Solo si hiciste una copia de seguridad (Ajustes → Copia de seguridad). Sin " +
-                "ella, perder el móvil significa perder tu PeerID, y tus contactos tendrían que " +
-                "volver a añadirte y verificarte. Guarda la copia y su frase-clave en un lugar " +
-                "seguro.",
+            answer = "Solo si hiciste una copia de seguridad (Ajustes → Copia de seguridad), y " +
+                "recuperas tu PeerID y tus contactos, no las conversaciones: la copia no " +
+                "incluye mensajes ni archivos, y no existe ninguna otra copia en ningún sitio. " +
+                "Sin ella, perder el móvil significa perder tu PeerID, y tus contactos tendrían " +
+                "que volver a añadirte y verificarte. Guarda la copia y su frase-clave en un " +
+                "lugar seguro.",
         ),
         HelpItem(
             category = "Mensajes y llamadas",

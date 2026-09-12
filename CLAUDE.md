@@ -198,7 +198,31 @@ relay's 256-reservations-per-IP cap becomes shared). `native-bridge/libp2p/dial_
 1 s after the last direct dial (immediately if a peer has only WebSocket). Go `TestDialRanker*`
 caught a wrong first version (it only delayed wss, leaving tcp 250 ms behind). Verified live on
 the TECNO with the regenerated AAR: after a cold start it holds `tcp/4001` connections to both VPS
-and none through Caddy (checked with `ss` on each box). The wss path still
+and none through Caddy (checked with `ss` on each box). **That was not always true (found 12 Sep
+2026)**: twice (once with the app already running, once on a cold start; another cold start was
+clean) the phone held a `tcp/4001` **and** a `wss/443` connection to the same VPS at once. The ranker only decides the *order*; a single libp2p dial never leaves two (the
+worker cancels the dials still in flight — checked in-process with a slow-TCP proxy, which yields a
+lone `ws` conn instead), so the pair comes from overlapping dial episodes (`StartDHT` returns on
+the first node while the app's cycle already `Connect`s to the other for relay/mailbox/wake). The
+exact trigger was not pinned down; the fix does not depend on it: `native-bridge/libp2p/conn_prune.go`
+installs a `Notifiee` that **closes any WebSocket conn to a peer that also has a direct one**
+(relayed `/p2p-circuit` conns excluded on both sides of the rule) — **unless it is busy**: a conn to
+a node carries the relay circuits to contacts (`/libp2p/circuit/relay/` hop/stop streams) and,
+inside them, calls; closing it would cut a call in progress, so a conn with relay/call/video
+streams is re-checked every 30 s (max 20 times) and closed once free. `StartDHT` now groups bootstrap
+lines by PeerID (it built one `AddrInfo` per line, so the wss-only request reached the ranker with
+no direct addr to wait behind), and the relay diagnostics line shows the conns per node
+(`1 conn: tcp` / `2 conns: tcp+ws`) plus `wss redundantes cerradas: N` when the pruner acted. Go
+`TestWebsocketRedundanteSeCierra` (two hosts with the **same identity** entering via ws and tcp —
+the deterministic way to give one swarm two conns from one peer), `TestPodaEsperaAQueLaWebsocketQuedeLibre`
+(a ws conn carrying a `/krypta/call/` stream survives until the call hangs up),
+`TestPodaNoTocaLoQueNoSobra`, `TestStartDHTUnaConexionPorNodoConDosVias`; Kotlin `RelayStateTest`
+pins that the diagnostics line keeps the per-node conn summary but not the reservation expiry
+(it is logged only on change). Verified on the TECNO with the regenerated AAR: 6 cold starts, all
+with only `tcp/4001` to both VPS (sampled with `ss` every 0.2–0.5 s), and the diagnostics reading
+`relay: OK (alcanzable por circuit; 1 conn: tcp | 1 conn: tcp)`. Honest limit: the pruner never had
+to act in those runs (no `wss redundantes cerradas` line), so on-device this confirms the end
+state, not the pruner itself — that is covered by the Go tests. The wss path still
 weakens per-IP limits for anyone who deliberately uses it — accepted for a fallback, noted in
 `security-model.md` §8. Located by RTT, not geo-IP (1.3 ms to Vultr's Dallas ping host vs 38.7 ms to NJ) —
 which also showed Nyx's "Secaucus" node is in fact in Dallas, the same datacenter. Details in
@@ -1543,7 +1567,118 @@ post-quantum, transparency (open source, reproducible builds, operator page), id
 and the product gaps — is ordered in
 [docs/PLAN-privacidad-y-confianza.md](docs/PLAN-privacidad-y-confianza.md) (10 Sep 2026). It came
 out of verifying an external Signal comparison against the code; the comparison itself is
-deliberately not versioned here (circumstantial, others will follow) — the plan is.
+deliberately not versioned here (circumstantial, others will follow) — the plan is. A **second
+comparison was reviewed on 12 Sep 2026** the same way, with conclusions (errors on both sides, what
+it misses, proposed plan changes) in
+[docs/REVISION-comparacion-signal-2026-09-12.md](docs/REVISION-comparacion-signal-2026-09-12.md).
+Two things came out of it the same day. **(a) Blind deposit is ON, per contact**: it had been
+waiting for "the receive-capable version to be out there" as a global flag, but the git history
+shows blind *receive* (9 Sep, `63222d1`) landed **before** the `V` capability announce (10 Sep,
+`afb576a`), so any contact announcing protocol ≥ 2 already fetches by label — `outboxLabel` now
+gates on `peerProtocol >= BLIND_MIN_PROTOCOL` (= 2), same shape as the ratchet/padding gates, and
+`BLIND_DEPOSIT` stays as the global rollback switch. Both VPS were probed first
+(`TestBlindMailboxAgainstLiveNode`). The two-phone check is PRUEBAS-PENDIENTES §16.10. **(b) A
+finding about epoch 0**: a test meant to pin "after the capability exchange the first user message
+already has PFS" showed it does **not** — each side creates its session with its local clock as
+lineage, the receiver creates it later (higher lineage), opens the peer's hello via `openOld`
+without adopting the lower lineage, and its first message goes out in epoch 0; only the peer's
+first reply moves both. The obvious fix (a session that has encrypted nothing adopts the lower
+lineage) was **killed by `RatchetPropertyTest` on its first run** (seed 102): after a reinstall the
+session is also "virgin", and adopting an old lineage reuses `(lineage, epoch, N)` triples this
+identity already spent — lineages must be monotonic per identity, so it was reverted. Today the
+first message's PFS **depends on the clocks** (receiver's clock behind → adopts → epoch 1); the
+real fix (receiver answers with a control envelope) is written down in `DISENO-ratchet.md` §1.8.4
+and deliberately not built before the external review. Pinned by two `ChatService` tests (one per
+clock case, deterministic by seeding A's lineage) and one `RatchetTest`. **(c) `ParserFuzzTest`**:
+seeded mutation fuzzing (no new deps, runs in every `testDebugUnitTest`) of everything that parses
+outside bytes — `MessageEnvelope.decode`, `Ratchet.decrypt`/`Header.decode`, `Padding.strip`,
+`RatchetState.decode`, `IdentityBackup.decode` — each against its **contract** (which exception
+types are allowed, mutated envelopes never open, state untouched). It found a real one in
+`RatchetState.decode`, and not the expected one: the per-blob bounds check `pos + n <= bytes.size`
+**overflows** with `n = 2³¹−1` (the sum goes negative and passes; `Arrays.copyOfRange` then computes
+`to − from` = `n` → `new byte[2³¹−1]` → `OutOfMemoryError`). Fixed as `n <= bytes.size − pos`, and
+the list counts were bounded by remaining bytes in the same pass (`List(n)` reserves `n` slots
+before reading anything). Low severity — the blob lives inside SQLCipher and `stateFor` recovers —
+but an eyeball review had passed that line. Go readers were already bounded before allocating.
+
+**Security contact (12 Sep 2026):** [SECURITY.md](SECURITY.md) (Spanish + English) —
+`info@4000msnm.com`, the same address as the privacy policy; ack within 7 days, coordinated
+disclosure at 90 days, no bounty, no load testing against the public nodes. The public copy is
+`security.txt` (RFC 9116), source `infra/node/security.txt`, served at
+`https://krypta-{sp,dal}.neto.chat/.well-known/security.txt` by Caddy (`deploy-caddy.sh` now copies it
+and routes only that path to `file_server`; everything else still reverse-proxies to the node's ws).
+Deployed to both VPS the same day and verified: HTTP 200 `text/plain`, libp2p over `wss/443` and
+`tcp/4001` still green (`check-nodes.sh`), and the curl's source IP absent from Caddy's journal and
+syslog. **`Expires: 2027-09-01`** — renew the field and re-run `deploy-caddy.sh` on both VPS before
+then. **The GitHub repo (`dasilvabalautaro/Krypta`) is public since 12 Sep 2026**, so `SECURITY.md`
+is public too — and so is the whole git history, which was scanned for secrets and personal data
+the same day (see `docs/REVISION-comparacion-signal-2026-09-12.md` §4.8).
+
+**Node monitoring is actually running (12 Sep 2026).** `infra/node/chat.neto.krypta.check.plist`
+had existed since 8 Sep but was **never loaded** — there was no monitoring at all. It is now loaded
+on the dev Mac (every 15 min, log `/tmp/krypta-check.log`). Two fixes to `check-nodes.sh` first:
+(a) **cost** — each probe was a `go test` relinking libp2p: measured 70 s wall / 84 s CPU per run,
+~10 % of a core sustained; the probes are now compiled once to `$TMPDIR/krypta-check/probes.test`
+(rebuilt only when a `.go`/`go.mod`/`go.sum` is newer), ~23 s / 1.2 s CPU; (b) **alerts on state
+change only** (starts failing — naming the node —, what fails changes, recovers), state in
+`~/Library/Caches/krypta-check.state` (`KRYPTA_CHECK_STATE` overrides it). Verified with a simulated
+failure (closed local port) and recovery. **Real limit**: the Mac sleeps (`pmset sleep 1`) and
+launchd runs nothing while asleep, so a night-time outage alerts only when the Mac wakes; a real
+alert must come from off the Mac (e.g. each VPS checking the other) over a channel still to be chosen.
+**Decided the same day: keep the Mac from sleeping** instead (check `pmset -g`, `sleep` must be `0`).
+It proved itself immediately — the launchd run at 12:01 UTC caught Dallas down mid-redeploy. And it
+exposed a bug: **only `--notify` (the unattended mode) may touch the state file**. A manual
+single-node verification run seconds later overwrote the recorded outage with "all good" (0-byte
+state at 12:01:49), so the next unattended run would never have announced the recovery; a manual
+run with explicit nodes would also compare against the full-list signature. Fixed by guarding the
+whole state block with `NOTIFY`.
+
+**Mailbox fetch is rate-limited (12 Sep 2026, deployed to both VPS).** `handleGet`/`handleGetV2` had
+no limit, so anyone could make a node list and read files at will (a v2 GET asks for up to 1024
+labels). `infra/node/mailbox.go` now has a token bucket per stream PeerID (burst 60, one token per
+5 s; v1 and v2 share it, since the client opens both per fetch) **plus a global bucket** (burst
+2000, 200/s), because libp2p identities are free and a per-peer bucket alone doesn't stop someone
+rotating them. Over the limit the node answers an **empty fetch that still follows the protocol**
+(`{"done":true}` + reads the ack) — closing without reading the ack would make the client see a
+write error and count the node as down; this way mail simply stays and comes out on the next fetch.
+The deposit limiter was refactored onto the same helpers (`bucketFor`/`topUp`/`pruneMap`) with its
+tests unchanged and green. Tests `TestRetirada*` (5) use **real streams**, so any protocol deviation
+makes the `mbxGet`/`mbxGetV2` helpers abort; one of them first failed for a test-only reason (the
+helper returns right after sending the ack, before the node deletes) and now waits for the delete.
+Cost to know: the client does one fetch per wake notice, not coalesced, so during a chunked-file
+burst some fetches come back empty and chunks arrive a few seconds later — delay, not loss. Built
+with `go1.22.12` (`dist/krypta-node-linux-amd64`, sha256 `9126536c…`), suite green under Go 1.22
+and 1.26, deployed São Paulo then Dallas; both hashes match, `check-nodes.sh` green over `tcp` and
+`wss`, PeerIDs unchanged, no foreign PeerIDs in either journal. **Verification gotcha found
+doing it:** after a node restart the phone reconnects over **QUIC** (`udp/4001/quic-v1`, learned via
+identify even though `DEFAULT_BOOTSTRAP` only lists tcp/wss, and libp2p ranks QUIC first), and QUIC
+uses an unconnected UDP socket, so `adb shell ss -tn` shows **no** connection to the VPS at all while
+the app is perfectly connected. Confirmed with `tcpdump` on the VPS (UDP 4001 to the home IP). Don't
+read "no sockets in `ss`" as "disconnected"; the diagnostics `relay:` line says the real transport.
+
+**License, README and commit identity (12 Sep 2026).** Dual-licensed **MIT OR Apache-2.0** at the
+user's option (`LICENSE-MIT`, "Krypta contributors"; `LICENSE-APACHE` is the canonical text from
+apache.org, sha256 `cfc7749b…`), with a root `README.md` (Spanish + English summary) that states
+the beta status, the unreviewed custom protocol and the metadata limits up front. Commits in this
+repo now use `info@4000msnm.com` (`git config --local user.email`); the old personal address
+remains in the existing history, which was deliberately not rewritten (see
+`docs/REVISION-comparacion-signal-2026-09-12.md` §4.8). For GitHub to link new commits to the
+account, that address has to be added to it.
+
+**Identity rotation: designed, not built (12 Sep 2026).**
+[docs/DISENO-rotacion-identidad.md](docs/DISENO-rotacion-identidad.md), reviewable and code-free like
+the post-quantum one. The shape: an `M` envelope inside E2EE carrying a canonical text
+(`krypta-rotation-v1`, old/new PeerID, `seq`, `ts`) signed by **both** the old key (authorizes) and
+the new one (proves possession, so a key holder can't point contacts at a third party's PeerID); a
+14-day grace period where the old key is kept only to fetch mail under the old **blind labels** (bearer
+credentials, so no second host is needed), open late messages under the old `S` and re-send the
+notice; receivers keep `Contact.id` as the local conversation id and swap `peerId` (network lookups
+already go through `findByPeerId`; only `addContact` assumes `id == PeerID`), drop verification
+(recommended), forget the ratchet session and answer with a control envelope to leave epoch 0.
+**Fork detection** (two valid rotations of the same key → conversation frozen as "disputed") and
+revocation without successor are part of it. Stated plainly: it does not help if the key is lost, and
+against a thief it only helps if both notices reach the contact. Phases 1–3 don't touch the wire;
+4–5 wait for PRUEBAS-PENDIENTES §16 and the external review.
 
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a

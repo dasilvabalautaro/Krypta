@@ -1,10 +1,12 @@
 # Diseño: depósito ciego en el buzón (protocolo v2)
 
-**Estado:** decidido el 9 sep 2026 (rotación **semanal**) e **implementado de la 1 a la 4**.
-El mecanismo entero funciona: el cliente **recibe** a ciegas (retira y se suscribe al wake por
-etiquetas) y el nodo lo sirve. Lo que sigue apagado a propósito es el **envío**
-(`ChatService.BLIND_DEPOSIT = false`): ver la corrección del §6, que es lo que faltaba entender
-de la compatibilidad. Desplegado y verificado en los **tres** nodos (9 sep 2026).
+**Estado:** decidido el 9 sep 2026 (rotación **semanal**), **implementado entero y con el envío
+encendido desde el 12 sep 2026 — por contacto**. El cliente recibe a ciegas (retira y se
+suscribe al wake por etiquetas), el nodo lo sirve, y se deposita bajo etiqueta a quien haya
+anunciado protocolo **≥ 2** (`ChatService.BLIND_MIN_PROTOCOL`); al resto, por PeerID. Ver la
+nota del §6 sobre por qué eso es seguro sin coordinar publicaciones. `BLIND_DEPOSIT` sigue
+existiendo como interruptor global de vuelta atrás. Verificado el 12 sep contra los dos VPS
+(`TestBlindMailboxAgainstLiveNode`: ida y vuelta por etiqueta, sin remitente).
 **Fecha:** 9 de septiembre de 2026.
 **Origen:** [security-model.md](security-model.md) §6 y §10 — «que el nodo deje de ver quién
 escribe a quién» es el trabajo con más impacto en privacidad que queda pendiente.
@@ -189,10 +191,18 @@ criptográfico grande pendiente.
 >
 > De ahí el orden real de despliegue, que es el clásico de cualquier cambio de protocolo:
 > **primero todos saben recibir, después se enciende el envío.** Por eso el depósito ciego
-> queda tras un interruptor (`ChatService.BLIND_DEPOSIT`, hoy `false`): esta versión ya retira
-> y se suscribe por etiquetas, y cuando esté repartida entre los contactos basta con cambiar
-> esa constante en una publicación posterior. Mientras tanto no se pierde nada y tampoco se
-> gana privacidad: los depósitos siguen yendo por v1.
+> quedó tras un interruptor (`ChatService.BLIND_DEPOSIT`) a la espera de que la versión que
+> sabe recibir estuviera repartida.
+>
+> **Corrección (12 sep 2026): no hacía falta esperar a una publicación, y ya está encendido.**
+> La condición «el destinatario sabe retirar por etiquetas» se puede saber **por contacto**: la
+> retirada por etiquetas entró en el cliente el 9 sep (`63222d1`), **antes** que el anuncio de
+> capacidad `V` del 10 sep (`afb576a`), así que no existe ningún cliente que anuncie protocolo
+> 2 y no sepa recibir a ciegas. `outboxLabel` devuelve la etiqueta si
+> `contact.peerProtocol >= BLIND_MIN_PROTOCOL` (= 2) y cadena vacía si no — el mismo patrón que
+> el ratchet y el relleno, y la misma regla: cada capacidad tiene su propio mínimo. La
+> exposición que queda es la ya aceptada con el ratchet: un contacto que anunció 2 y después
+> vuelve a un build anterior perdería lo que se le deposite a ciegas (caduca a los 7 días).
 >
 > Un efecto secundario que casi se cuela: al suscribirse el cliente al wake **solo** por
 > etiquetas, los depósitos v1 —que hoy son todos— dejaban de despertarlo, degradando la
@@ -249,7 +259,7 @@ Es lo más delicado, porque hay móviles instalados y tres nodos que no se actua
 | 2 | ✅ v2 en el nodo (put/get/wake + almacenamiento + topes) conviviendo con v1 (5 tests) | `infra/node` | hecho |
 | 3 | ✅ v2 en el puente Go, con caída a v1 por nodo (4 tests) | `native-bridge/libp2p` | hecho |
 | 4 | ✅ Recepción por etiqueta en el cliente y retirada doble durante la transición (4 tests) | `:p2p-signaling` | hecho |
-| 5 | 🟡 Nodos: los tres desplegados y verificados. Falta repartir la app y encender `BLIND_DEPOSIT` | infra + app | en curso |
+| 5 | ✅ Nodos desplegados y verificados; **envío encendido por contacto el 12 sep 2026** (`BLIND_MIN_PROTOCOL`, ver §6). Pendiente la prueba con dos móviles (PRUEBAS-PENDIENTES §16.10) | infra + app | hecho |
 
 La fase 2 y la 3 son las que llevan el trabajo. Nada de esto es reversible a medias: una vez
 que hay clientes hablando v2, el nodo tiene que seguir soportándolo, así que conviene cerrar §7

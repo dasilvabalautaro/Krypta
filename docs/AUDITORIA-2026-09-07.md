@@ -581,7 +581,8 @@ es una funcionalidad, no un arreglo.
 
 - **La migración de la identidad al Keystore funcionó sin perder nada.** Antes de instalar,
   `shared_prefs/krypta_identity.xml` tenía `ed25519` en claro y su PeerID derivado era
-  `12D3KooWE7JcNYJyczGeu9qPtLF6M8xybecsbha2zkFWdPKiruXg`. Después: la clave `ed25519` **ya no
+  `12D3KooWE7Jc…KiruXg` (truncado el 12 sep 2026, al hacerse público el repositorio: es la
+  identidad del móvil del autor). Después: la clave `ed25519` **ya no
   existe** y en su lugar hay `ed25519_wrapped`, y Ajustes muestra **el mismo PeerID**. Los dos
   contactos reales siguen ahí, **verificados**, y sus vistas previas **descifran** — que es la
   prueba de fondo, porque si la identidad hubiera cambiado el secreto ECDH de cada contacto

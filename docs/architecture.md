@@ -560,7 +560,24 @@ desacoplados y testeables.
   (`dial_ranker.go`): ordena por separado directas y WebSocket y pone estas 1 s por detrás de la
   última directa; si un peer solo tiene WebSocket, se marcan al instante. Go
   `TestDialRanker*`, incluido uno que fija el comportamiento del ranker estándar para avisar si
-  un día deja de hacer falta.
+  un día deja de hacer falta. **El ranker decide el orden, no garantiza una sola conexión**
+  (12 sep 2026): el TECNO tuvo dos veces (con la app en marcha y en un arranque en frío; en otro
+  arranque, no) una conexión por `tcp/4001` y otra por `wss/443` con el mismo VPS a la vez. Un solo dial de libp2p nunca deja dos (el worker
+  cancela los que quedan en vuelo; comprobado en proceso con un proxy TCP lento), así que
+  vienen de episodios solapados — `StartDHT` vuelve con el primer nodo y el ciclo ya hace
+  `Connect` al otro para relay/buzón/wake. `conn_prune.go` instala un `Notifiee` que **cierra
+  toda WebSocket con un peer que ya tiene conexión directa** (las de relay quedan fuera de la
+  regla) **salvo que esté ocupada**: por la conexión con un nodo viajan los circuitos de relay
+  hacia los contactos y, dentro, las llamadas, así que una WebSocket con streams de relay
+  (`/libp2p/circuit/relay/`), llamada o vídeo se vuelve a mirar cada 30 s (hasta 20 veces) y se
+  cierra cuando queda libre. `StartDHT` agrupa las líneas del bootstrap por PeerID (construía un `AddrInfo` por
+  línea, y la petición solo-wss llegaba al ranker sin directa que la retrasara) y la línea
+  `relay:` del diagnóstico muestra las conexiones por nodo (`1 conn: tcp`) y cuántas WebSocket
+  sobrantes se han cerrado. Tests: `TestWebsocketRedundanteSeCierra` (dos hosts con la misma
+  identidad entrando por ws y por tcp: la forma determinista de darle a un swarm dos conexiones
+  del mismo peer), `TestPodaEsperaAQueLaWebsocketQuedeLibre` (una llamada en curso por la ws la
+  mantiene abierta hasta colgar), `TestPodaNoTocaLoQueNoSobra`,
+  `TestStartDHTUnaConexionPorNodoConDosVias`.
   **Filtro de conexiones entrantes (10 sep 2026)**: el host instala un `ConnectionGater`
   (`gater.go`). Las salidas no se filtran; las **entradas** solo pasan si el PeerID está en la
   lista que fija la app (`SetAllowedPeers`, contactos no bloqueados + nodos), que se refresca en
@@ -843,9 +860,11 @@ dentro del WebSocket → Cloudflare no lee (E2EE) ni suplanta.
    la medianoche UTC. Iba en el mismo cambio que la corrección del anuncio de rendezvous, que
    hasta entonces republicaba las claves viejas para siempre y tapaba el agujero.
 7. **Fase 1 (infra)**: desplegar ~5 nodos fijos (hoy hay 3: VPS de São Paulo + Mac + Windows).
-8. **Depósito ciego en el buzón**: que el nodo deje de ver el PeerID de emisor y destinatario en
-   claro (etiqueta derivada del secreto compartido, como el rendezvous). Es el trabajo con más
-   impacto en privacidad que queda pendiente — ver [security-model.md](security-model.md) §6.
+8. ~~**Depósito ciego en el buzón**~~: que el nodo deje de ver el PeerID de emisor y destinatario
+   en claro (etiqueta derivada del secreto compartido, como el rendezvous). **Hecho y encendido
+   por contacto el 12 sep 2026** (`ChatService.BLIND_MIN_PROTOCOL = 2`: se deposita bajo
+   etiqueta a quien anuncie protocolo ≥ 2, por PeerID al resto) — ver
+   [DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) §6. Falta la prueba con dos móviles.
 9. **Redespliegue de los nodos**: los cambios de `infra/node` (reparto justo, límites del relay,
    tope de wake, lectura acotada del 6 sep) **no están en producción hasta redesplegar**
    (`deploy-vps.sh`, `deploy-catalina.sh`, copia del `.exe` en el PC).

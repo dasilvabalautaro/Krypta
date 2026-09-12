@@ -324,8 +324,8 @@ por un stream libp2p.
 > ✅ **(9-10 sep 2026) Cerrado el hueco criptográfico que quedaba.** Tres trabajos seguidos, con
 > su propio documento cada uno:
 > - **Depósito ciego en el buzón** ([DISENO-buzon-ciego.md](DISENO-buzon-ciego.md)): el cliente
->   ya recibe por etiqueta y los tres nodos lo sirven; el **envío** sigue tras interruptor
->   (`BLIND_DEPOSIT`) esperando a que la versión que sabe recibir esté repartida.
+>   recibe por etiqueta, los nodos lo sirven y el **envío está encendido por contacto** desde
+>   el 12 sep 2026 (a quien anuncie protocolo ≥ 2).
 > - **Cifrado en reposo**: base entera con SQLCipher y adjuntos con `FileVault` — con esto se
 >   cierra el A-4 de la auditoría.
 > - **Secreto hacia adelante** ([DISENO-ratchet.md](DISENO-ratchet.md)): doble ratchet **por

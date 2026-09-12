@@ -769,6 +769,15 @@ Usar contactos desechables si se puede.
      la caché a propósito). Los adjuntos que ya estaban en el móvil siguen en claro y tienen
      que seguir funcionando: eso ya está verificado en el TECNO con un GIF anterior.
 
+10. - [ ] **Depósito ciego entre dos móviles** (encendido por contacto el 12 sep 2026,
+     `BLIND_MIN_PROTOCOL = 2`). Con B cerrado, A le envía 2–3 mensajes; en el VPS,
+     `ls` del directorio del buzón debe mostrar los sobres bajo un directorio de **etiqueta**
+     (hex) y **no** bajo el PeerID de B; al abrir B, llegan todos (retira por las dos vías) y
+     el Diagnóstico de A no muestra caída a v1. Repetir con un archivo troceado (varios sobres
+     bajo la misma etiqueta) y con el contacto **bloqueado** en B (los sobres deben confirmarse
+     igual, sin quedarse en el nodo). Si B tiene un build anterior al 10 sep, A debe seguir
+     depositando por PeerID: eso lo cubre el punto 8.
+
 Si algo falla, el interruptor vuelve a `false` y la conversación sigue en v1 sin perder nada
 —salvo lo que se hubiera enviado con ratchet y no se hubiera podido abrir—, que es justo por
 lo que esta prueba va antes del encendido.

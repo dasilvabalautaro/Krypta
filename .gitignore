@@ -18,11 +18,19 @@ local.properties
 
 # Exportaciones de la bóveda de notas del autor (se regeneran allí, no aquí).
 /compare-signal.pdf
+/comparacion*.pdf
 *.jks
 *.keystore
-# Notas de credenciales del autor (usuario/contraseña de git). No deberían estar
-# en el árbol del repo, pero mientras lo estén, que un `git add -A` no las suba.
+# Notas locales del autor que no se versionan.
 /keys-git.md
+
+# Datos de usuario que pueden acabar en el árbol al depurar (el repo es público desde el
+# 12 sep 2026): copias de seguridad de identidad y bases sacadas del móvil con `run-as`.
+*.krbk
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
 
 # --- Artefactos de compilación fuera de build/ ---
 # APK/AAB de release que Android Studio deja en app/release/.
