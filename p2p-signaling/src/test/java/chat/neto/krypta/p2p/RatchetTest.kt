@@ -68,6 +68,43 @@ class RatchetTest {
         assertTrue(kotlin.math.abs(a.epoch - b.epoch) <= 1)
     }
 
+    /**
+     * Dos móviles que se añaden crean su sesión cada uno por su lado, con linajes distintos
+     * por milisegundos. El que recibe primero tiene un linaje **mayor** que el del sobre: lo
+     * abre por `openOld` (la época 0 de cualquier linaje es derivable) pero **no** adopta el
+     * linaje menor ni consume la propuesta que venía, así que su primer mensaje sale en la
+     * época 0 de su propio linaje, sin secreto hacia adelante, hasta que el otro responda.
+     *
+     * Se probó a adoptarlo cuando la sesión aún no había cifrado nada (12 sep 2026) y la prueba
+     * de propiedades lo tumbó (semilla 102): tras una reinstalación la sesión también está
+     * «virgen», y adoptar un linaje viejo del otro reutiliza ternas (linaje, época, N) que esta
+     * identidad ya gastó antes de perder el estado. Los linajes tienen que ser monótonos por
+     * identidad; este test fija que lo siguen siendo, y de paso documenta el coste.
+     */
+    @Test
+    fun `una sesion nueva con linaje mayor abre el sobre pero no adopta el linaje menor`() {
+        var a = ratchet.initial(secret, alice, bob, lineage = 1_000L)
+        var b = ratchet.initial(secret, bob, alice, lineage = 2_000L) // nació después
+
+        val m1 = ratchet.encrypt(a, "uno".toByteArray()); a = m1.state
+        val en = ratchet.decrypt(b, secret, m1.ciphertext); b = en.state
+        assertEquals("uno", String(en.plaintext))
+        assertEquals("un linaje menor no se adopta nunca (monotonía por identidad)", 2_000L, b.lineage)
+        assertEquals("y sin adoptarlo no hay con qué avanzar: sigue en la época 0", 0, b.epoch)
+
+        // Coste: lo primero que escribe B va en la época 0 de su linaje. A lo adopta (es mayor)
+        // y a partir de la respuesta de A los dos tienen material efímero.
+        val m2 = ratchet.encrypt(b, "dos".toByteArray()); b = m2.state
+        assertEquals(0, Ratchet.Header.decode(m2.ciphertext)!!.epoch)
+        val back = ratchet.decrypt(a, secret, m2.ciphertext); a = back.state
+        assertEquals("dos", String(back.plaintext))
+        assertEquals(2_000L, a.lineage)
+        assertEquals(1, a.epoch)
+        val m3 = ratchet.encrypt(a, "tres".toByteArray()); a = m3.state
+        b = ratchet.decrypt(b, secret, m3.ciphertext).state
+        assertEquals(2, b.epoch)
+    }
+
     @Test
     fun `los dos hablan a la vez sin que se rompa la sesion`() {
         var (a, b) = sessions()

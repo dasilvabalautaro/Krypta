@@ -1820,19 +1820,132 @@ class ChatServiceTest {
         assertTrue(messages.saved.isEmpty())
     }
 
+    /**
+     * A ciegas solo a quien ha anunciado que retira por etiquetas; al resto por PeerID.
+     * Depositar a ciegas donde el otro aún no mira perdería el mensaje (caducaría en el nodo).
+     */
     @Test
-    fun `el deposito ciego sigue apagado hasta que la recepcion este repartida`() = runTest {
-        val signaling = FakeSignaling()
-        val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+    fun `el deposito ciego se decide por contacto, segun lo que haya anunciado`() = runTest {
+        val v1 = FakeSignaling().apply { failOnSend = true } // fuerza la caída al buzón
+        parte("12D3KooWSelf", contact, v1, scope = backgroundScope).send(contact, "por buzón".toByteArray())
+        assertEquals("sin anuncio, por PeerID", "", v1.depositLabels.single())
 
-        signaling.failOnSend = true // fuerza la caída al buzón
-        chat.send(contact, "por buzón".toByteArray())
-
-        assertEquals(1, signaling.depositLabels.size)
+        val v2 = FakeSignaling().apply { failOnSend = true }
+        parte("12D3KooWSelf", contactoV2, v2, scope = backgroundScope).send(contactoV2, "a ciegas".toByteArray())
         assertEquals(
-            "depositar a ciegas donde el otro aún no mira perdería el mensaje",
-            "",
-            signaling.depositLabels.single(),
+            "quien anunció v2 ya retira por etiquetas: se le deposita bajo la suya",
+            MailboxLabel.toHex(MailboxLabel.outbox(secret, "12D3KooWSelf", contact.peerId)),
+            v2.depositLabels.single(),
         )
+
+        // El interruptor global sigue mandando: apagarlo devuelve todos los depósitos a v1.
+        val antes = ChatService.BLIND_DEPOSIT
+        ChatService.BLIND_DEPOSIT = false
+        try {
+            val apagado = FakeSignaling().apply { failOnSend = true }
+            parte("12D3KooWSelf", contactoV2, apagado, scope = backgroundScope).send(contactoV2, "v1".toByteArray())
+            assertEquals("", apagado.depositLabels.single())
+        } finally {
+            ChatService.BLIND_DEPOSIT = antes
+        }
+    }
+
+    /**
+     * Dos extremos recién añadidos hacen el intercambio de anuncios de capacidad y después el
+     * usuario de A escribe. Devuelve la cabecera de ese primer mensaje y los dos servicios.
+     *
+     * [relojDeA] adelanta o atrasa el reloj de A al crear su sesión: los linajes son la hora
+     * local de cada móvil, y **de eso depende en qué época sale el primer mensaje** (ver los
+     * dos tests de abajo). Se siembra el estado en el almacén de A en vez de tocar el reloj
+     * del sistema, que es lo que `RatchetSessions.stateFor` haría con `now`.
+     */
+    private fun primerMensajeTrasAnadirse(
+        scope: kotlinx.coroutines.CoroutineScope,
+        relojDeA: Long,
+    ): Triple<Ratchet.Header, Pair<ChatService, ChatService>, Pair<FakeSignaling, FakeSignaling>> {
+        val contactoDeB = Contact(
+            id = "contacto-a", displayName = "Yo", peerId = "12D3KooWSelf",
+            publicKey = ByteArray(0), sharedSecret = secret,
+        )
+        val sigA = FakeSignaling()
+        val sigB = FakeSignaling()
+        val contactsA = FakeContacts(listOf(contact))
+        val contactsB = FakeContacts(listOf(contactoDeB))
+        val storeA = FakeRatchetStore().apply {
+            sessions[contact.id] = Ratchet(JdkCurve25519())
+                .initial(secret, "12D3KooWSelf", contact.peerId, lineage = System.currentTimeMillis() + relojDeA)
+                .encode()
+        }
+        val a = ChatService(
+            sigA, cipher, FakeMessages(), contactsA, FakeKeyExchange("12D3KooWSelf"), RendezvousService(),
+            FakeFileStore(), scope, testSessions(FakeKeyExchange("12D3KooWSelf"), storeA),
+        )
+        val b = parte("12D3KooWBob", contactoDeB, sigB, contacts = contactsB, scope = scope)
+
+        return kotlinx.coroutines.runBlocking {
+            // 1. A anuncia; como no sabe qué habla B, va por el camino estático.
+            a.announceCapabilities()
+            assertFalse(Ratchet.looksLikeRatchet(sigA.sentCiphertext!!))
+            assertNull(b.onReceived("12D3KooWSelf", sigA.sentCiphertext!!))
+            // 2. B ya sabe que A habla v3: su anuncio va por el ratchet (época 0, con propuesta).
+            b.announceCapabilities()
+            assertEquals(0, Ratchet.Header.decode(sigB.sentCiphertext!!)!!.epoch)
+            assertNull(a.onReceived("12D3KooWBob", sigB.sentCiphertext!!))
+            // 3. El usuario de A escribe.
+            val contactoActual = contactsA.findById(contact.id)!!
+            assertEquals(ChatService.PROTOCOL_VERSION, contactoActual.peerProtocol)
+            a.send(contactoActual, "hola".toByteArray())
+            val recibido = b.onReceived("12D3KooWSelf", sigA.sentCiphertext!!)!!
+            assertEquals("hola", (b.content(contactsB.findById(contactoDeB.id)!!, recibido) as MessageContent.Text).text)
+            Triple(Ratchet.Header.decode(sigA.sentCiphertext!!)!!, a to b, sigA to sigB)
+        }
+    }
+
+    /**
+     * La época 0 se deriva del secreto compartido y no tiene secreto hacia adelante. Este test
+     * fija **dónde acaba** esa exposición al añadir un contacto, que no es donde se pensaba:
+     * el intercambio de anuncios de capacidad no basta. Cada lado crea su sesión por su cuenta
+     * con su hora local como linaje; en el caso normal el receptor la crea **después** y su
+     * linaje es mayor, así que abre el anuncio de B por `openOld` (la época 0 de cualquier
+     * linaje es derivable) sin adoptar el linaje menor —y no puede, ver `RatchetTest`—, y **el
+     * primer mensaje del usuario sale en la época 0**. Solo la primera respuesta de B saca a
+     * los dos. Es el coste que documenta `DISENO-ratchet.md` §1.8.4; si algún cambio lo
+     * alargara (que la respuesta de B tampoco avanzara), este test lo diría.
+     */
+    @Test
+    fun `al anadirse, el primer mensaje del usuario va en epoca 0 y la primera respuesta saca a los dos`() = runTest {
+        conRatchet {
+            val (primero, servicios, señales) = primerMensajeTrasAnadirse(backgroundScope, relojDeA = +60_000L)
+            val (a, b) = servicios
+            val (sigA, sigB) = señales
+            assertEquals("el primer mensaje del usuario no tiene secreto hacia adelante", 0, primero.epoch)
+
+            kotlinx.coroutines.runBlocking {
+                // B adopta el linaje de A (mayor) y su respuesta ya lleva material efímero;
+                // con ella A también sale de la época 0. Desde aquí, todo tiene PFS.
+                b.send(contact.copy(id = "contacto-a", peerId = "12D3KooWSelf", peerProtocol = 3), "qué tal".toByteArray())
+                val respuesta = Ratchet.Header.decode(sigB.sentCiphertext!!)!!
+                assertEquals(primero.lineage, respuesta.lineage)
+                assertEquals("la primera respuesta ya va en época 1", 1, respuesta.epoch)
+                assertNotNull(a.onReceived("12D3KooWBob", sigB.sentCiphertext!!))
+                a.send(contactoV2, "bien".toByteArray())
+                assertEquals(2, Ratchet.Header.decode(sigA.sentCiphertext!!)!!.epoch)
+            }
+        }
+    }
+
+    /**
+     * El otro caso, que también ocurre: si el reloj de A va **por detrás** del de B, el anuncio
+     * de B trae un linaje mayor, A lo adopta y consume la propuesta, y el primer mensaje del
+     * usuario ya sale en la época 1. O sea que hoy el secreto hacia adelante del primer
+     * mensaje **depende de los relojes**, no de nada que controle el protocolo. Documentado en
+     * `DISENO-ratchet.md` §1.8.4 junto con lo que haría falta para que fuera siempre así.
+     */
+    @Test
+    fun `si el reloj de A va por detras, el primer mensaje del usuario ya sale en epoca 1`() = runTest {
+        conRatchet {
+            val (primero, _, _) = primerMensajeTrasAnadirse(backgroundScope, relojDeA = -60_000L)
+            assertEquals(1, primero.epoch)
+        }
     }
 }

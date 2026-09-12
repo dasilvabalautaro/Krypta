@@ -136,8 +136,15 @@ data class RatchetState(
             val nextPriv = r.blob()
             val nextPub = r.blob()
             val peerNext = r.blob().takeIf { it.isNotEmpty() }
-            val past = List(r.int()) { PastChain(r.long(), r.int(), r.blob(), r.int()) }
-            val skipped = List(r.int()) { SkippedKey(r.long(), r.int(), r.int(), r.blob()) }
+            // Los contadores van acotados por lo que queda del blob: `List(n)` reserva `n`
+            // huecos ANTES de leer nada, y con un contador corrupto a 2³¹ eso sería un
+            // OutOfMemoryError, no un "blob truncado" (cerrado de paso al arreglar `blob()`).
+            val past = List(r.count(minBytesEach = PAST_CHAIN_MIN_BYTES)) {
+                PastChain(r.long(), r.int(), r.blob(), r.int())
+            }
+            val skipped = List(r.count(minBytesEach = SKIPPED_KEY_MIN_BYTES)) {
+                SkippedKey(r.long(), r.int(), r.int(), r.blob())
+            }
             return RatchetState(
                 lineage, epoch, sendDir, rootKey, sendChain, sendN, sendPN, recvChain, recvN,
                 myCurPub, nextPriv, nextPub, peerNext, past, skipped,
@@ -156,6 +163,11 @@ data class RatchetState(
             writeInt(b.size); write(b)
         }
 
+        /** Bytes mínimos de una entrada serializada: long + int + blob vacío (int) + int. */
+        private const val PAST_CHAIN_MIN_BYTES = 8 + 4 + 4 + 4
+        /** long + int + int + blob vacío (int). */
+        private const val SKIPPED_KEY_MIN_BYTES = 8 + 4 + 4 + 4
+
         private class Reader(private val bytes: ByteArray) {
             private var pos = 0
             fun byte(): Int = bytes[pos++].toInt() and 0xFF
@@ -163,8 +175,17 @@ data class RatchetState(
             fun long(): Long = (int().toLong() and 0xFFFFFFFFL shl 32) or (int().toLong() and 0xFFFFFFFFL)
             fun blob(): ByteArray {
                 val n = int()
-                require(n >= 0 && pos + n <= bytes.size) { "estado de ratchet truncado" }
+                // Ojo a la forma: `pos + n <= bytes.size` desborda con n = 2³¹−1 (la suma
+                // sale negativa y pasa), y `copyOfRange` calcula `to − from`, que vuelve a
+                // dar n → `new byte[2³¹−1]` → OutOfMemoryError. Lo encontró `ParserFuzzTest`.
+                require(n >= 0 && n <= bytes.size - pos) { "estado de ratchet truncado" }
                 return bytes.copyOfRange(pos, pos + n).also { pos += n }
+            }
+            /** Un contador de entradas, que no puede superar las que caben en lo que queda. */
+            fun count(minBytesEach: Int): Int {
+                val n = int()
+                require(n >= 0 && n <= (bytes.size - pos) / minBytesEach) { "estado de ratchet truncado" }
+                return n
             }
         }
     }

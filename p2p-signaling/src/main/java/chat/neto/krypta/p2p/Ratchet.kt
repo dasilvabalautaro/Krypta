@@ -96,6 +96,13 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
 
         var st = state
         // Linaje mayor = el otro perdió su estado y ha vuelto a empezar. Se adopta.
+        // Un linaje MENOR no se adopta nunca, ni siquiera sobre una sesión que aún no ha cifrado
+        // nada (12 sep 2026): «esta sesión no ha usado su linaje» no es «esta identidad nunca usó
+        // el linaje del otro» — tras una reinstalación no hay forma de distinguirlo, y adoptar
+        // uno viejo reutilizaría ternas (linaje, época, N) ya gastadas antes de perder el estado.
+        // Lo encontró la prueba de propiedades (semilla 102). El precio es que, al añadirse dos
+        // contactos, quien recibe primero se queda en su linaje y su primer mensaje sale en la
+        // época 0 hasta que el otro responde (ver §1.8.4 del diseño).
         if (header.lineage > st.lineage) st = reset(st, sharedSecret, header.lineage)
         // Va una época por delante: su pública de esa época viene en la cabecera, y mi privada
         // para ella es la propuesta que aún no he consumido. Como mucho puede ir una, porque

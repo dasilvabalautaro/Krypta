@@ -504,12 +504,13 @@ class ChatService @Inject constructor(
      */
     private suspend fun logRelayStatus() {
         val res = runCatching { signaling.reserveRelay() }.getOrElse { it.message ?: "error" }
-        val state = if (res.startsWith("OK")) "OK (alcanzable por circuit)" else res
+        val state = relayState(res)
         if (state != lastReserveResult) {
             lastReserveResult = state
             logLine("relay: $state")
         }
     }
+
 
     @Volatile
     private var lastReserveResult: String? = null
@@ -557,15 +558,15 @@ class ChatService @Inject constructor(
      * Etiqueta bajo la que depositar para [contact], o cadena vacía para usar el camino
      * antiguo (direccionado por PeerID).
      *
-     * Hoy devuelve siempre vacío, y es deliberado. Depositar a ciegas solo sirve si **el
-     * destinatario** retira por etiquetas: un cliente que aún no lo haga jamás miraría ese
-     * buzón y el mensaje se quedaría ahí hasta caducar. Que el *nodo* hable v2 no basta —esa
-     * es la parte que el diseño original planteó mal—. Así que el orden correcto es: primero
-     * todos los clientes saben **recibir** a ciegas (esta versión), y cuando esa versión esté
-     * repartida se enciende el envío cambiando [BLIND_DEPOSIT] a true.
+     * Depositar a ciegas solo sirve si **el destinatario** retira por etiquetas: un cliente que
+     * aún no lo haga jamás miraría ese buzón y el mensaje se quedaría ahí hasta caducar. Que el
+     * *nodo* hable v2 no basta. Por eso la decisión es **por contacto**, como la del ratchet:
+     * la retirada por etiquetas entró en el cliente antes que el anuncio de capacidad, así que
+     * quien haya anunciado [BLIND_MIN_PROTOCOL] o más ya sabe recibir a ciegas. Con el resto
+     * se sigue depositando por PeerID, que es lo que el nodo escribe en disco.
      */
     private fun outboxLabel(contact: Contact): String {
-        if (!BLIND_DEPOSIT) return ""
+        if (!BLIND_DEPOSIT || contact.peerProtocol < BLIND_MIN_PROTOCOL) return ""
         val secret = contact.sharedSecret ?: return ""
         val me = runCatching { keyExchange.localPeerId() }.getOrNull() ?: return ""
         return MailboxLabel.toHex(MailboxLabel.outbox(secret, me, contact.peerId))
@@ -1579,11 +1580,50 @@ class ChatService @Inject constructor(
         /** Plazo del paso de anuncio de capacidades del ciclo WAN. */
         const val CAPABILITIES_BUDGET_MS = 8_000L
 
-        const val BLIND_DEPOSIT = false
+        /**
+         * Interruptor del **depósito ciego** (ver `DISENO-buzon-ciego.md`). Encendido el 12 sep
+         * 2026; a quién se le aplica lo decide [BLIND_MIN_PROTOCOL], no este valor. `var` por
+         * lo mismo que [RATCHET_SEND]: los tests cubren los dos caminos y un `false` en una
+         * publicación posterior devuelve todos los depósitos a v1 sin tocar nada más.
+         */
+        @Volatile
+        internal var BLIND_DEPOSIT = true
+
+        /**
+         * Mínimo para depositar **a ciegas** a un contacto. La retirada por etiquetas (fase 4
+         * del buzón ciego, 9 sep 2026) entró en el cliente **antes** que el anuncio de
+         * capacidad (10 sep), así que no existe ningún cliente que anuncie 2 y no sepa retirar
+         * por etiquetas. Igual que con el ratchet: una versión nueva no es el umbral de nada,
+         * cada capacidad tiene el suyo.
+         */
+        const val BLIND_MIN_PROTOCOL = 2
         // Antigüedad máxima de un FALLIDO para reintentarlo solo (24 h).
         const val RETRY_MAX_AGE_MS = 24L * 60 * 60 * 1000
         // Tamaño de trozo de archivo: deja aire bajo el límite del buzón (64 KiB) tras el
         // sobre + el cifrado (nonce 12 + tag 16 + cabecera).
         const val CHUNK_SIZE = 48 * 1024
+    }
+}
+
+/** `1 conn: tcp` / `2 conns: tcp+ws`, tal como lo escribe `connSummary` en Go. */
+private val CONN_SUMMARY = Regex("""\d+ conns?: [a-z+]+""")
+private val PRUNED_SUMMARY = Regex("""wss redundantes cerradas: \d+""")
+
+/**
+ * Estado estable de la reserva de relay a partir del resumen del puente, que cambia en cada
+ * ciclo (lleva la hora de expiración). Se conservan solo las partes que importan y no cambian
+ * si todo va bien: cuántas conexiones hay con cada nodo y por qué vía (`1 conn: tcp`), y
+ * cuántas WebSocket sobrantes se han cerrado (ver `conn_prune.go`). Así una segunda conexión
+ * por Caddy, o una poda, se ve en el diagnóstico sin inundarlo.
+ */
+internal fun relayState(res: String): String {
+    if (!res.startsWith("OK")) return res
+    val conns = CONN_SUMMARY.findAll(res).map { it.value }.joinToString(" | ")
+    val pruned = PRUNED_SUMMARY.find(res)?.value
+    return buildString {
+        append("OK (alcanzable por circuit")
+        if (conns.isNotEmpty()) append("; ").append(conns)
+        append(")")
+        if (pruned != null) append(" · ").append(pruned)
     }
 }
