@@ -100,6 +100,19 @@ type mailbox struct {
 	buckets map[string]*bucket
 	now     func() time.Time // inyectable en los tests
 
+	// Límite de ritmo de la **retirada** (12 sep 2026). Retirar no escribe, pero lista y lee
+	// ficheros: sin límite, cualquiera podía hacer trabajar al disco del nodo a voluntad (un
+	// GET v2 pide hasta 1024 etiquetas). Un cubo por PeerID del stream, aparte del de
+	// depósitos, y uno **global**, porque las identidades libp2p no cuestan nada y un cubo por
+	// peer solo no frena a quien rote PeerIDs. Pasado el límite se contesta una retirada vacía:
+	// el correo se queda en el nodo y sale en la siguiente, así que no se pierde nada.
+	getBurst        int
+	getRefill       time.Duration
+	getBuckets      map[string]*bucket
+	getGlobalBurst  int
+	getGlobalRefill time.Duration
+	getGlobal       *bucket
+
 	mu sync.Mutex
 
 	// notify (opcional) se invoca tras cada depósito con el PeerID del destinatario —
@@ -176,6 +189,18 @@ func newMailbox(dir string) *mailbox {
 		refill:  time.Second,
 		buckets: map[string]*bucket{},
 		now:     time.Now,
+		// Retirada: un cliente legítimo abre dos streams por nodo en cada retirada (v1 y v2) y
+		// retira cada 30–180 s, más una por aviso de wake. 60 de ráfaga absorbe una tanda de
+		// avisos (un archivo troceado), y una ficha cada 5 s son 12 retiradas por minuto
+		// sostenidas, varias veces lo que hace una app normal.
+		getBurst:   60,
+		getRefill:  5 * time.Second,
+		getBuckets: map[string]*bucket{},
+		// Global: 2000 suscriptores de wake retirando cada 30 s por las dos vías son ~133 por
+		// segundo en el peor caso; 200/s con ráfaga de 2000 lo cubre con margen.
+		getGlobalBurst:  2000,
+		getGlobalRefill: 5 * time.Millisecond,
+		getGlobal:       &bucket{},
 	}
 }
 
@@ -244,6 +269,10 @@ func (m *mailbox) handleGet(s network.Stream) {
 	defer s.Close()
 	// Solo se entrega el buzón del peer autenticado en el stream.
 	to := s.Conn().RemotePeer().String()
+	if !m.allowGet(to) {
+		replyEmptyFetch(s)
+		return
+	}
 
 	envs, err := m.list(to)
 	if err != nil {
@@ -284,23 +313,8 @@ type bucket struct {
 // por tiempo transcurrido, sin temporizadores: el cubo se pone al día cuando se le consulta.
 func (m *mailbox) allow(from string) bool {
 	now := m.now()
-	b, ok := m.buckets[from]
-	if !ok {
-		// Limpieza perezosa: sin esto el mapa crecería con cada PeerID que haya escrito alguna
-		// vez, y eso lo controla quien ataca, no el nodo.
-		if len(m.buckets) >= maxTrackedSenders {
-			m.pruneBuckets(now)
-		}
-		b = &bucket{tokens: float64(m.burst), last: now}
-		m.buckets[from] = b
-	}
-	if elapsed := now.Sub(b.last); elapsed > 0 {
-		b.tokens += elapsed.Seconds() / m.refill.Seconds()
-		if b.tokens > float64(m.burst) {
-			b.tokens = float64(m.burst)
-		}
-		b.last = now
-	}
+	b := bucketFor(m.buckets, from, m.burst, m.refill, now)
+	topUp(b, m.burst, m.refill, now)
 	if b.tokens < 1 {
 		return false
 	}
@@ -308,12 +322,72 @@ func (m *mailbox) allow(from string) bool {
 	return true
 }
 
+// allowGet es lo mismo para la retirada: cubo del peer y cubo global. Solo se descuenta si
+// hay ficha en los dos, para que el global agotado no le coma fichas a un peer que no ha
+// retirado nada.
+func (m *mailbox) allowGet(peerID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now()
+	b := bucketFor(m.getBuckets, peerID, m.getBurst, m.getRefill, now)
+	topUp(b, m.getBurst, m.getRefill, now)
+	topUp(m.getGlobal, m.getGlobalBurst, m.getGlobalRefill, now)
+	if b.tokens < 1 || m.getGlobal.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	m.getGlobal.tokens--
+	return true
+}
+
+// replyEmptyFetch contesta una retirada limitada **siguiendo el protocolo**: fin de lista y
+// lectura del ack (que llegará vacío). Cerrar sin más haría que el cliente viera un error de
+// escritura al ack'ear y contara el nodo como caído; así solo ve un buzón sin novedades, y lo
+// pendiente sale en la siguiente retirada. No toca el disco.
+func replyEmptyFetch(s network.Stream) {
+	if _, err := fmt.Fprintln(s, `{"done":true}`); err != nil {
+		return
+	}
+	_, _ = readLine(io.LimitReader(s, 128<<10))
+}
+
+// bucketFor devuelve el cubo de `key`, creándolo lleno si no existía. Limpieza perezosa: sin
+// ella el mapa crecería con cada PeerID que haya aparecido alguna vez, y eso lo controla quien
+// ataca, no el nodo.
+func bucketFor(buckets map[string]*bucket, key string, burst int, refill time.Duration, now time.Time) *bucket {
+	b, ok := buckets[key]
+	if !ok {
+		if len(buckets) >= maxTrackedSenders {
+			pruneMap(buckets, burst, refill, now)
+		}
+		b = &bucket{tokens: float64(burst), last: now}
+		buckets[key] = b
+	}
+	return b
+}
+
+// topUp repone las fichas que tocan por el tiempo transcurrido, sin pasar de la ráfaga. Un
+// cubo recién creado con `last` a cero se llena del todo en la primera consulta.
+func topUp(b *bucket, burst int, refill time.Duration, now time.Time) {
+	if elapsed := now.Sub(b.last); elapsed > 0 {
+		b.tokens += elapsed.Seconds() / refill.Seconds()
+		if b.tokens > float64(burst) {
+			b.tokens = float64(burst)
+		}
+		b.last = now
+	}
+}
+
 // pruneBuckets olvida a los remitentes cuyo cubo ya está lleno (o sea, llevan sin depositar el
 // tiempo suficiente): reconstruirlo cuesta nada y no cambia lo que se les permite.
 func (m *mailbox) pruneBuckets(now time.Time) {
-	for from, b := range m.buckets {
-		if now.Sub(b.last) >= time.Duration(m.burst)*m.refill {
-			delete(m.buckets, from)
+	pruneMap(m.buckets, m.burst, m.refill, now)
+}
+
+func pruneMap(buckets map[string]*bucket, burst int, refill time.Duration, now time.Time) {
+	for key, b := range buckets {
+		if now.Sub(b.last) >= time.Duration(burst)*refill {
+			delete(buckets, key)
 		}
 	}
 }
@@ -450,6 +524,10 @@ func (m *mailbox) handleGetV2(s network.Stream) {
 	}
 	if len(req.Labels) > maxLabelsPerRequest {
 		req.Labels = req.Labels[:maxLabelsPerRequest]
+	}
+	if !m.allowGet(s.Conn().RemotePeer().String()) {
+		replyEmptyFetch(s)
+		return
 	}
 
 	w := bufio.NewWriter(s)
