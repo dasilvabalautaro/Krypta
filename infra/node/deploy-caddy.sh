@@ -18,8 +18,12 @@
 #     que borra IP, puerto y cabeceras del cliente de cualquier línea de error: la regla de los
 #     nodos es que su log no guarda identificadores de usuarios (docs/security-model.md §6.5).
 #   · Valida el Caddyfile antes de instalarlo; si no valida, no toca el que hay.
+#   · Sirve `/.well-known/security.txt` (RFC 9116) desde infra/node/security.txt: el contacto
+#     de seguridad tiene que estar en un dominio del proyecto, y estos son los públicos. Todo
+#     lo demás va al nodo como antes. Ojo al campo Expires: hay que renovarlo antes de que venza
+#     y volver a lanzar este script en los dos VPS.
 #
-# Idempotente: relanzarlo reescribe el Caddyfile y recarga.
+# Idempotente: relanzarlo reescribe el Caddyfile, el security.txt y recarga.
 set -euo pipefail
 
 HOST="${1:-}"
@@ -37,6 +41,13 @@ if [ "$RESOLVED" != "$IP" ]; then
   exit 1
 fi
 
+SECURITY_TXT="$(dirname "$0")/security.txt"
+if [ ! -f "$SECURITY_TXT" ]; then
+  echo "ERROR: falta $SECURITY_TXT" >&2
+  exit 1
+fi
+scp -o BatchMode=yes -q "$SECURITY_TXT" "$HOST:/tmp/security.txt.krypta"
+
 ssh -o BatchMode=yes "$HOST" "DOMAIN=$DOMAIN bash -s" <<'REMOTE'
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -49,6 +60,9 @@ if ! command -v caddy >/dev/null; then
   apt-get -o DPkg::Lock::Timeout=180 -qq install -y caddy >/dev/null
 fi
 echo "  caddy $(caddy version | cut -d' ' -f1)"
+
+install -D -m 0644 /tmp/security.txt.krypta /etc/caddy/www/.well-known/security.txt
+rm -f /tmp/security.txt.krypta
 
 cat > /tmp/Caddyfile.krypta <<EOF
 {
@@ -71,7 +85,15 @@ $DOMAIN {
 			disable_http_challenge
 		}
 	}
-	reverse_proxy 127.0.0.1:8081
+	# Contacto de seguridad (RFC 9116), desde infra/node/security.txt.
+	handle /.well-known/security.txt {
+		root * /etc/caddy/www
+		header Content-Type "text/plain; charset=utf-8"
+		file_server
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8081
+	}
 }
 EOF
 caddy validate --config /tmp/Caddyfile.krypta --adapter caddyfile >/dev/null
@@ -92,6 +114,11 @@ for _ in $(seq 36); do
       | openssl x509 -noout -issuer 2>/dev/null | grep -q "Let's Encrypt"; then
     echo | openssl s_client -connect "$DOMAIN:443" -servername "$DOMAIN" 2>/dev/null \
       | openssl x509 -noout -issuer -enddate | sed 's/^/  /'
+    if curl -fsS --max-time 10 "https://$DOMAIN/.well-known/security.txt" | grep -q '^Contact: '; then
+      echo "  security.txt servido: https://$DOMAIN/.well-known/security.txt"
+    else
+      echo "AVISO: https://$DOMAIN/.well-known/security.txt no responde con un Contact:" >&2
+    fi
     echo
     echo "Comprueba libp2p por wss y añade la línea a Libp2pNode.DEFAULT_BOOTSTRAP:"
     echo "  bash infra/node/check-nodes.sh -v /dns4/$DOMAIN/tcp/443/wss/p2p/<PeerID>"

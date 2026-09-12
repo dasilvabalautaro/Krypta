@@ -390,12 +390,21 @@ reciclaría. Lo que hace y por qué:
   `wss`: la IP de origen no aparece ni en el journal de Caddy ni en `/var/log/syslog`.
 - Comprobado con `check-nodes.sh` sobre las líneas `wss`: buzón, wake, relay, ida y vuelta y
   depósito ciego pasan por Caddy.
+- **Sirve el contacto de seguridad** (desde el 12 sep 2026): `/.well-known/security.txt` (RFC 9116)
+  sale de [`security.txt`](security.txt), que el script copia a `/etc/caddy/www/`; solo esa ruta va
+  a `file_server` y todo lo demás sigue yendo al `ws` del nodo. Verificado en los dos VPS: HTTP 200
+  `text/plain`, `check-nodes.sh` en verde por `wss` y por `tcp`, y la IP de la petición ausente del
+  journal y de syslog. **El campo `Expires` vence el 1 sep 2027**: renovarlo y relanzar el script en
+  los dos VPS antes de esa fecha. La política completa está en [SECURITY.md](../../SECURITY.md).
 
 **Dos consecuencias que hay que conocer.** (1) **El orden de marcado**: libp2p trata `wss` como
 TCP y, dentro de TCP, marca primero el **puerto más bajo** — 443 antes que 4001. Sin corregirlo,
 los móviles habrían preferido pasar por Caddy. El puente usa un ranker propio
 ([`dial_ranker.go`](../../native-bridge/libp2p/dial_ranker.go)) que retrasa la vía WebSocket 1 s
-por detrás de la directa, así que `wss` solo entra cuando el 4001 no conecta. (2) **Detrás de
+por detrás de la directa, así que `wss` solo entra cuando el 4001 no conecta — y, desde el 12 sep
+2026, si aun así quedan las dos abiertas (pasaba en arranques en frío: dials solapados de varios
+llamadores), el puente **cierra la WebSocket** en cuanto hay directa
+([`conn_prune.go`](../../native-bridge/libp2p/conn_prune.go)). (2) **Detrás de
 Caddy todos llegan desde `127.0.0.1`**: libp2p no limita conexiones por IP en loopback, y el
 relay reparte **un solo** cupo de 256 reservas por IP entre todos los usuarios que entren por
 `wss`. Vale para una vía de respaldo; no valdría si fuese la principal.
@@ -559,9 +568,28 @@ cp infra/node/chat.neto.krypta.check.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/chat.neto.krypta.check.plist
 ```
 
-Cada 15 minutos, log en `/tmp/krypta-check.log` y **aviso del sistema si algo falla**
-(`--notify`), porque un log que solo se mira cuando ya sospechas no es vigilancia. Para
-desmontarlo, `launchctl unload` con la misma ruta.
+Cada 15 minutos, log en `/tmp/krypta-check.log` y **aviso del sistema al cambiar el estado**
+(`--notify`): cuando algo empieza a fallar (el aviso dice qué nodo), cuando cambia lo que falla y
+cuando se recupera. No en cada pasada: un aviso cada 15 minutos durante una caída acaba ignorado.
+El estado va en `~/Library/Caches/krypta-check.state`. Para desmontarlo, `launchctl unload` con la
+misma ruta. **Cargado en la Mac de desarrollo el 12 sep 2026** (hasta entonces el plist existía
+pero nunca se había instalado, así que no había vigilancia de verdad).
+
+**Coste.** Las sondas se compilan una vez en un binario de test (`$TMPDIR/krypta-check/probes.test`)
+y se reconstruye solo si cambia algún `.go`, `go.mod` o `go.sum`. Antes cada sonda era un `go test`
+que volvía a enlazar libp2p: medido el 12 sep, **70 s y 84 s de CPU por pasada** —casi un 10 % de un
+núcleo sostenido— frente a **~23 s y 1,2 s de CPU** ahora, casi todo espera de red.
+
+**La Mac tiene que estar despierta.** Esto vigila **desde la Mac**, y launchd no ejecuta nada
+mientras duerme: con el `sleep 1` que tenía en `pmset`, una caída de madrugada no avisaba hasta que
+la Mac despertara. **Decidido el 12 sep 2026: la Mac se deja sin suspensión** en vez de montar un
+canal de alerta fuera de ella. Compruébalo con `pmset -g` (`sleep` debe ser `0`); si un día vuelve a
+dormirse, esta vigilancia deja de serlo sin avisar.
+
+**Solo el modo desatendido (`--notify`) lleva el estado.** Una pasada a mano (`-v`, o con nodos
+concretos) no lo lee ni lo escribe. Se aprendió el mismo día: una comprobación manual de Dallas,
+lanzada segundos después de que launchd registrara su caída durante un redespliegue, sobrescribió el
+estado con «todo bien» y la vigilancia ya no habría avisado de la recuperación.
 
 Con cron sería la línea equivalente:
 

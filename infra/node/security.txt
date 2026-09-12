@@ -1,0 +1,19 @@
+Contact: mailto:info@4000msnm.com
+Expires: 2027-09-01T00:00:00.000Z
+Preferred-Languages: es, en
+Canonical: https://krypta-sp.neto.chat/.well-known/security.txt
+Canonical: https://krypta-dal.neto.chat/.well-known/security.txt
+
+# Krypta: mensajero cifrado de extremo a extremo, sin servidor central.
+# Lo desarrolla y lo opera una persona. No hay programa de recompensas.
+#
+# Antes de avisar, lee "Lo que Krypta NO protege" (security-model.md, §9): lo que figura
+# ahí es un límite conocido. Por favor, no hagas pruebas de carga ni de denegación de
+# servicio contra estos nodos; levanta el tuyo propio.
+#
+# En el primer correo, describe el área y el impacto, no la explotación completa: todavía
+# no hay clave PGP publicada; se acuerda un canal cifrado si hace falta.
+#
+# Krypta: an end-to-end encrypted, server-less messenger run by one person. No bug bounty.
+# Please do not load-test these nodes; run your own. Ask for an encrypted channel in your
+# first email if details put users at risk.

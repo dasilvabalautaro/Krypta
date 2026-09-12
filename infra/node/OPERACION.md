@@ -177,6 +177,11 @@ journalctl -u krypta-node --no-pager | grep -oE "12D3KooW[1-9A-Za-z]{44}" | sort
 
 ## Pendientes en esta máquina
 
+- **Renovar `security.txt` antes del 1 sep 2027.** Lo sirve Caddy en
+  `https://krypta-sp.neto.chat/.well-known/security.txt` (y el equivalente en Dallas). RFC 9116
+  exige un `Expires` y un fichero vencido se considera obsoleto: cambiar la fecha en
+  [`security.txt`](security.txt) y relanzar `deploy-caddy.sh` en los dos VPS (es idempotente).
+
 - **Registros antiguos con PeerIDs.** El binario del 10 sep se desplegó ese mismo día y
   `/var/log/syslog*` **ya está purgado** (12 líneas en `syslog`, `syslog.1` y `syslog.4.gz`;
   permisos `syslog:adm 640` conservados). Queda **el journal**, que no permite borrar líneas

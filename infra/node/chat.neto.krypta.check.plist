@@ -11,8 +11,12 @@
     launchctl list | grep krypta.check
     launchctl unload ~/Library/LaunchAgents/chat.neto.krypta.check.plist
 
-  El log se queda en /tmp/krypta-check.log; los fallos, además, saltan como aviso del sistema
-  (--notify), porque un log que solo se mira cuando ya sospechas no sirve de vigilancia.
+  El log se queda en /tmp/krypta-check.log; con --notify salta un aviso del sistema **al cambiar
+  el estado** (empieza a fallar, cambia lo que falla, se recupera), porque un log que solo se mira
+  cuando ya sospechas no sirve de vigilancia, y un aviso cada 15 min durante una caída acaba
+  ignorado. Con la Mac dormida launchd no lo ejecuta: por eso la Mac se deja sin suspensión
+  (decidido el 12 sep 2026; comprobar con `pmset -g`, sleep 0). Solo este modo (--notify) lleva
+  el estado: las pasadas a mano no lo tocan.
 -->
 <plist version="1.0">
 <dict>
