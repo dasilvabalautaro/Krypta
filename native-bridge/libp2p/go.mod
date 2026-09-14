@@ -2,6 +2,8 @@ module chat.neto.krypta/nativego
 
 go 1.26
 
+toolchain go1.26.4
+
 tool golang.org/x/mobile/cmd/gobind
 
 require (

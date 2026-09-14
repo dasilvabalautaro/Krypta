@@ -73,7 +73,19 @@ const maxIncomingMessage = 1 << 20
 
 func Ping() string     { return "pong from krypta go-libp2p bridge" }
 func Sum(a, b int) int { return a + b }
-func Version() string  { return "0.0.18-rdv1pass" }
+
+// buildCommit es el commit del que se compiló este puente. No se escribe a mano: build-aar.sh
+// lo inyecta con `-ldflags "-X chat.neto.krypta/nativego.buildCommit=<sha>"` (con "-modificado"
+// detrás si el módulo tenía cambios sin confirmar). Sin inyección —`go test`, o un
+// `gomobile bind` lanzado a mano— vale "desconocido", que es la verdad.
+//
+// Sustituye a un número de versión escrito a mano que nadie mantenía: hasta el 14 sep 2026
+// decía "0.0.18-rdv1pass" aunque el AAR se había regenerado varias veces después, así que no
+// servía para saber de qué fuente salía un binario. Ver docs/PLAN-privacidad-y-confianza.md §4.3.
+var buildCommit = "desconocido"
+
+// Version devuelve el commit del que se compiló el puente (ver buildCommit).
+func Version() string { return buildCommit }
 
 // --- Identidad persistente + intercambio de claves (X25519 desde la identidad libp2p) ---
 

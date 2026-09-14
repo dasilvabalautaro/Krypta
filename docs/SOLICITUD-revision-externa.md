@@ -352,8 +352,10 @@ respuesta.*
 > | `krypta-p2p-revision-externa-1.aar` | `4b7dcd5130d8bb0c89b4e5bcd2661fea4cbd2e267b777303b2a5d412fb6e49b4` |
 > | `krypta-arm64-debug-revision-externa-1.apk` | `a30ab852127a6cfde2bcf38d1b56ee10be3a03397d9d6bd7ff0bc76d695576ea` |
 >
-> Toolchain: Go 1.26.4, gomobile (`golang.org/x/mobile v0.0.0-20260611195102-4dd8f1dbf5d2`), NDK
-> 26.1.10909125, JDK 25.0.1, Gradle 9.4.1, AGP 9.2.1, Kotlin 2.2.10.
+> Toolchain: Go 1.26.4, gomobile (`golang.org/x/mobile v0.0.0-20260611195102-4dd8f1dbf5d2`),
+> **NDK 25.2.9519653 (clang 14.0.7)**, JDK 25.0.1, Gradle 9.4.1, AGP 9.2.1, Kotlin 2.2.10. An earlier
+> version of this text said NDK 26.1: the `.comment` section of the libraries shows otherwise,
+> because the build machine's `ANDROID_NDK_HOME` overrode the script's default.
 >
 > **The build is not reproducible yet**: the native libraries embed local build paths and no commit
 > identifier, so rebuilding the tag will not match these hashes byte for byte.

@@ -24,10 +24,17 @@ class Libp2pBridgeTest {
         assertEquals("pong from krypta go-libp2p bridge", node.nativePing())
     }
 
+    /**
+     * El puente dice **de qué commit sale**: 40 hexadecimales, con "-modificado" si se compiló
+     * con cambios sin confirmar en el módulo Go (lo inyecta build-aar.sh). Sustituye a una
+     * versión escrita a mano que nadie actualizaba —decía "0.0.18-rdv1pass" hasta el 14 sep
+     * 2026— y a una aserción que exigía "spike" y hacía tiempo que no se cumplía, sin que nadie
+     * lo viera porque este test instrumentado no se ejecuta en el móvil del autor.
+     */
     @Test
-    fun nativeVersion_isSpikeVersion() {
-        // Robust to version bumps: just confirm the bridge reports a spike version.
-        assertTrue(node.nativeVersion().startsWith("0.0.") && node.nativeVersion().contains("spike"))
+    fun nativeVersion_isTheSourceCommit() {
+        val version = node.nativeVersion()
+        assertTrue("versión inesperada: $version", Regex("^[0-9a-f]{40}(-modificado)?$").matches(version))
     }
 
     @Test

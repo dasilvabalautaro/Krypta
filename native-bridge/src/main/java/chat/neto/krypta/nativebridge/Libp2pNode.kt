@@ -118,7 +118,11 @@ class Libp2pNode @Inject constructor(
     /** Saludo desde el lado Go. Prueba la llamada JNI. */
     fun nativePing(): String = Bridge.ping()
 
-    /** Versión de la API del bridge nativo. */
+    /**
+     * **Commit del que se compiló el puente nativo**: 40 hexadecimales, con "-modificado" si el
+     * módulo Go tenía cambios sin confirmar, o "desconocido" si el AAR no salió de `build-aar.sh`.
+     * Es lo que liga el binario que se ejecuta con su código fuente.
+     */
     fun nativeVersion(): String = Bridge.version()
 
     /** Suma cruzando la frontera JNI (Go int -> Java long). */
