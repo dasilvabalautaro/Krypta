@@ -81,6 +81,12 @@ native-bridge/libp2p/build-aar.sh
 
 Usa `:app:assembleDebug`: el `assembleDebug` agregado sin módulo no funciona con AGP 9.
 
+Los binarios exactos de la versión que se somete a revisión externa (el AAR y el APK de
+depuración arm64, con su sha256) se publicarán en la release
+[`revision-externa-1`](https://github.com/dasilvabalautaro/Krypta/releases/tag/revision-externa-1).
+A 14 sep 2026 están compilados y **pendientes de publicar**. Son de depuración y todavía no son
+reproducibles; los avisos irán en la propia release.
+
 Para montar un nodo propio (también sirve para hacer pruebas de carga sin tocar los públicos),
 sigue [infra/node/README.md](infra/node/README.md).
 
@@ -139,7 +145,11 @@ but do see metadata; see [docs/security-model.md](docs/security-model.md) (Spani
 unsoftened threat model.
 
 Build: run `native-bridge/libp2p/build-aar.sh` (Go 1.26 + gomobile + NDK 26.1), then
-`./gradlew :app:assembleDebug`. Security reports: [SECURITY.md](SECURITY.md),
+`./gradlew :app:assembleDebug`. The binaries of the version under external review (AAR and arm64
+debug APK, with sha256) are built and will be published in the release
+[`revision-externa-1`](https://github.com/dasilvabalautaro/Krypta/releases/tag/revision-externa-1)
+(not published yet as of 14 Sep 2026).
+Security reports: [SECURITY.md](SECURITY.md),
 info@4000msnm.com.
 
 Licensed under either of MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache-2.0

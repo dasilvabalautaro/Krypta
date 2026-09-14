@@ -204,6 +204,19 @@ no tiene nada de esto.
    ve en GitHub. Nota: Signal **tampoco** tiene programa de
    recompensas, solo un correo de seguridad; lo que faltaba aquí era la vía, no el dinero.
 3. **Builds reproducibles** de APK, AAR y binario del nodo.
+
+   **Primer paso, 14 sep 2026.** El AAR y el APK de `revision-externa-1` se compilaron desde un
+   clon limpio, con su sha256, para la release de esa etiqueta, que está pendiente de publicar. Al hacerlo salió que
+   `build-aar.sh` **fallaba en un clon limpio** (el directorio de salida no existe); ya está
+   arreglado.
+
+   Lo que falta para que alguien pueda obtener los mismos bytes:
+   - Las `libgojni.so` llevan **rutas locales** y **ningún identificador de commit**. Haría falta
+     compilar con `-trimpath` e inyectar el commit en `Version()` con `-ldflags -X`; hoy
+     `Version()` dice `0.0.18-rdv1pass`, que está desfasado.
+   - Las **herramientas no están fijadas del todo**: falta la directiva `toolchain` en `go.mod`,
+     gomobile se instala con `@latest` en vez de con una versión concreta, y el script ejecuta
+     `go mod tidy`.
 4. **Página de operador** e informe de transparencia, aunque diga «0 peticiones».
 5. **Un segundo operador ajeno** en la lista de nodos por defecto.
 

@@ -389,6 +389,7 @@ la revisión.
 | Comparación explícita del ratchet PQ lento con SPQR | ⬜ [REVISION-comparacion-signal-2026-09-12.md](REVISION-comparacion-signal-2026-09-12.md) §4.6 |
 | §16 con dos móviles, para que el formato que se revise esté congelado | ⬜ No bloquea el envío: una revisión tarda meses en empezar. Si el formato cambia antes, se etiqueta `revision-externa-2` y se avisa |
 | Etiqueta del commit que se revisa | ✅ `revision-externa-1` (14 sep 2026). No se mueve nunca |
+| Binarios de la etiqueta | 🟡 AAR y APK de depuración arm64 compilados **desde un clon limpio** de la etiqueta, con sha256 (SOLICITUD §5). **Falta publicar la release de GitHub**, que espera a iniciar sesión en `gh`. Son los que lleva el móvil del autor. **No son reproducibles todavía** (plan §4.3). Hacerlo destapó que `build-aar.sh` fallaba en un clon limpio; se arregló en el commit siguiente |
 | Textos de la solicitud (OTF, correo de seguimiento, presupuesto y alcance técnico) | ✅ [SOLICITUD-revision-externa.md](SOLICITUD-revision-externa.md). **La tramita el autor** |
 | Canal cifrado para recibir los hallazgos | ⬜ No hay clave PGP publicada ([SECURITY.md](../SECURITY.md)); conviene tenerla antes de enviar |
 | Solicitud enviada (fecha, vía, identificador) | ⬜ |

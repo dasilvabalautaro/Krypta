@@ -24,6 +24,13 @@ export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$HOME/Library/Android/sdk/ndk/26.1.
 cd "$(dirname "$0")"
 
 go mod tidy
+# El directorio de salida solo contiene ficheros ignorados por git (el AAR no se versiona), así
+# que **no existe en un clon limpio** y gomobile fallaba al final, tras compilar las cuatro ABI,
+# con "open ../libs/krypta-p2p.aar: no such file or directory". Lo destapó el 14 sep 2026 la
+# compilación desde un clon de la etiqueta `revision-externa-1`: el camino que la documentación
+# da para un clon nuevo no funcionaba, y en la máquina del autor nunca se notó porque el
+# directorio ya estaba ahí.
+mkdir -p ../libs
 gomobile bind \
   -target=android \
   -androidapi 30 \

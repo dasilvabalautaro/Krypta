@@ -1747,6 +1747,23 @@ the commit tagged `revision-externa-1`. That tag never moves. While the review i
 change the wire format (REVISION §5.4); if it has to change before the review starts, tag
 `revision-externa-2` and say so.
 
+**Binaries for the review (14 Sep 2026).**
+
+- **Built from the tag.** The AAR and the arm64 debug APK were rebuilt from a **clean clone** of
+  the tag, with their sha256, for the GitHub release `revision-externa-1`. **That release is not
+  published yet**: it needs `~/.local/bin/gh auth login` first. Hashes: AAR
+  `4b7dcd51…49b4`, APK `a30ab852…76ea`. That AAR replaced the local one; the previous one
+  (`c1b4f1eb…`) had been built 3 minutes before the last edit to `conn_prune.go`, so nobody could
+  say which source it came from. That APK is on the TECNO.
+- **`build-aar.sh` failed on a fresh clone**, which the rebuild exposed. `native-bridge/libs/`
+  holds only ignored files, so a fresh clone doesn't have it, and gomobile died *after* compiling
+  all four ABIs. Fixed with `mkdir -p ../libs`.
+- **Builds are still not reproducible.** `libgojni.so` embeds local paths and no commit id (the
+  module shows as `(devel)`), and `Version()` still says `0.0.18-rdv1pass`.
+- **`gh` is not installable via Homebrew on this Mac.** macOS 26 on Intel is Tier 3: there is no
+  bottle, and building from source would upgrade Homebrew's Go, the one that builds the AAR. The
+  official binary, checksum-verified, lives in `~/.local/bin/gh`, which is not on `PATH`.
+
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a
 prioritized action plan; update it (or supersede it with a newer one) as items close.

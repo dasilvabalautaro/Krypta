@@ -828,6 +828,9 @@ directa (DCUtR) o se queda en relay.
 - **Build de la revisión del protocolo (14 sep)**: instalado en el TECNO sobre la base real con
   `adb install -r`, sin tocar datos. Arranca, pinta las conversaciones con su vista previa
   descifrada y dice «conectado»; **el autor confirmó la verificación en el móvil** el mismo día.
+  Después se reinstaló el APK compilado **desde un clon limpio de la etiqueta
+  `revision-externa-1`** (sha256 `a30ab852…76ea`, el que irá en su release): arranca en 3,7 s y pinta lo
+  mismo, con «conectado».
   Lo que necesita el segundo móvil sigue pendiente en §16.11 (volver a añadir un contacto) y
   §16.12 (ráfagas cruzadas).
 - **Bloquear contacto (6 sep)**: en el TECNO, con un contacto de usar y tirar (creado con el

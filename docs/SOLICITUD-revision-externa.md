@@ -66,6 +66,12 @@ Quarkslab. Para un modelo formal, Cryspen.
 ## 2. Antes de enviar
 
 - [x] **Commit etiquetado** `revision-externa-1` publicado en GitHub.
+- [x] **Binarios de la etiqueta compilados**: el AAR y el APK de depuración arm64, desde un clon
+  limpio de `revision-externa-1`, con su sha256 (§5, «Binaries built from the tag»). Son los mismos
+  que lleva el móvil del autor.
+- [ ] **Publicar la release** `revision-externa-1` con esos dos ficheros y `SHA256SUMS.txt`. Está
+  preparada; falta iniciar sesión en GitHub CLI (`~/.local/bin/gh auth login`). Hasta entonces el
+  enlace del §5 no lleva a nada, así que **no hay que enviar la solicitud antes**.
 - [ ] **Canal cifrado para recibir los hallazgos.** [SECURITY.md](../SECURITY.md) dice que no hay
   clave PGP publicada, y un auditor la va a pedir para mandar lo encontrado antes de que sea
   público. Hay que generar una (o acordar otro canal cifrado) y publicar su huella en SECURITY.md
@@ -330,9 +336,26 @@ respuesta.*
 > `docs/REVISION-protocolo-2026-09-14.md` §4.
 >
 > **Logistics:** build from source (`native-bridge/libp2p/build-aar.sh`, then
-> `./gradlew :app:assembleDebug`); JVM tests with `./gradlew testDebugUnitTest` (279 tests); Go tests
-> in `native-bridge/libp2p` and `infra/node`. A debug APK (arm64) is available on request. Contact:
-> info@4000msnm.com (English or Spanish, UTC−4).
+> `./gradlew :app:assembleDebug`); at this tag, create `native-bridge/libs/` first, because the
+> script fails on a fresh clone (fixed in the next commit). JVM tests with
+> `./gradlew testDebugUnitTest` (279 tests); Go tests in `native-bridge/libp2p` and `infra/node`.
+> Contact: info@4000msnm.com (English or Spanish, UTC−4).
+>
+> **Binaries built from the tag.** The GitHub release
+> [`revision-externa-1`](https://github.com/dasilvabalautaro/Krypta/releases/tag/revision-externa-1)
+> holds the AAR and the arm64 debug APK, built on 14 Sep 2026 from a clean clone of the tag. These
+> are the binaries installed on the developer's phone.
+>
+> | File | sha256 |
+> |---|---|
+> | `krypta-p2p-revision-externa-1.aar` | `4b7dcd5130d8bb0c89b4e5bcd2661fea4cbd2e267b777303b2a5d412fb6e49b4` |
+> | `krypta-arm64-debug-revision-externa-1.apk` | `a30ab852127a6cfde2bcf38d1b56ee10be3a03397d9d6bd7ff0bc76d695576ea` |
+>
+> Toolchain: Go 1.26.4, gomobile (`golang.org/x/mobile v0.0.0-20260611195102-4dd8f1dbf5d2`), NDK
+> 26.1.10909125, JDK 25.0.1, Gradle 9.4.1, AGP 9.2.1, Kotlin 2.2.10.
+>
+> **The build is not reproducible yet**: the native libraries embed local build paths and no commit
+> identifier, so rebuilding the tag will not match these hashes byte for byte.
 
 ---
 
