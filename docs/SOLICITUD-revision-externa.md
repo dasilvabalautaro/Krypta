@@ -69,9 +69,10 @@ Quarkslab. Para un modelo formal, Cryspen.
 - [x] **Binarios de la etiqueta compilados**: el AAR y el APK de depuración arm64, desde un clon
   limpio de `revision-externa-1`, con su sha256 (§5, «Binaries built from the tag»). Son los mismos
   que lleva el móvil del autor.
-- [ ] **Publicar la release** `revision-externa-1` con esos dos ficheros y `SHA256SUMS.txt`. Está
-  preparada; falta iniciar sesión en GitHub CLI (`~/.local/bin/gh auth login`). Hasta entonces el
-  enlace del §5 no lleva a nada, así que **no hay que enviar la solicitud antes**.
+- [x] **Release publicada** el 14 sep 2026:
+  [`revision-externa-1`](https://github.com/dasilvabalautaro/Krypta/releases/tag/revision-externa-1),
+  marcada como *prerelease*, con los dos ficheros y `SHA256SUMS.txt`. Los sha256 que calcula GitHub
+  para cada fichero coinciden con los de §5.
 - [ ] **Canal cifrado para recibir los hallazgos.** [SECURITY.md](../SECURITY.md) dice que no hay
   clave PGP publicada, y un auditor la va a pedir para mandar lo encontrado antes de que sea
   público. Hay que generar una (o acordar otro canal cifrado) y publicar su huella en SECURITY.md

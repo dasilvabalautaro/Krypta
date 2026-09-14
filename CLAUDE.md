@@ -1750,8 +1750,9 @@ change the wire format (REVISION §5.4); if it has to change before the review s
 **Binaries for the review (14 Sep 2026).**
 
 - **Built from the tag.** The AAR and the arm64 debug APK were rebuilt from a **clean clone** of
-  the tag, with their sha256, for the GitHub release `revision-externa-1`. **That release is not
-  published yet**: it needs `~/.local/bin/gh auth login` first. Hashes: AAR
+  the tag and published in the GitHub release `revision-externa-1` (a prerelease; GitHub's own
+  asset digests match the local sha256). `gh` is logged in as `dasilvabalautaro`, with the token
+  in the keyring. Hashes: AAR
   `4b7dcd51…49b4`, APK `a30ab852…76ea`. That AAR replaced the local one; the previous one
   (`c1b4f1eb…`) had been built 3 minutes before the last edit to `conn_prune.go`, so nobody could
   say which source it came from. That APK is on the TECNO.

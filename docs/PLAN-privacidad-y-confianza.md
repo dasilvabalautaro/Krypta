@@ -206,7 +206,8 @@ no tiene nada de esto.
 3. **Builds reproducibles** de APK, AAR y binario del nodo.
 
    **Primer paso, 14 sep 2026.** El AAR y el APK de `revision-externa-1` se compilaron desde un
-   clon limpio, con su sha256, para la release de esa etiqueta, que está pendiente de publicar. Al hacerlo salió que
+   clon limpio y se publicaron con su sha256 en la
+   [release de esa etiqueta](https://github.com/dasilvabalautaro/Krypta/releases/tag/revision-externa-1). Al hacerlo salió que
    `build-aar.sh` **fallaba en un clon limpio** (el directorio de salida no existe); ya está
    arreglado.
 
