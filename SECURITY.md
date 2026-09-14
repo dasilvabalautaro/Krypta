@@ -36,24 +36,35 @@ Escribe a **[info@4000msnm.com](mailto:info@4000msnm.com)** con el asunto `[segu
 | App Android (`chat.neto.krypta`) | `app/`, `core/`, `data/`, `p2p-signaling/` |
 | Puente Go sobre go-libp2p | `native-bridge/libp2p/` |
 | Nodo de infraestructura (bootstrap, DHT, relay, buzón, wake) | `infra/node/` y los nodos públicos `krypta-sp.neto.chat` y `krypta-dal.neto.chat` |
-| Diseños de protocolo | `docs/DISENO-ratchet.md`, `docs/DISENO-buzon-ciego.md`, `docs/DISENO-postcuantico.md` |
+| Especificación normativa del protocolo | `docs/ESPECIFICACION-protocolo.md` |
+| Diseños de protocolo | `docs/DISENO-ratchet.md`, `docs/DISENO-buzon-ciego.md`, `docs/DISENO-postcuantico.md`, `docs/DISENO-rotacion-identidad.md` |
 
-Interesan especialmente: todo lo que rompa la confidencialidad o la autenticidad de los mensajes
-y llamadas; fallos del ratchet por épocas (reutilización de claves o nonces, degradaciones,
-abrir un mensaje con otra clave); formas de que un desconocido obtenga datos de un usuario a
-partir de su PeerID; fallos de parseo de datos que llegan de la red; y cualquier camino por el
-que un nodo guarde o revele más de lo que dice [docs/security-model.md](docs/security-model.md).
+Interesan especialmente:
+
+- lo que rompa la confidencialidad o la autenticidad de los mensajes y las llamadas;
+- los fallos del ratchet por épocas: reutilización de claves o nonces, degradaciones, abrir un
+  mensaje con otra clave;
+- **cualquier propiedad de las numeradas (P1–P14) en el §12 de la especificación que no se
+  cumpla**;
+- las formas de que un desconocido obtenga datos de un usuario a partir de su PeerID;
+- los fallos de parseo de datos que llegan de la red;
+- cualquier camino por el que un nodo guarde o revele más de lo que dice
+  [docs/security-model.md](docs/security-model.md).
 
 ## Qué no entra, o ya está documentado
 
 Antes de escribir, mira el §9 de [docs/security-model.md](docs/security-model.md) («Resumen
-honesto de lo que Krypta NO protege»). Lo que está ahí es un **límite conocido**, no un hallazgo
-nuevo — aunque una forma nueva y más barata de explotarlo sí interesa. Entre otros:
+honesto de lo que Krypta NO protege») y el §13 de
+[docs/ESPECIFICACION-protocolo.md](docs/ESPECIFICACION-protocolo.md) («Debilidades conocidas»).
+Lo que está ahí es un **límite conocido**, no un hallazgo nuevo, aunque una forma nueva y más
+barata de explotarlo sí interesa. Entre otros:
 
 - El operador del nodo ve metadatos: quién está conectado, quién habla con quién por el relay y
   el grafo diario de parejas en la DHT.
 - Tus contactos y el operador del nodo pueden ver tu IP.
 - No hay criptografía post-cuántica, y la época 0 de cada sesión no tiene secreto hacia adelante.
+- Quien obtiene una identidad puede escribir como sus contactos y secuestrar una sesión con un
+  linaje forjado (W-3 y W-4 de la especificación).
 - Quien tiene el móvil desbloqueado, root o código dentro del proceso lo tiene todo.
 - Las compilaciones de depuración permiten `adb run-as`.
 
@@ -87,10 +98,15 @@ whichever comes first, and credit if you want it. **There is no bug bounty.** Go
 within these rules will not be pursued.
 
 **In scope:** the Android app, the Go libp2p bridge, the infrastructure node and the public nodes
-`krypta-sp.neto.chat` / `krypta-dal.neto.chat`, and the protocol designs under `docs/`. **Known
-limits** are listed in §9 of `docs/security-model.md` (operator-visible metadata, IP exposure to
-contacts and the operator, no post-quantum crypto, no forward secrecy for epoch 0, a compromised
-device); a new or cheaper way to exploit them is welcome, the limit itself is not a finding.
+`krypta-sp.neto.chat` / `krypta-dal.neto.chat`, the normative protocol specification
+(`docs/ESPECIFICACION-protocolo.md`) and the protocol designs under `docs/`. A violation of any
+numbered property (P1–P14, spec §12) is especially welcome.
+
+**Known limits** are listed in §9 of `docs/security-model.md` and §13 of the specification:
+operator-visible metadata, IP exposure to contacts and the operator, no post-quantum crypto, no
+forward secrecy for epoch 0, an identity holder can impersonate contacts and hijack a session
+through a forged lineage, and a compromised device. A new or cheaper way to exploit them is
+welcome; the limit itself is not a finding.
 
 **Rules:** test only against your own devices and identities; **no load or DoS testing against
 the public nodes** — run your own from `infra/node`; if you reach someone else's data, stop,

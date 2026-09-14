@@ -1557,6 +1557,11 @@ change, update this file and [docs/architecture.md](docs/architecture.md) in the
 change; when a roadmap decision changes, update
 [docs/PLAN-senalizacion-descentralizada.md](docs/PLAN-senalizacion-descentralizada.md).
 
+**Before every commit and push** (the author's standing instruction, 14 Sep 2026): check that
+`README.md`, this file and the `docs/` touched by the change are current. That includes the README's
+status note and its documentation table whenever a document is added or the security stance
+changes. Commits go to `main`: Nyx's upstream check reads `upstream/main`.
+
 **Play Store readiness:** the launch checklist (what's done, what's a store-listing chore,
 what's an infra risk) lives in [docs/PLAY-STORE.md](docs/PLAY-STORE.md) — update it as items
 close.
@@ -1679,6 +1684,68 @@ already go through `findByPeerId`; only `addContact` assumes `id == PeerID`), dr
 revocation without successor are part of it. Stated plainly: it does not help if the key is lost, and
 against a thief it only helps if both notices reach the contact. Phases 1–3 don't touch the wire;
 4–5 wait for PRUEBAS-PENDIENTES §16 and the external review.
+
+**Protocol review (14 Sep 2026).** An internal review of the ratchet and capability code against
+its own design docs, done to address the "custom, days-old, unreviewed protocol" observation.
+Findings, and the plan for the external review and the formal model:
+[docs/REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md). The **normative
+spec** (bytes, derivations, rules, numbered properties P1–P14, known weaknesses W-1–W-13, questions
+for a reviewer) is [docs/ESPECIFICACION-protocolo.md](docs/ESPECIFICACION-protocolo.md). **Keep the
+spec in sync with the code in the same change**: if they disagree, the code wins and the spec is
+wrong. Every finding was reproduced by a test that failed before its fix.
+
+- **H-0, critical.** `RatchetSessions` had no per-conversation exclusion, and `load` suspends
+  (Room), so two concurrent operations on one conversation started from the same state: 8
+  concurrent sends all came out as `(L, 0, 1)`, i.e. the same AES-GCM key **and nonce**, and a
+  receive crossing a send rolled `sendN` back. Real triggers: the read receipt on chat open while
+  the mailbox delivers, a text during a chunked file, call signals, launched rehooks. Fixed with a
+  `Mutex` per conversation around send, receive (dedup included) and forget. Nothing inside awaits
+  another ratchet operation; reactions are launched. **Test gotcha:** the first concurrency test
+  *passed* because it yielded **before** reading. The window is between read and save, so the fake
+  store must read, then `yield()`. `RatchetPropertyTest` is sequential and could never see this.
+- **H-1, high.** After deleting and re-adding a contact, or importing a `.krbk` (neither
+  `peerProtocol` nor the ratchet session survive, and `.krbk` doesn't carry them), the side that
+  lost them believed the peer spoke v1. The peer announces once per version and never repeated it,
+  and the rehook was gated on `usesRatchet`, so **every ratchet message from the peer was dropped
+  and acked, forever** (PRUEBAS §16.5 would have failed on-device). Fixed with no incompatible wire
+  change:
+  - `V\n<version>\n<the version I have recorded for you>`; older parsers read line 1 only;
+  - `onHello` re-announces **over the static key** to whoever has us recorded below what we
+    already announced;
+  - crossing into v2 sends a first ratchet envelope, so the peer adopts our lineage;
+  - a rehook to a contact recorded < 2 that writes ratchet sends a static `V`;
+  - `addContact` kicks the WAN.
+
+  Both ends need this build.
+- **H-2 and H-3.** `peerProtocol` could go **down**:
+  - from stale contact copies written via `@Insert(REPLACE)`: `setVerified`/`setBlocked` from UI
+    state, the `announceCapabilities` snapshot, `addContact`, `.krbk` import;
+  - from a forged `V` with a lower version (an S-holder gets a silent, permanent downgrade to v1,
+    i.e. passive reading).
+
+  Now it never decreases. `ContactDao.UPSERT_SQL` is a single `INSERT OR REPLACE` taking
+  `MAX(new, (SELECT …))`, plus `RAISE_PEER_PROTOCOL_SQL`; the contract lives on
+  `ContactRepository.upsert`, with a default `raisePeerProtocol` for test doubles. `learnFromRatchet`
+  raises it from authenticated traffic (a v2 envelope that opens → ≥ 2, padded → ≥ 3), which heals
+  pairs already hit. `ContactUpsertSqlTest` runs the same SQL strings on the JVM. **No schema
+  change: the DB stays v9.**
+- **H-4 and H-5, not fixed on purpose.** They are lineage and auth-level design questions and wait
+  for the external review. An S-holder hijacks a session with one epoch-0 envelope carrying a huge
+  forged lineage, with no way back (pinned in `RatchetTest`). Sender authentication is S-level,
+  which includes KCI through blind-deposit labels.
+- **H-6.** Re-adding a blocked contact unblocked it. Fixed.
+
+Also, `HkdfTest` pins the only hand-written primitive to the RFC 5869 vectors (recomputed with
+Python's standard library first). JVM suite **279, 0 failures**. DISENO-ratchet §8.6 ("no external
+review sought") is **reverted**: no more protocol changes (lineage, post-quantum, rotation) until
+the review. Installed on the TECNO: it launches, lists conversations with decrypted previews and
+shows "conectado". The contact write path (new SQL) and the announcement exchange were not
+exercised on-device; they need the second phone (PRUEBAS §16.11). The author confirmed the
+on-device verification the same day. **The external review is being requested by the author**
+with the texts in [docs/SOLICITUD-revision-externa.md](docs/SOLICITUD-revision-externa.md), against
+the commit tagged `revision-externa-1`. That tag never moves. While the review is pending, don't
+change the wire format (REVISION §5.4); if it has to change before the review starts, tag
+`revision-externa-2` and say so.
 
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a

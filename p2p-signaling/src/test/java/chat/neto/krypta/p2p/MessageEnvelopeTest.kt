@@ -167,4 +167,28 @@ class MessageEnvelopeTest {
         // Y algo que no es un número no se cuela como anuncio.
         assertNull(MessageEnvelope.decode("V\nhola".toByteArray()))
     }
+
+    /**
+     * H-1 de `docs/REVISION-protocolo-2026-09-14.md`: el anuncio lleva además **lo que tengo
+     * apuntado del otro**, para que quien lo haya perdido pueda pedir que se le repita. Tiene que
+     * seguir leyéndose igual en un cliente anterior, que solo mira la primera línea.
+     */
+    @Test
+    fun `el anuncio lleva lo que tengo apuntado del otro sin romper a un cliente anterior`() {
+        val con = MessageEnvelope.decode(MessageEnvelope.encodeHello(3, knows = 0)) as MessageEnvelope.Decoded.Hello
+        assertEquals(3, con.protocol)
+        assertEquals(0, con.knows)
+
+        val sin = MessageEnvelope.decode(MessageEnvelope.encodeHello(3)) as MessageEnvelope.Decoded.Hello
+        assertNull("sin segunda línea no se inventa nada", sin.knows)
+
+        // Así leía el anuncio el cliente anterior (hasta el 14 sep 2026): solo la primera línea.
+        val bytes = MessageEnvelope.encodeHello(3, knows = 2)
+        assertEquals(3, String(bytes, 2, bytes.size - 2).substringBefore('\n').trim().toInt())
+
+        // Basura en la segunda línea no invalida el anuncio: solo se ignora.
+        val basura = MessageEnvelope.decode("V\n3\nxx".toByteArray()) as MessageEnvelope.Decoded.Hello
+        assertEquals(3, basura.protocol)
+        assertNull(basura.knows)
+    }
 }

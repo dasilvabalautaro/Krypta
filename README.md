@@ -7,7 +7,10 @@ cuando el otro está desconectado.
 
 > **Estado: beta, sin publicar en tiendas.** Lo desarrolla y opera una sola persona. La
 > criptografía de sesión (un doble ratchet por épocas) es propia y **no ha tenido revisión
-> externa**. Antes de confiarle nada sensible, lee
+> externa**; la revisión está **en trámite**. Mientras tanto, el protocolo está
+> [especificado](docs/ESPECIFICACION-protocolo.md) para poder revisarse, y una
+> [revisión interna](docs/REVISION-protocolo-2026-09-14.md) del 14 sep 2026 encontró y arregló
+> dos fallos graves. Antes de confiarle nada sensible, lee
 > [lo que Krypta no protege](docs/security-model.md#9-resumen-honesto-de-lo-que-krypta-no-protege).
 
 *English summary [below](#english).*
@@ -38,6 +41,9 @@ cuando el otro está desconectado.
   el contenido, pero sí metadatos: quién está conectado, quién habla con quién cuando el tráfico
   pasa por el relay, y el grafo diario de parejas en la DHT.
 - **Tus contactos y el operador del nodo pueden ver tu IP.**
+- **Quien robe tu identidad y además actúe** (no solo escuche) puede suplantar a tus contactos y
+  secuestrar una conversación. El ratchet protege frente a quien solo escucha. Está declarado en
+  la [especificación](docs/ESPECIFICACION-protocolo.md#13-debilidades-conocidas).
 - **No hay** grupos, multidispositivo, criptografía post-cuántica (diseñada, sin implementar) ni
   rotación de identidad (diseñada, sin implementar).
 - **La copia `.krbk` no incluye los mensajes**: perder el móvil es perder el historial.
@@ -85,6 +91,9 @@ Casi toda está en español.
 | Documento | De qué trata |
 |---|---|
 | [security-model.md](docs/security-model.md) | Modelo de seguridad: qué ve cada actor y qué no se protege |
+| [ESPECIFICACION-protocolo.md](docs/ESPECIFICACION-protocolo.md) | Especificación normativa del protocolo: bytes, derivaciones, reglas, propiedades y debilidades declaradas |
+| [REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md) | Revisión interna del protocolo, sus hallazgos y el plan de revisión externa y análisis formal |
+| [SOLICITUD-revision-externa.md](docs/SOLICITUD-revision-externa.md) | Qué se pide en la revisión externa, y los textos para pedirla |
 | [architecture.md](docs/architecture.md) | Arquitectura actual |
 | [DISENO-ratchet.md](docs/DISENO-ratchet.md) | Doble ratchet por épocas y relleno por tramos |
 | [DISENO-buzon-ciego.md](docs/DISENO-buzon-ciego.md) | Depósito ciego en el buzón |
@@ -120,9 +129,14 @@ punching), with an encrypted store-and-forward mailbox for offline delivery and 
 Google-free wake channel.
 
 **Status: beta, not published.** Built and operated by one person. The session protocol (an
-epoch-based double ratchet) is custom and **has not been externally reviewed**. The infrastructure
-nodes never see content but do see metadata; see
-[docs/security-model.md](docs/security-model.md) (Spanish) for the full, unsoftened threat model.
+epoch-based double ratchet) is custom and **has not been externally reviewed yet**; a review is
+being requested. In the meantime, the protocol has a normative specification
+([docs/ESPECIFICACION-protocolo.md](docs/ESPECIFICACION-protocolo.md), Spanish), with numbered
+properties and declared weaknesses. An internal review on 14 Sep 2026
+([docs/REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md)) found and fixed
+a key/nonce reuse race and a permanent message-loss bug. The infrastructure nodes never see content
+but do see metadata; see [docs/security-model.md](docs/security-model.md) (Spanish) for the full,
+unsoftened threat model.
 
 Build: run `native-bridge/libp2p/build-aar.sh` (Go 1.26 + gomobile + NDK 26.1), then
 `./gradlew :app:assembleDebug`. Security reports: [SECURITY.md](SECURITY.md),

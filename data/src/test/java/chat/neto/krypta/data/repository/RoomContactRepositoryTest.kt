@@ -19,10 +19,23 @@ import org.junit.Test
  */
 class RoomContactRepositoryTest {
 
+    /** Con la semántica del SQL de verdad (que prueba `ContactUpsertSqlTest`): la versión no baja. */
     private class FakeDao : ContactDao {
         val store = linkedMapOf<String, ContactEntity>()
         override fun observeAll(): Flow<List<ContactEntity>> = flowOf(store.values.toList())
-        override suspend fun upsert(contact: ContactEntity) { store[contact.id] = contact }
+        override suspend fun upsert(
+            id: String, displayName: String, peerId: String, publicKey: ByteArray,
+            verified: Boolean, blocked: Boolean, peerProtocol: Int, announcedProtocol: Int,
+        ) {
+            val previa = store[id]?.peerProtocol ?: 0
+            store[id] = ContactEntity(
+                id, displayName, peerId, publicKey, verified, blocked,
+                maxOf(previa, peerProtocol), announcedProtocol,
+            )
+        }
+        override suspend fun raisePeerProtocol(id: String, protocol: Int) {
+            store[id]?.let { store[id] = it.copy(peerProtocol = maxOf(it.peerProtocol, protocol)) }
+        }
         override suspend fun findById(id: String) = store[id]
         override suspend fun findByPeerId(peerId: String) = store.values.find { it.peerId == peerId }
         override suspend fun delete(id: String) { store.remove(id) }

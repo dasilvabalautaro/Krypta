@@ -1,7 +1,14 @@
 # Modelo de seguridad de Krypta
 
-**Última actualización:** 10 de septiembre de 2026 — **cifrado en reposo y ratchet**. Desde la
-última revisión: la base de datos va cifrada entera (SQLCipher, 9 sep), los adjuntos también
+**Última actualización:** 14 de septiembre de 2026 — **revisión del protocolo**. Se arreglaron dos
+fallos de implementación del ratchet (H-0: clave y nonce repetidos con operaciones simultáneas;
+H-1: mensajes perdidos para siempre tras volver a añadir un contacto) y se declararon dos límites de
+diseño frente a quien roba una identidad y actúa (§9, puntos 11 y 12;
+[REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md)). La especificación normativa
+del protocolo está en [ESPECIFICACION-protocolo.md](ESPECIFICACION-protocolo.md).
+
+**Actualización anterior:** 10 de septiembre de 2026 — **cifrado en reposo y ratchet**. Desde la
+revisión previa: la base de datos va cifrada entera (SQLCipher, 9 sep), los adjuntos también
 (9 sep), la clave de cada llamada se negocia en vez de derivarse de la identidad (9 sep), y el
 **doble ratchet está desplegado con el envío encendido** (10 sep) — pero **por pareja** y **sin
 prueba en dos móviles reales todavía**, así que §4 lo cuenta como mecanismo, no como garantía.
@@ -453,6 +460,26 @@ escrituras.
     presente, es una apuesta sobre cuándo existe la máquina, y equivocarse no tiene arreglo
     retroactivo. Diseñado y medido el 11 sep 2026 en
     [DISENO-postcuantico.md](DISENO-postcuantico.md), **sin implementar** a propósito (ver §10).
+11. **La recuperación tras un robo de identidad, frente a quien actúa** (revisión del 14 sep 2026,
+    [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md)). El ratchet deja fuera
+    a quien **solo escucha** después de un robo, en cuanto los dos giran claves. A quien tiene la
+    identidad **y además manda algo**, no:
+    - Con un sobre de época 0 y un linaje forjado **secuestra la sesión** y lee en pasivo lo que
+      escriba el otro, sin vuelta atrás hasta borrar el contacto (H-4).
+    - Como la autenticación del remitente es la del secreto compartido, **puede escribir como
+      cualquiera de tus contactos**. Con el depósito ciego eso incluye ponerte palabras en boca de
+      un contacto usando **tu propia** identidad robada, por ejemplo de tu `.krbk` (H-5).
+    - La variante **silenciosa**, degradar la pareja a la clave estática con un anuncio forjado,
+      estaba abierta y **se cerró el mismo día** (H-3).
+12. **Dos fallos de implementación que ya no están, pero que estuvieron** (revisión del 14 sep
+    2026). Con el envío por ratchet encendido desde el 10 sep:
+    - dos operaciones simultáneas sobre la misma conversación podían **repetir clave y nonce**
+      (H-0);
+    - borrar y volver a añadir un contacto, o importar un `.krbk`, hacía que **sus mensajes se
+      perdieran para siempre** (H-1).
+
+    Solo afectaba a parejas con los dos móviles en un build del 10 al 13 sep, y no hay forma de
+    saber desde fuera si llegó a ocurrir.
 
 ---
 

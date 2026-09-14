@@ -44,7 +44,9 @@ Dos cosas que conviene tener claras al leer el plan, porque son las que más pes
 | §16: reentrega del buzón, archivo grande cruzando época, pérdida de estado, llamada | ⬜ **pendiente, y es la puerta de publicación** |
 | §13 entrega en 2.º plano | ✅ una muestra el 10 sep; falta la medición de no regresión |
 | Failover São Paulo → Dallas | 🟡 media prueba, ocurrió sola; falta que el destinatario retire del segundo nodo |
-| Tests de propiedades del ratchet (pérdidas, desorden, duplicados, envíos simultáneos, pérdida de estado) | ✅ 10 sep 2026 (`RatchetPropertyTest`) — y encontró algo en su primera corrida: ver abajo |
+| Tests de propiedades del ratchet (pérdidas, desorden, duplicados, envíos simultáneos, pérdida de estado) | ✅ 10 sep 2026 (`RatchetPropertyTest`) — y encontró algo en su primera corrida: ver abajo. Ojo: «envíos simultáneos» ahí es **lógico**, no concurrente; la carrera real (H-0) no la podía ver |
+| Revisión interna del protocolo | ✅ 14 sep 2026 ([REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md)): **H-0** (dos operaciones simultáneas repetían clave y nonce) y **H-1** (tras borrar y volver a añadir un contacto, o importar un `.krbk`, sus mensajes se perdían para siempre), arreglados con tests que fallaban antes |
+| §16.11 y §16.12: volver a añadir un contacto, y ráfagas cruzadas, con dos móviles | ⬜ pendiente (necesita el build del 14 sep en los dos) |
 | `check-nodes.sh` programado con aviso | ✅ 12 sep 2026: cargado en launchd en la Mac (cada 15 min, aviso al cambiar el estado, 1,2 s de CPU por pasada en vez de 84). Decidido dejar la Mac sin suspensión en vez de un canal de alerta externo; detectó sola la caída de Dallas durante su redespliegue |
 
 Los tests de propiedades ya están (`RatchetPropertyTest`): sortean secuencias de envíos,
@@ -129,6 +131,19 @@ también le pasa a Signal.
    post-cuántica. Opciones de bajo coste: el Security Lab del Open Technology Fund (audita
    gratis proyectos abiertos de libertad en internet — hay que confirmar disponibilidad y
    **exige código abierto**, ver fase 4), o una revisión pagada de pocos días solo del ratchet.
+
+   **Decisión revertida y paquete preparado el 14 sep 2026.** Quedan escritas:
+   - la **especificación normativa** ([ESPECIFICACION-protocolo.md](ESPECIFICACION-protocolo.md)),
+     con propiedades numeradas, debilidades declaradas y preguntas para quien revise;
+   - una **revisión interna previa**
+     ([REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md)). Encontró H-0 (clave
+     y nonce repetidos con operaciones simultáneas) y H-1 (mensajes perdidos para siempre tras
+     volver a añadir un contacto), ya arreglados con tests que fallaban antes.
+
+   Qué pedir, a quién y con qué reglas está en el §5 de esa revisión. **La solicitud la tramita el
+   autor** (14 sep 2026), con los textos de
+   [SOLICITUD-revision-externa.md](SOLICITUD-revision-externa.md) y sobre el commit etiquetado
+   `revision-externa-1`.
 2. **Post-cuántico híbrido.** Signal tiene el acuerdo inicial post-cuántico desde 2023 (PQXDH)
    y desde octubre de 2025 también el ratchet (SPQR, con ML-KEM-768). Krypta no tiene nada, y
    como `S` es función pura de dos identidades X25519, un adversario cuántico futuro que haya
@@ -155,6 +170,14 @@ también le pasa a Signal.
      estuviera mal implementado, el resultado sería una app que funciona y es igual de segura que
      hoy — nada falla, nada avisa. De ahí que el vector de prueba conocido sea obligatorio.
 3. **Modelo formal ligero** (ProVerif/Tamarin) del ratchet por épocas, si aparece quien lo haga.
+   **Planificado el 14 sep 2026** ([REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md) §4):
+   - **Tamarin, por fases**: núcleo → linaje → capacidades → llamadas, con seis lemas.
+   - **Una comprobación de cordura**: el modelo con linaje tiene que encontrar H-4 solo, y el de
+     capacidades con la regla anterior, H-3. Un modelo que no encuentra un ataque conocido no está
+     modelando lo que creemos.
+   - **Lo que no verá**: la carrera de H-0, porque trata cada paso como atómico.
+
+   Nada modelado todavía, y Tamarin no está instalado.
 
 ---
 

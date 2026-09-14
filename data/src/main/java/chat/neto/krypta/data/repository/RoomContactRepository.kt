@@ -14,6 +14,9 @@ import javax.inject.Inject
  * dominio, con [KeyExchange] (ECDH X25519 entre nuestra identidad y el PeerID del contacto).
  * Es determinista, así que el valor es el mismo de siempre; lo que cambia es que ya no está
  * escrito en el disco, donde bastaba para descifrar todas las conversaciones.
+ *
+ * Y **`peerProtocol` nunca baja** (ver [ContactRepository.upsert]): lo garantiza el SQL del DAO
+ * en una sola sentencia, no una lectura previa aquí, que dejaría una ventana.
  */
 class RoomContactRepository @Inject constructor(
     private val dao: ContactDao,
@@ -23,7 +26,21 @@ class RoomContactRepository @Inject constructor(
     override fun observeAll(): Flow<List<Contact>> =
         dao.observeAll().map { list -> list.map(::toDomain) }
 
-    override suspend fun upsert(contact: Contact) = dao.upsert(contact.toEntity())
+    override suspend fun upsert(contact: Contact) = with(contact) {
+        dao.upsert(
+            id = id,
+            displayName = displayName,
+            peerId = peerId,
+            publicKey = publicKey,
+            verified = verified,
+            blocked = blocked,
+            peerProtocol = peerProtocol,
+            announcedProtocol = announcedProtocol,
+        )
+    }
+
+    override suspend fun raisePeerProtocol(id: String, protocol: Int) =
+        dao.raisePeerProtocol(id, protocol)
 
     override suspend fun findById(id: String): Contact? = dao.findById(id)?.let(::toDomain)
 
@@ -44,16 +61,5 @@ class RoomContactRepository @Inject constructor(
         blocked = e.blocked,
         peerProtocol = e.peerProtocol,
         announcedProtocol = e.announcedProtocol,
-    )
-
-    private fun Contact.toEntity() = ContactEntity(
-        id = id,
-        displayName = displayName,
-        peerId = peerId,
-        publicKey = publicKey,
-        verified = verified,
-        blocked = blocked,
-        peerProtocol = peerProtocol,
-        announcedProtocol = announcedProtocol,
     )
 }

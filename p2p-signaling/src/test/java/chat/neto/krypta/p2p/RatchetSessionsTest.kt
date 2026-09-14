@@ -2,6 +2,7 @@ package chat.neto.krypta.p2p
 
 import chat.neto.krypta.core.KeyExchange
 import chat.neto.krypta.core.model.Contact
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -107,6 +108,96 @@ class RatchetSessionsTest {
             a.sessions.receive(a.contact, despues) { String(it) },
         )
         assertNotEquals(anterior.toList(), b.store.sessions.getValue(b.contact.id).toList())
+    }
+
+    /**
+     * **H-0** de `docs/REVISION-protocolo-2026-09-14.md`. Cargar el estado, cifrar y guardar el
+     * avanzado son tres pasos, y **leer el estado suspende** (en Room es una consulta). Si dos
+     * operaciones sobre la misma conversación se cruzan en esa ventana —el acuse de lectura al
+     * abrir un chat mientras el buzón entrega, dos trozos de archivo, un reengache lanzado—, las
+     * dos parten del mismo estado y cifran con **la misma clave de mensaje y el mismo nonce de
+     * AES-GCM**, que es la forma clásica de romper del todo un cifrado autenticado.
+     */
+    @Test
+    fun `envios simultaneos a la misma conversacion no repiten clave de mensaje`() = runTest {
+        val interno = FakeRatchetStore()
+        val lento = object : chat.neto.krypta.core.RatchetStore by interno {
+            override suspend fun load(conversationId: String): ByteArray? {
+                // Como Room: la consulta ya ha leído cuando la corrutina se reanuda, así que la
+                // ventana está entre leer y guardar, que es donde se cuela la otra operación.
+                val leido = interno.load(conversationId)
+                kotlinx.coroutines.yield()
+                return leido
+            }
+        }
+        val sessions = RatchetSessions(
+            ratchet = Ratchet(JdkCurve25519()),
+            store = lento,
+            transactions = RollbackTransactionRunner(interno),
+            keyExchange = object : KeyExchange {
+                override fun localPeerId() = alice
+                override fun sharedSecretWith(peerId: String) = secret
+            },
+        )
+        val contact = Contact(id = bob, displayName = bob, peerId = bob, publicKey = ByteArray(0), sharedSecret = secret)
+        // Sesión ya existente: lo que se prueba es el cerrojo, no el arranque.
+        sessions.send(contact, "primero".toByteArray()) { it }
+
+        val wires = mutableListOf<ByteArray>()
+        kotlinx.coroutines.coroutineScope {
+            repeat(8) { i ->
+                launch { wires += sessions.send(contact, "simultáneo $i".toByteArray()) { it } }
+            }
+        }
+
+        val ternas = wires.map { w -> Ratchet.Header.decode(w)!!.let { Triple(it.lineage, it.epoch, it.n) } }
+        assertEquals(
+            "cada mensaje necesita su propia clave y su propio nonce; salieron: $ternas",
+            ternas.size,
+            ternas.toSet().size,
+        )
+    }
+
+    /**
+     * La otra cara del mismo cerrojo: una **recepción** que se cruza con un envío puede guardar
+     * su estado encima del del envío y **devolver el contador de envío hacia atrás**, con lo que
+     * el mensaje siguiente repetiría la clave del que acaba de salir.
+     */
+    @Test
+    fun `una recepcion que se cruza con un envio no hace retroceder el contador`() = runTest {
+        val (a, b) = endpoints()
+        // B necesita algo que recibir por una cadena ya retirada (no avanza de época al abrirlo):
+        // A manda dos, B abre el segundo y avanza; el primero llega tarde, cruzado con un envío.
+        val tarde = a.sessions.send(a.contact, "uno".toByteArray()) { it }
+        val pronto = a.sessions.send(a.contact, "dos".toByteArray()) { it }
+        b.sessions.receive(b.contact, pronto) { }
+
+        val lentoB = object : chat.neto.krypta.core.RatchetStore by b.store {
+            override suspend fun load(conversationId: String): ByteArray? {
+                val leido = b.store.load(conversationId)
+                kotlinx.coroutines.yield()
+                return leido
+            }
+        }
+        val sesionesB = RatchetSessions(
+            ratchet = Ratchet(JdkCurve25519()),
+            store = lentoB,
+            transactions = RollbackTransactionRunner(b.store),
+            keyExchange = object : KeyExchange {
+                override fun localPeerId() = bob
+                override fun sharedSecretWith(peerId: String) = secret
+            },
+        )
+
+        val enviados = mutableListOf<ByteArray>()
+        kotlinx.coroutines.coroutineScope {
+            launch { enviados += sesionesB.send(b.contact, "cruzado".toByteArray()) { it } }
+            launch { sesionesB.receive(b.contact, tarde) { } }
+        }
+        enviados += sesionesB.send(b.contact, "siguiente".toByteArray()) { it }
+
+        val ternas = enviados.map { w -> Ratchet.Header.decode(w)!!.let { Triple(it.lineage, it.epoch, it.n) } }
+        assertEquals("salieron: $ternas", ternas.size, ternas.toSet().size)
     }
 
     @Test

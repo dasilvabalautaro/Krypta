@@ -359,6 +359,46 @@ que tocar el bit rompa la autenticación). Además `RatchetPropertyTest` ahora *
 por mensaje**, así que el caos lo cubre donde de verdad puede romperse: entregas desordenadas,
 duplicados, épocas retiradas y pérdidas de estado.
 
+### 1.11 Lo que encontró revisar el protocolo (14 sep 2026)
+
+Una revisión interna del código contra este documento encontró siete cosas. El detalle, las
+reproducciones y el plan de revisión externa están en
+[REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md); la especificación normativa
+que se escribió para ella, en [ESPECIFICACION-protocolo.md](ESPECIFICACION-protocolo.md). Lo que
+toca a este diseño:
+
+- **Faltaba exclusión por conversación (H-0, crítica).** El §4.2 garantizaba que el avance del
+  ratchet y la persistencia se confirmaran juntos, pero no que dos operaciones no se cruzaran.
+  Cargar el estado suspende, así que dos envíos simultáneos salían con **la misma terna
+  `(L, e, N)`**: la misma clave de mensaje y el mismo nonce de AES-GCM. Una recepción cruzada con
+  un envío devolvía el contador hacia atrás. `RatchetPropertyTest` es secuencial y no podía verlo.
+  `RatchetSessions` lleva ahora un `Mutex` por conversación.
+- **La negociación del §5 perdía la pista y no la recuperaba (H-1, alta).** El anuncio sale una
+  vez por versión, y `peerProtocol` se va con el contacto (tampoco viaja en el `.krbk`). Tras
+  borrar y volver a añadir un contacto, o importar un respaldo, quien había perdido la sesión creía
+  que el otro hablaba v1. Su reengache (§1.9) no salía **por eso mismo**, y **todo lo que el otro
+  escribía por ratchet se perdía para siempre**: el punto 5 de PRUEBAS-PENDIENTES §16 habría fallado
+  en el móvil. Ahora:
+  - el `V` lleva la versión que tengo apuntada del otro;
+  - a quien nos tiene atrasados se le repite el anuncio por la clave estática;
+  - al saber que alguien habla ratchet se le manda un primer sobre por ratchet, para que adopte
+    nuestro linaje.
+- **`peerProtocol` podía bajar (H-2 y H-3)**, por dos vías:
+  - por **copias viejas del contacto** (verificar, bloquear, renombrar, importar);
+  - por **un `V` forjado**. Esta dejaba a quien tiene `S` degradar la pareja con un solo depósito y
+    **leer en pasivo**, contra lo que promete la tabla del §0 («una vez que ambos giran claves, el
+    atacante pasivo se queda fuera»).
+
+  Ahora la versión no baja nunca (el SQL lo impone en una sola sentencia), y un sobre v2 que abre
+  la vuelve a subir.
+- **La regla del linaje del §1.6 permite secuestrar la sesión a quien tiene `S`, sin vuelta atrás
+  (H-4).** Un sobre de época 0 con un linaje forjado muy alto se adopta, se avanza con la propuesta
+  del atacante y el extremo legítimo queda fuera. El §1.6 lo daba por asumido («quien tiene `S` ya
+  tiene la identidad»). Lo que no decía es que convierte **un** acto activo en lectura pasiva, y
+  que no se recupera. **No se arregla aquí, a propósito**: es la regla más frágil del ratchet, y la
+  decisión de no tocarla antes de la revisión externa sigue en pie. Lo fija `RatchetTest` y va como
+  pregunta a la revisión.
+
 ## 2. Por qué no el doble ratchet tal cual
 
 Merece la pena dejar escrito el callejón, porque el diseño de arriba es una desviación y las
@@ -671,9 +711,16 @@ Lo que enseñó:
 5. ~~**¿Y los adjuntos en claro de `krypta_files/`?**~~ **Decidido: sí, dentro de este trabajo**
    (fase 9). Era el punto 3 del §7 «qué no arregla»; deja de estarlo. Sin ello, el ratchet
    protegería el viaje de una foto y no su reposo, que es donde de verdad se la llevan.
-6. **Revisión externa antes de encender el envío**: no se busca por ahora. El protocolo es propio
+6. ~~**Revisión externa antes de encender el envío**: no se busca por ahora. El protocolo es propio
    y esto queda anotado como riesgo asumido; si aparece la ocasión, el punto natural para pararse
-   es el final de la fase 5.
+   es el final de la fase 5.~~ **Revertido el 14 sep 2026: se busca.**
+   - El envío ya estaba encendido, así que el «antes» ya no se puede cumplir. Lo que se decide es
+     **no añadir más protocolo** (cambios de linaje, post-cuántico, rotación) hasta tener la
+     revisión.
+   - Lo que lo decidió: una revisión interna ese mismo día encontró un fallo **crítico** (H-0) y
+     uno de **pérdida permanente de mensajes** (H-1) en un protocolo que ya tenía pruebas de
+     propiedades y fuzzing.
+   - Ver §1.11, y el plan en [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md) §5.
 
 ---
 

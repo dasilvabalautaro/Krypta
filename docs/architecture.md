@@ -293,13 +293,20 @@ desacoplados y testeables.
   y el JDK en los tests (`JdkCurve25519`). Diseño completo en
   [DISENO-ratchet.md](DISENO-ratchet.md); cubierto por `RatchetTest` (17) y `TestRatchetKeyPairAgreement`.
 - `RatchetSessions` — el ratchet **con su almacén** (`RatchetStore` en `:core`, tablas
-  `ratchet_sessions` y `ratchet_seen`, base **v7**). Es donde vive la garantía de
-  atomicidad: `send`/`receive` reciben el guardado del mensaje **como lambda** y lo ejecutan
-  dentro de la misma transacción que el avance del ratchet (`TransactionRunner`), porque
-  descifrar consume la clave del mensaje y guardar el estado sin el mensaje haría que la
-  reentrega del buzón fuera indescifrable. Deduplica por huella del ciphertext **antes** de
-  descifrar (una reentrega legítima es indistinguible de una repetición) y un estado ilegible
-  reengancha la conversación en la época 0 en vez de romperla. Cubierto por `RatchetSessionsTest`.
+  `ratchet_sessions` y `ratchet_seen`, base **v7**). Es donde viven las dos garantías de las que
+  depende que el ratchet sea seguro en un móvil de verdad:
+  - **Atomicidad.** `send`/`receive` reciben el guardado del mensaje **como lambda** y lo ejecutan
+    dentro de la misma transacción que el avance del ratchet (`TransactionRunner`), porque
+    descifrar consume la clave del mensaje y guardar el estado sin el mensaje haría que la
+    reentrega del buzón fuera indescifrable.
+  - **Exclusión por conversación** (desde el 14 sep 2026). Un `Mutex` por contacto rodea cargar →
+    cifrar/descifrar → guardar. Sin él, dos operaciones simultáneas repetían clave y nonce de
+    AES-GCM (H-0 de [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md)).
+
+  Deduplica por huella del ciphertext **antes** de descifrar y **dentro del cerrojo** (una
+  reentrega legítima es indistinguible de una repetición), y un estado ilegible reengancha la
+  conversación en la época 0 en vez de romperla. Cubierto por `RatchetSessionsTest`, que desde esa
+  fecha incluye carreras reales con un almacén que suspende entre leer y guardar.
 - **Transporte v1 + v2 conviviendo** — `ChatService.onReceived` acepta las dos formas:
   `openRatchet` (v2) con **caída a `openLegacy`** (v1, clave estática). El byte de versión es
   una pista y no una garantía: un ciphertext v1 empieza por un nonce aleatorio, así que ~1 de

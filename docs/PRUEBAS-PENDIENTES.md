@@ -778,6 +778,36 @@ Usar contactos desechables si se puede.
      igual, sin quedarse en el nodo). Si B tiene un build anterior al 10 sep, A debe seguir
      depositando por PeerID: eso lo cubre el punto 8.
 
+11. - [ ] **Borrar y volver a añadir un contacto** (revisión del protocolo del 14 sep 2026, H-1).
+     **Hace falta el build del 14 sep o posterior en los dos**: un build anterior ni lo pide ni
+     responde.
+
+     Pasos, con una conversación que ya vaya por ratchet:
+     1. En B: ⋮ → Eliminar contacto, y volver a añadirlo por su PeerID.
+     2. Esperar un ciclo WAN (o forzarlo cambiando de red).
+     3. Mirar el Diagnóstico:
+        - en A: `↔ anuncio repetido a …<B> (nos tenía como v0)`;
+        - en B: `↔ …<A> habla protocolo v3` y `↔ primer sobre por ratchet a …<A>`.
+     4. **Después**, A escribe a B: **tiene que llegar**.
+
+     Con un build anterior esto fallaba siempre, en silencio: B descartaba todo lo de A con
+     `⚠ mensaje ilegible … venía con cabecera de ratchet` seguido de
+     `↔ sin reengache … no usa ratchet (v0)`. Lo que A escriba **entre** el borrado y esas líneas se
+     pierde, y es lo esperado.
+
+     El **punto 5** (pérdida de estado con importación de `.krbk`) recorre el mismo camino: tras
+     importar deben salir las mismas líneas, y sin ellas el punto 5 no se puede dar por bueno.
+12. - [ ] **Mensajes cruzados en ráfaga** (H-0). Está cubierto por tests; esto comprueba que no hay
+     regresión en el móvil.
+
+     Pasos:
+     1. A manda a B un archivo de 2–4 MB.
+     2. **Mientras sale**, B abre el chat (eso manda el acuse de lectura) y escribe dos mensajes.
+     3. A escribe otro.
+
+     Todo tiene que llegar, y en ninguno de los dos Diagnósticos debe aparecer
+     `⚠ mensaje ilegible` ni `ya gastada`.
+
 Si algo falla, el interruptor vuelve a `false` y la conversación sigue en v1 sin perder nada
 —salvo lo que se hubiera enviado con ratchet y no se hubiera podido abrir—, que es justo por
 lo que esta prueba va antes del encendido.
@@ -795,6 +825,11 @@ directa (DCUtR) o se queda en relay.
 ---
 
 ## Verificado en 1 móvil (no requiere el segundo)
+- **Build de la revisión del protocolo (14 sep)**: instalado en el TECNO sobre la base real con
+  `adb install -r`, sin tocar datos. Arranca, pinta las conversaciones con su vista previa
+  descifrada y dice «conectado»; **el autor confirmó la verificación en el móvil** el mismo día.
+  Lo que necesita el segundo móvil sigue pendiente en §16.11 (volver a añadir un contacto) y
+  §16.12 (ráfagas cruzadas).
 - **Bloquear contacto (6 sep)**: en el TECNO, con un contacto de usar y tirar (creado con el
   PeerID del nodo de São Paulo, borrado al terminar; los dos contactos reales no se tocaron).
   La **pulsación larga** en la lista ofrece "Vaciar chat / Bloquear / Eliminar contacto" y el

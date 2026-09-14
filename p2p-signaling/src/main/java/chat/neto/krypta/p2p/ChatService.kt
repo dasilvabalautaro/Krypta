@@ -425,7 +425,10 @@ class ChatService @Inject constructor(
             .filter { !it.blocked && it.sharedSecret != null && it.announcedProtocol < PROTOCOL_VERSION }
         var anunciados = 0
         for (contact in pendientes) {
-            val enviado = runCatching { sendRaw(contact, MessageEnvelope.encodeHello(PROTOCOL_VERSION)) }
+            // Con la versión que tenemos apuntada de él: si nos consta por debajo de lo que ya
+            // nos anunció, somos nosotros quienes la perdimos, y así nos la repite (H-1).
+            val hello = MessageEnvelope.encodeHello(PROTOCOL_VERSION, knows = contact.peerProtocol)
+            val enviado = runCatching { sendRaw(contact, hello) }
                 .isSuccess
             if (enviado) {
                 contacts.upsert(contact.copy(announcedProtocol = PROTOCOL_VERSION))
@@ -914,14 +917,7 @@ class ChatService @Inject constructor(
     /** Cifra y envía un sobre "en crudo" (meta/trozo) sin crear un Message: directo → buzón. */
     private suspend fun sendRaw(contact: Contact, envelope: ByteArray) {
         requireNotBlocked(contact)
-        val ciphertext = seal(contact, envelope)
-        try {
-            signaling.send(contact, ciphertext)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            signaling.sendOffline(contact, ciphertext, outboxLabel(contact)) // fallback; si también falla, propaga
-        }
+        deliver(contact, seal(contact, envelope))
     }
 
     /** Último reengache por contacto, para no convertir un fallo repetido en una ráfaga. */
@@ -949,24 +945,30 @@ class ChatService @Inject constructor(
      */
     private fun rehook(contact: Contact) {
         if (!usesRatchet(contact)) {
-            // Se registra el motivo: "no salió ningún reengache" tanto puede ser esto como el
-            // tope de abajo, y sin distinguirlos no hay forma de diagnosticarlo.
-            logLine("↔ sin reengache para ${short(contact.peerId)}: no usa ratchet (v${contact.peerProtocol})")
+            if (contact.peerProtocol < RATCHET_MIN_PROTOCOL) {
+                // Nos escribe por ratchet y aquí consta que no lo habla: la versión que nos
+                // anunció la **perdimos nosotros** (borramos el contacto y lo volvimos a añadir,
+                // importamos un .krbk). Hasta el 14 sep 2026 esto se callaba, y sus mensajes se
+                // perdían para siempre (H-1 de docs/REVISION-protocolo-2026-09-14.md). Se le
+                // dice qué tenemos apuntado, por la clave estática —sin sesión es lo único que
+                // seguro abre—, y con eso nos repite su anuncio.
+                launchHello(
+                    contact, estatico = true, limiter = lastRehook,
+                    enviado = "↔ anuncio a ${short(contact.peerId)}: escribe por ratchet y constaba v${contact.peerProtocol}",
+                    fallido = "↔ anuncio a ${short(contact.peerId)} no salió; se reintenta al próximo fallo",
+                )
+            } else {
+                // Se registra el motivo: "no salió ningún reengache" tanto puede ser esto como el
+                // tope de abajo, y sin distinguirlos no hay forma de diagnosticarlo.
+                logLine("↔ sin reengache para ${short(contact.peerId)}: el envío por ratchet está apagado")
+            }
             return
         }
-        val now = System.currentTimeMillis()
-        val last = lastRehook[contact.id] ?: 0L
-        if (now - last < REHOOK_MIN_INTERVAL_MS) return
-        lastRehook[contact.id] = now
-        scope.launch {
-            val ok = runCatching { sendRaw(contact, MessageEnvelope.encodeHello(PROTOCOL_VERSION)) }.isSuccess
-            logLine(
-                if (ok) "↔ reengache enviado a ${short(contact.peerId)} (su linaje no cuadraba)"
-                else "↔ reengache a ${short(contact.peerId)} no salió; se reintenta al próximo fallo",
-            )
-            // Si no salió, que el próximo fallo pueda volver a intentarlo en vez de esperar.
-            if (!ok) lastRehook.remove(contact.id)
-        }
+        launchHello(
+            contact, estatico = false, limiter = lastRehook,
+            enviado = "↔ reengache enviado a ${short(contact.peerId)} (su linaje no cuadraba)",
+            fallido = "↔ reengache a ${short(contact.peerId)} no salió; se reintenta al próximo fallo",
+        )
     }
 
     /**
@@ -1110,11 +1112,33 @@ class ChatService @Inject constructor(
             sessions.receive(contact, ciphertext) { plain -> persistEnvelope(contact, plain, mailboxId, ts) }
         }.getOrElse { return openLegacy(contact, ciphertext, mailboxId, ts, parecíaRatchet = true) }
         return when (recibido) {
-            is RatchetSessions.Received.Opened -> recibido.value
+            is RatchetSessions.Received.Opened -> {
+                learnFromRatchet(contact, ciphertext)
+                recibido.value
+            }
             // Ya procesado: devolver null lo ack'ea en el buzón, que es lo correcto — está
             // entregado y su clave, gastada.
             RatchetSessions.Received.Duplicate -> null
         }
+    }
+
+    /**
+     * Lo que **demuestra** un sobre de ratchet que abre: que el contacto habla al menos la v2, y
+     * si venía relleno, la v3. La cabecera ya está autenticada —es el AAD del AEAD que acaba de
+     * validar—, así que sin el secreto compartido no hay nada que fingir.
+     *
+     * Cura a quien se quedó apuntado por debajo por el hallazgo H-2 antes del arreglo (una copia
+     * vieja del contacto guardada encima de su anuncio): sin esto, esa pareja seguiría en la clave
+     * estática hasta la siguiente versión del protocolo, porque el anuncio no se repite.
+     */
+    private suspend fun learnFromRatchet(contact: Contact, wire: ByteArray) {
+        val header = Ratchet.Header.decode(wire) ?: return
+        val demostrada = if (header.padded) PADDING_MIN_PROTOCOL else RATCHET_MIN_PROTOCOL
+        // Releída: si el propio sobre era un anuncio, ya la ha subido dentro de la transacción.
+        val apuntada = contacts.findById(contact.id)?.peerProtocol ?: return
+        if (apuntada >= demostrada) return
+        contacts.raisePeerProtocol(contact.id, demostrada)
+        logLine("↔ ${short(contact.peerId)} escribe por ratchet: se apunta v$demostrada")
     }
 
     /** Camino v1: clave estática del contacto. */
@@ -1143,6 +1167,108 @@ class ChatService @Inject constructor(
         return persistEnvelope(contact, plain, mailboxId, ts)
     }
 
+    /** Última vez que se le repitió el anuncio a cada contacto (ver [onHello]); acota el eco. */
+    private val lastHello = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
+     * Lo que dice un anuncio `V` del contacto, y qué hacer con ello. Tres reglas, de la revisión
+     * del protocolo del 14 sep 2026 (`docs/REVISION-protocolo-2026-09-14.md`):
+     *
+     * - **La versión apuntada solo sube** (H-3). Un anuncio con una versión menor se ignora: si
+     *   no, quien tenga el secreto compartido podría devolver la conversación a la clave
+     *   estática con un solo sobre y **leer en pasivo** todo lo que viniera después, sin romper
+     *   nada que se notara. No hay caso legítimo que lo necesite: Android no instala una versión
+     *   menor encima sin desinstalar, y desinstalar cambia la identidad.
+     * - **Si nos tiene apuntados por debajo de lo que ya le dijimos, se le repite** (H-1). Es la
+     *   señal de que lo perdió: borró el contacto y lo volvió a añadir, o importó un `.krbk`. El
+     *   anuncio sale una vez por versión, así que antes no había forma de recuperarlo: seguíamos
+     *   escribiéndole por un ratchet cuya sesión ya no tenía y **todo se perdía**. Se repite por
+     *   la **clave estática**, que es lo único que seguro puede abrir sin sesión.
+     * - **Si acabamos de saber que habla ratchet, se le escribe algo por ratchet** (H-1, segunda
+     *   mitad): quien perdió la sesión tiene que adoptar nuestro linaje nuevo **antes** de
+     *   escribirnos, o lo primero que mande irá por su sesión vieja.
+     *
+     * Las respuestas van lanzadas (el camino del buzón es síncrono) y con tope por contacto.
+     */
+    private suspend fun onHello(contact: Contact, hello: MessageEnvelope.Decoded.Hello) {
+        val antes = contact.peerProtocol
+        val ahora = maxOf(antes, hello.protocol)
+        when {
+            hello.protocol > antes -> {
+                contacts.raisePeerProtocol(contact.id, hello.protocol)
+                logLine("↔ ${short(contact.peerId)} habla protocolo v${hello.protocol}")
+            }
+            hello.protocol < antes -> logLine(
+                "↔ ${short(contact.peerId)} anuncia v${hello.protocol} y consta v$antes: se ignora (la versión no baja)",
+            )
+        }
+        val actualizado = contact.copy(peerProtocol = ahora)
+        val conocida = hello.knows
+        when {
+            conocida != null && conocida < PROTOCOL_VERSION && contact.announcedProtocol >= PROTOCOL_VERSION ->
+                launchHello(
+                    actualizado, estatico = true, limiter = lastHello,
+                    enviado = "↔ anuncio repetido a ${short(contact.peerId)} (nos tenía como v$conocida)",
+                    fallido = "↔ anuncio a ${short(contact.peerId)} no salió; se repite al próximo aviso",
+                )
+            antes < RATCHET_MIN_PROTOCOL && ahora >= RATCHET_MIN_PROTOCOL && usesRatchet(actualizado) ->
+                launchHello(
+                    actualizado, estatico = false, limiter = lastHello,
+                    enviado = "↔ primer sobre por ratchet a ${short(contact.peerId)}",
+                    fallido = "↔ primer sobre por ratchet a ${short(contact.peerId)} no salió",
+                )
+        }
+    }
+
+    /**
+     * Envía nuestro anuncio `V` —con la versión que tenemos apuntada de [contact]— **lanzado**, y
+     * como mucho uno por contacto cada [REHOOK_MIN_INTERVAL_MS] según [limiter]: cualquiera de
+     * tus contactos podría provocarlo a propósito, y sin tope serviría de altavoz. [estatico] =
+     * por la clave estática, que el otro abre aunque haya perdido la sesión del ratchet.
+     */
+    private fun launchHello(
+        contact: Contact,
+        estatico: Boolean,
+        limiter: MutableMap<String, Long>,
+        enviado: String,
+        fallido: String,
+    ) {
+        val now = System.currentTimeMillis()
+        val last = limiter[contact.id] ?: 0L
+        if (now - last < REHOOK_MIN_INTERVAL_MS) return
+        limiter[contact.id] = now
+        scope.launch {
+            val hello = MessageEnvelope.encodeHello(PROTOCOL_VERSION, knows = contact.peerProtocol)
+            val ok = runCatching {
+                if (estatico) sendStatic(contact, hello) else sendRaw(contact, hello)
+            }.isSuccess
+            logLine(if (ok) enviado else fallido)
+            // Si no salió, que el próximo aviso pueda volver a intentarlo en vez de esperar.
+            if (!ok) limiter.remove(contact.id)
+        }
+    }
+
+    /**
+     * Como [sendRaw] pero **siempre con la clave estática**, hable o no ratchet el contacto.
+     * Solo para anuncios de capacidad dirigidos a quien puede haber perdido la sesión, porque es
+     * lo único que seguro puede abrir; nunca lleva contenido del usuario.
+     */
+    private suspend fun sendStatic(contact: Contact, envelope: ByteArray) {
+        requireNotBlocked(contact)
+        deliver(contact, cipher.encrypt(requireNotNull(contact.sharedSecret), envelope))
+    }
+
+    /** Directo y, si no hay ruta, al buzón; si también falla, propaga. */
+    private suspend fun deliver(contact: Contact, ciphertext: ByteArray) {
+        try {
+            signaling.send(contact, ciphertext)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            signaling.sendOffline(contact, ciphertext, outboxLabel(contact))
+        }
+    }
+
     /**
      * Ramifica por el contenido de un sobre **ya descifrado** y persiste lo que corresponda.
      * No avisa al usuario: eso lo hace [onReceived] al salir, fuera de la transacción.
@@ -1166,11 +1292,8 @@ class ChatService @Inject constructor(
                 return null
             }
             is MessageEnvelope.Decoded.Hello -> {
-                // Nos dice qué versión habla. Se apunta y ya está: no crea burbuja.
-                if (decoded.protocol != contact.peerProtocol) {
-                    contacts.upsert(contact.copy(peerProtocol = decoded.protocol))
-                    logLine("↔ ${short(contact.peerId)} habla protocolo v${decoded.protocol}")
-                }
+                // Nos dice qué versión habla y qué tiene apuntado de nosotros. No crea burbuja.
+                onHello(contact, decoded)
                 return null
             }
             is MessageEnvelope.Decoded.FileMeta -> {
@@ -1337,10 +1460,19 @@ class ChatService @Inject constructor(
             publicKey = ByteArray(0),
             sharedSecret = keyExchange.sharedSecretWith(peerId),
             verified = existing?.verified ?: false,
+            // Volver a dar de alta un PeerID que ya estaba (renombrar) no es empezar de cero: ni
+            // desbloquea a quien se bloqueó (H-6) ni olvida qué versión anunció o qué se le
+            // anunció (H-2, docs/REVISION-protocolo-2026-09-14.md). Solo borrar el contacto lo hace.
+            blocked = existing?.blocked ?: false,
+            peerProtocol = existing?.peerProtocol ?: 0,
+            announcedProtocol = existing?.announcedProtocol ?: 0,
         )
         contacts.upsert(contact)
         // Para que pueda marcarnos ya, sin esperar al próximo ciclo WAN.
         refreshAllowedPeers()
+        // Y para anunciarnos cuanto antes: si es alguien a quien borramos y volvemos a añadir, lo
+        // que nos escriba se pierde hasta que ese anuncio salga y nos conteste (H-1).
+        kickWan()
         return contact
     }
 

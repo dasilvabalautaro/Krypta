@@ -105,6 +105,57 @@ class RatchetTest {
         assertEquals(2, b.epoch)
     }
 
+    /**
+     * **Limitación conocida, fijada a propósito** (H-4 de `docs/REVISION-protocolo-2026-09-14.md`).
+     * Quien tenga el secreto compartido —o sea, **cualquiera de las dos identidades**— puede
+     * secuestrar la sesión con un solo sobre: uno de época 0 con un linaje mayor que el vigente.
+     * El receptor lo adopta (es la misma regla que recupera una pérdida de estado, §1.6), avanza
+     * con la propuesta que venía dentro, y todo lo que escriba desde ahí va con material que el
+     * atacante conoce. Y **no hay vuelta atrás**: el extremo legítimo nunca crea un linaje mayor
+     * que uno forjado muy alto, así que queda fuera hasta que alguien borre la sesión.
+     *
+     * No contradice lo que el diseño promete («forjar uno nuevo exige `S`, y quien tiene `S` ya
+     * tiene la identidad»), pero sí lo que se suele entender por recuperación tras un compromiso:
+     * con **un** sobre, el atacante activo pasa a leer en pasivo. Si algún cambio lo cierra, este
+     * test tiene que cambiar con él.
+     */
+    @Test
+    fun `con el secreto compartido un linaje forjado secuestra la sesion y no hay vuelta atras`() {
+        var (a, b) = sessions()
+        repeat(2) {
+            val m = ratchet.encrypt(a, "a".toByteArray()); a = m.state
+            b = ratchet.decrypt(b, secret, m.ciphertext).state
+            val r = ratchet.encrypt(b, "b".toByteArray()); b = r.state
+            a = ratchet.decrypt(a, secret, r.ciphertext).state
+        }
+        assertTrue("la sesión legítima debía ir ya por varias épocas", b.epoch >= 2)
+
+        // El atacante solo tiene S (p. ej. la identidad de Alice sacada de un .krbk con su frase).
+        val forjadoLinaje = Long.MAX_VALUE / 2
+        var mallory = ratchet.initial(secret, alice, bob, lineage = forjadoLinaje)
+        val forjado = ratchet.encrypt(mallory, "soy Alice".toByteArray()); mallory = forjado.state
+        val abierto = ratchet.decrypt(b, secret, forjado.ciphertext); b = abierto.state
+        assertEquals("soy Alice", String(abierto.plaintext))
+        assertEquals("Bob adopta el linaje forjado", forjadoLinaje, b.lineage)
+
+        // Lo que Bob escriba desde ahora lo lee el atacante, sin volver a intervenir...
+        val deBob = ratchet.encrypt(b, "secreto".toByteArray()); b = deBob.state
+        assertEquals("secreto", String(ratchet.decrypt(mallory, secret, deBob.ciphertext).plaintext))
+
+        // ...Alice, la de verdad, no lo lee...
+        assertThrows(RatchetException::class.java) { ratchet.decrypt(a, secret, deBob.ciphertext) }
+        // ...ni Bob la lee a ella, porque su linaje es menor y su época ya no está.
+        val deAlice = ratchet.encrypt(a, "¿sigues ahí?".toByteArray()); a = deAlice.state
+        assertThrows(RatchetException::class.java) { ratchet.decrypt(b, secret, deAlice.ciphertext) }
+
+        // Y aunque Alice pierda el estado y empiece de cero, su linaje (la hora) no alcanza al
+        // forjado: Bob abre su época 0 —derivable— pero no lo adopta, y sigue en el del atacante.
+        val aliceDeCero = ratchet.initial(secret, alice, bob, lineage = System.currentTimeMillis())
+        val reintento = ratchet.encrypt(aliceDeCero, "empiezo de cero".toByteArray())
+        b = ratchet.decrypt(b, secret, reintento.ciphertext).state
+        assertEquals("no hay vuelta atrás: Bob sigue en el linaje forjado", forjadoLinaje, b.lineage)
+    }
+
     @Test
     fun `los dos hablan a la vez sin que se rompa la sesion`() {
         var (a, b) = sessions()

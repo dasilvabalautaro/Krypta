@@ -19,7 +19,7 @@ package chat.neto.krypta.p2p
  *          entiende — un cliente anterior parte esta cabecera en 3 y descartaría la señal
  *          entera, o sea que la llamada ni sonaría.
  *   REPLY: "Y\n<replyToId>\n" ++ <sobre interior>   (cita: envuelve a T/I/F/D)
- *   HELLO: "V\n<versión>"  (anuncio de capacidad: qué versión de protocolo hablo)
+ *   HELLO: "V\n<versión>[\n<la versión que tengo apuntada de ti>]"  (anuncio de capacidad)
  *
  * REPLY es un **envoltorio**, no un tipo de contenido: cita el mensaje [replyToId] y dentro
  * lleva el sobre normal del mensaje que responde. Así responder funciona con cualquier
@@ -89,8 +89,15 @@ object MessageEnvelope {
          * encender el ratchet **por contacto** en vez de por publicación (ver
          * `docs/DISENO-ratchet.md` §5): un cliente anterior lo recibe como [Unsupported] y lo
          * ignora sin pintar nada, que es justo lo que hace falta para poder anunciarlo ya.
+         *
+         * [knows] es la versión que el que lo envía **tiene apuntada de nosotros** (null = un
+         * cliente anterior al 14 sep 2026, que no la manda). Existe por el hallazgo H-1 de
+         * `docs/REVISION-protocolo-2026-09-14.md`: el anuncio sale una sola vez por versión, así
+         * que quien lo pierde (borró el contacto y lo volvió a añadir, importó un `.krbk`) no
+         * tenía forma de volver a saberlo, y el otro no tenía forma de enterarse de que hacía
+         * falta repetirlo. Un cliente anterior lee solo la primera línea, así que no le afecta.
          */
-        data class Hello(val protocol: Int) : Decoded
+        data class Hello(val protocol: Int, val knows: Int? = null) : Decoded
 
         /** Sobre bien formado de un tipo que esta versión no conoce (cliente más nuevo). */
         data object Unsupported : Decoded
@@ -114,9 +121,12 @@ object MessageEnvelope {
     fun encodeFileDescriptor(name: String, mime: String, size: Long, path: String?): ByteArray =
         "D\n$size\n$mime\n${path ?: ""}\n$name".toByteArray(Charsets.UTF_8)
 
-    /** Anuncia a un contacto qué versión de protocolo habla este cliente. */
-    fun encodeHello(protocol: Int): ByteArray =
-        "V\n$protocol".toByteArray(Charsets.UTF_8)
+    /**
+     * Anuncia a un contacto qué versión de protocolo habla este cliente y, si se pasa [knows],
+     * qué versión tenemos apuntada de él (ver [Decoded.Hello.knows]).
+     */
+    fun encodeHello(protocol: Int, knows: Int? = null): ByteArray =
+        ("V\n$protocol" + (knows?.let { "\n$it" } ?: "")).toByteArray(Charsets.UTF_8)
 
     fun encodeCall(kind: String, callId: String, ts: Long, key: ByteArray? = null): ByteArray =
         ("C\n$kind\n$callId\n$ts" + (key?.let { "\n" + it.toHex() } ?: ""))
@@ -158,11 +168,13 @@ object MessageEnvelope {
                 Decoded.FileChunk(fileId, index, bytes.copyOfRange(idxEnd + 1, bytes.size))
             }
             'V' -> {
-                // V\n<versión>. Un número y nada más: lo que venga detrás (capacidades de una
-                // versión futura) se ignora sin que el sobre deje de entenderse.
-                val protocol = String(bytes, 2, bytes.size - 2, Charsets.UTF_8)
-                    .substringBefore('\n').trim().toIntOrNull() ?: return null
-                Decoded.Hello(protocol)
+                // V\n<versión>[\n<la que tengo apuntada de ti>]. La versión es la primera línea
+                // y es lo único obligatorio: un cliente anterior solo lee esa. Lo que no se
+                // entienda en la segunda (o lo que añada una versión futura detrás) se ignora
+                // sin que el sobre deje de entenderse.
+                val lines = String(bytes, 2, bytes.size - 2, Charsets.UTF_8).split('\n')
+                val protocol = lines[0].trim().toIntOrNull() ?: return null
+                Decoded.Hello(protocol, knows = lines.getOrNull(1)?.trim()?.toIntOrNull())
             }
             'C' -> {
                 // C\n<kind>\n<callId>\n<ts>[\n<clave hex>]

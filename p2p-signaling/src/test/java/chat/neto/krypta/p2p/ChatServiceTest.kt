@@ -169,7 +169,11 @@ class ChatServiceTest {
     private class FakeContacts(all: List<Contact>) : ContactRepository {
         val store = all.associateBy { it.id }.toMutableMap()
         override fun observeAll() = flowOf(store.values.toList())
-        override suspend fun upsert(contact: Contact) { store[contact.id] = contact }
+        // El contrato de `ContactRepository.upsert` (y del SQL de Room): peerProtocol nunca baja.
+        override suspend fun upsert(contact: Contact) {
+            val previa = store[contact.id]?.peerProtocol ?: 0
+            store[contact.id] = contact.copy(peerProtocol = maxOf(previa, contact.peerProtocol))
+        }
         override suspend fun findById(id: String) = store[id]
         override suspend fun findByPeerId(peerId: String) = store.values.find { it.peerId == peerId }
         override suspend fun delete(id: String) { store.remove(id) }
@@ -1020,19 +1024,30 @@ class ChatServiceTest {
         }
     }
 
-    /** Sin ratchet no hay linajes que desincronizar: no hay nada que reenganchar. */
+    /**
+     * Este test decía lo contrario hasta el 14 sep 2026 («sin ratchet no hay linajes que
+     * desincronizar: no hay nada que reenganchar»), y ese era justo el punto ciego del hallazgo
+     * H-1 de `docs/REVISION-protocolo-2026-09-14.md`: un contacto que aquí consta como v1 **y nos
+     * escribe por ratchet** es uno cuya versión perdimos (lo borramos y lo volvimos a añadir,
+     * importamos un `.krbk`). Callarse dejaba sus mensajes perdiéndose para siempre. Ahora se le
+     * manda nuestro anuncio **por la clave estática** —sin sesión es lo único que abre— diciendo
+     * qué tenemos apuntado de él, para que nos repita el suyo. Y sigue siendo uno solo por mucho
+     * que insista, porque cualquiera de tus contactos podría mandar basura a propósito.
+     */
     @Test
-    fun `un contacto que aun no habla v2 no recibe reengache`() = runTest {
+    fun `un contacto que consta como v1 y escribe por ratchet recibe un anuncio por la clave estatica`() = runTest {
         conRatchet {
             val signaling = FakeSignaling()
             val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange()))
 
-            chat.onReceived(contact.peerId, sobreIlegible())
+            repeat(3) { chat.onReceived(contact.peerId, sobreIlegible()) }
 
-            assertTrue(
-                "a un contacto v1 no se le manda nada · log=${chat.log.value}",
-                signaling.sentAll.isEmpty(),
-            )
+            assertEquals("uno solo, por mucho que insista · log=${chat.log.value}", 1, signaling.sentAll.size)
+            // Se abre con la clave estática: si fuera por ratchet, esto lanzaría.
+            val hello = MessageEnvelope.decode(cipher.decrypt(secret, signaling.sentAll.single()))
+                as MessageEnvelope.Decoded.Hello
+            assertEquals(ChatService.PROTOCOL_VERSION, hello.protocol)
+            assertEquals("le decimos lo que tenemos apuntado de él", 0, hello.knows)
         }
     }
 
@@ -1947,5 +1962,309 @@ class ChatServiceTest {
             val (primero, _, _) = primerMensajeTrasAnadirse(backgroundScope, relojDeA = -60_000L)
             assertEquals(1, primero.epoch)
         }
+    }
+
+    // --- Revisión del protocolo (14 sep 2026): lo que cada lado sabe de la versión del otro ---
+    // Hallazgos H-1, H-2, H-3 y H-6 de docs/REVISION-protocolo-2026-09-14.md.
+
+    /** Entrega a [to] lo que [from] haya enviado desde la última vez, como haría la red. */
+    private class Cable(
+        private val from: FakeSignaling,
+        private val fromPeerId: String,
+        private val to: ChatService,
+    ) {
+        private var entregados = 0
+
+        /** Da por entregado lo que ya salió (se lo quedó otro destinatario, p. ej. el móvil viejo). */
+        fun saltarLoEnviado() {
+            entregados = from.sentAll.size
+        }
+
+        suspend fun entregar(): Int {
+            val pendientes = from.sentAll.drop(entregados)
+            entregados += pendientes.size
+            for (wire in pendientes) to.onReceived(fromPeerId, wire)
+            return pendientes.size
+        }
+    }
+
+    /** Entrega en los dos sentidos hasta que ninguno tenga nada más que decir. */
+    private suspend fun bombear(vararg cables: Cable) {
+        repeat(10) {
+            var movidos = 0
+            for (c in cables) movidos += c.entregar()
+            if (movidos == 0) return
+        }
+    }
+
+    /**
+     * Dos extremos con una conversación por ratchet ya establecida, fuera de la época 0. Los
+     * linajes se siembran en el pasado para que el que nazca después (al borrar y volver a
+     * añadir, al importar) sea estrictamente mayor, como pasa en la vida real.
+     */
+    private inner class Pareja {
+        val secreto = ByteArray(32) { 7 } // el que deriva FakeKeyExchange: lo usa addContact
+        private val ahora = System.currentTimeMillis()
+        val bobDeAna = Contact(
+            id = "12D3KooWBob", displayName = "Bob", peerId = "12D3KooWBob", publicKey = ByteArray(0),
+            sharedSecret = secreto,
+            peerProtocol = ChatService.PROTOCOL_VERSION, announcedProtocol = ChatService.PROTOCOL_VERSION,
+        )
+        val anaDeBob = Contact(
+            id = "12D3KooWSelf", displayName = "Ana", peerId = "12D3KooWSelf", publicKey = ByteArray(0),
+            sharedSecret = secreto,
+            peerProtocol = ChatService.PROTOCOL_VERSION, announcedProtocol = ChatService.PROTOCOL_VERSION,
+        )
+        val sigAna = FakeSignaling()
+        val sigBob = FakeSignaling()
+        val contactosAna = FakeContacts(listOf(bobDeAna))
+        val contactosBob = FakeContacts(listOf(anaDeBob))
+        val mensajesBob = FakeMessages()
+        private val storeAna = FakeRatchetStore().apply {
+            sessions[bobDeAna.id] = Ratchet(JdkCurve25519())
+                .initial(secreto, anaDeBob.peerId, bobDeAna.peerId, lineage = ahora - 7_200_000L).encode()
+        }
+        private val storeBob = FakeRatchetStore().apply {
+            sessions[anaDeBob.id] = Ratchet(JdkCurve25519())
+                .initial(secreto, bobDeAna.peerId, anaDeBob.peerId, lineage = ahora - 3_600_000L).encode()
+        }
+        val ana = ChatService(
+            sigAna, cipher, FakeMessages(), contactosAna, FakeKeyExchange(anaDeBob.peerId), RendezvousService(),
+            FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange(anaDeBob.peerId), storeAna),
+        )
+        val bob = ChatService(
+            sigBob, cipher, mensajesBob, contactosBob, FakeKeyExchange(bobDeAna.peerId), RendezvousService(),
+            FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange(bobDeAna.peerId), storeBob),
+        )
+        val anaHaciaBob = Cable(sigAna, anaDeBob.peerId, bob)
+        val bobHaciaAna = Cable(sigBob, bobDeAna.peerId, ana)
+
+        suspend fun bobVistoPorAna() = contactosAna.findById(bobDeAna.id)!!
+        suspend fun anaVistaPorBob() = contactosBob.findById(anaDeBob.id)!!
+
+        /** Tres mensajes de ida y vuelta: la sesión sale de la época 0 y los dos se reconocen. */
+        suspend fun conversar() {
+            ana.send(bobVistoPorAna(), "hola".toByteArray()); bombear(anaHaciaBob, bobHaciaAna)
+            bob.send(anaVistaPorBob(), "qué tal".toByteArray()); bombear(anaHaciaBob, bobHaciaAna)
+            ana.send(bobVistoPorAna(), "bien".toByteArray()); bombear(anaHaciaBob, bobHaciaAna)
+            assertTrue(
+                "la sesión debía haber salido de la época 0",
+                Ratchet.Header.decode(sigAna.sentCiphertext!!)!!.epoch >= 1,
+            )
+        }
+
+        fun textosDeBob(): List<String> = mensajesBob.saved
+            .filter { it.senderId == anaDeBob.id }
+            .mapNotNull { (MessageEnvelope.decode(it.payload) as? MessageEnvelope.Decoded.Text)?.let { t -> String(t.body) } }
+
+        fun logs() = "log Bob=${bob.log.value} · log Ana=${ana.log.value}"
+    }
+
+    /**
+     * **H-1.** Bob borra a Ana y la vuelve a añadir (o importa un `.krbk`, que desde aquí es lo
+     * mismo: contacto sin sesión y sin saber qué versión habla Ana). Ana ya le anunció su versión
+     * una vez y no lo repite, así que Bob se queda creyendo que Ana habla v1; Ana le sigue
+     * escribiendo por ratchet en una sesión que Bob ya no tiene, y el reengache de Bob no sale
+     * porque "no usa ratchet". Resultado antes del arreglo: **todo lo que Ana escribía se
+     * descartaba (y se confirmaba en el buzón) para siempre**.
+     */
+    @Test
+    fun `borrar y volver a anadir a un contacto no pierde para siempre lo que te escriba`() = runTest {
+        conRatchet {
+            val p = Pareja()
+            kotlinx.coroutines.runBlocking {
+                p.conversar()
+
+                p.bob.deleteContact(p.anaVistaPorBob())
+                p.bob.addContact("Ana", p.anaDeBob.peerId)
+                p.bob.announceCapabilities()
+                bombear(p.anaHaciaBob, p.bobHaciaAna)
+
+                p.ana.send(p.bobVistoPorAna(), "¿me lees?".toByteArray())
+                bombear(p.anaHaciaBob, p.bobHaciaAna)
+            }
+            assertTrue("lo que escribe Ana tiene que llegar · ${p.logs()}", "¿me lees?" in p.textosDeBob())
+
+            // Y Bob vuelve al ratchet con ella, en vez de quedarse en la clave estática.
+            kotlinx.coroutines.runBlocking { p.bob.send(p.anaVistaPorBob(), "sí".toByteArray()) }
+            assertTrue(
+                "Bob debe volver a escribirle por ratchet · ${p.logs()}",
+                Ratchet.looksLikeRatchet(p.sigBob.sentCiphertext!!),
+            )
+        }
+    }
+
+    /**
+     * **H-1, el otro camino**: Bob estrena móvil e importa su `.krbk`. La identidad es la misma,
+     * pero el contacto llega sin la versión de Ana y sin sesión —el respaldo no lleva ninguna de
+     * las dos—, que para el protocolo es exactamente borrar y volver a añadir. Es el punto 5 de
+     * `PRUEBAS-PENDIENTES` §16, que con el código anterior habría fallado en el móvil.
+     */
+    @Test
+    fun `tras importar un krbk en un movil nuevo lo que te escriben vuelve a llegar`() = runTest {
+        conRatchet {
+            val p = Pareja()
+            val contactosNuevos = FakeContacts(listOf(p.anaDeBob.copy(peerProtocol = 0, announcedProtocol = 0)))
+            val mensajesNuevos = FakeMessages()
+            val sigNuevo = FakeSignaling()
+            val bobNuevo = ChatService(
+                sigNuevo, cipher, mensajesNuevos, contactosNuevos, FakeKeyExchange(p.bobDeAna.peerId),
+                RendezvousService(), FakeFileStore(), scopeInmediato(),
+                testSessions(FakeKeyExchange(p.bobDeAna.peerId)),
+            )
+            val anaHaciaNuevo = Cable(p.sigAna, p.anaDeBob.peerId, bobNuevo)
+            val nuevoHaciaAna = Cable(sigNuevo, p.bobDeAna.peerId, p.ana)
+            kotlinx.coroutines.runBlocking {
+                p.conversar()
+                anaHaciaNuevo.saltarLoEnviado() // eso se lo quedó el móvil viejo
+                bobNuevo.announceCapabilities()
+                bombear(anaHaciaNuevo, nuevoHaciaAna)
+                p.ana.send(p.bobVistoPorAna(), "¿estrenas móvil?".toByteArray())
+                bombear(anaHaciaNuevo, nuevoHaciaAna)
+            }
+            val textos = mensajesNuevos.saved.filter { it.senderId == p.anaDeBob.id }
+                .mapNotNull { (MessageEnvelope.decode(it.payload) as? MessageEnvelope.Decoded.Text)?.let { t -> String(t.body) } }
+            assertTrue(
+                "lo que escribe Ana tiene que llegar al móvil nuevo · log nuevo=${bobNuevo.log.value} · log Ana=${p.ana.log.value}",
+                "¿estrenas móvil?" in textos,
+            )
+        }
+    }
+
+    /**
+     * Quien nos tiene apuntados por debajo de lo que ya le anunciamos lo ha perdido: se le repite
+     * **por la clave estática** (sin sesión es lo único que abre), con lo que tenemos apuntado de
+     * él, y **una sola vez** aunque insista — cualquiera de tus contactos podría provocarlo.
+     */
+    @Test
+    fun `a quien nos tiene atrasados se le repite el anuncio por la clave estatica y una sola vez`() = runTest {
+        conRatchet {
+            val signaling = FakeSignaling()
+            val yaAnunciado = contactoV2.copy(announcedProtocol = ChatService.PROTOCOL_VERSION)
+            val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(yaAnunciado)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange()))
+            val nosTieneAtrasados = cipher.encrypt(secret, MessageEnvelope.encodeHello(ChatService.PROTOCOL_VERSION, knows = 0))
+
+            repeat(3) { chat.onReceived(yaAnunciado.peerId, nosTieneAtrasados) }
+
+            assertEquals("una sola respuesta · log=${chat.log.value}", 1, signaling.sentAll.size)
+            val respuesta = MessageEnvelope.decode(cipher.decrypt(secret, signaling.sentAll.single()))
+                as MessageEnvelope.Decoded.Hello
+            assertEquals(ChatService.PROTOCOL_VERSION, respuesta.protocol)
+            assertEquals("con lo que tenemos apuntado de él", ChatService.PROTOCOL_VERSION, respuesta.knows)
+        }
+    }
+
+    /** Si aún no le hemos anunciado nada, no hay que repetir: el anuncio del ciclo WAN ya va a salir. */
+    @Test
+    fun `sin anuncio previo no se responde a quien nos tiene atrasados`() = runTest {
+        conRatchet {
+            val signaling = FakeSignaling()
+            val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(listOf(contactoV2)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange()))
+
+            chat.onReceived(contactoV2.peerId, cipher.encrypt(secret, MessageEnvelope.encodeHello(ChatService.PROTOCOL_VERSION, knows = 0)))
+
+            assertTrue("log=${chat.log.value}", signaling.sentAll.isEmpty())
+        }
+    }
+
+    /**
+     * Al enterarnos de que un contacto habla ratchet se le escribe algo **por ratchet**: si había
+     * perdido la sesión, adopta nuestro linaje antes de escribirnos y no pierde lo primero que mande.
+     */
+    @Test
+    fun `al saber que un contacto habla ratchet se le manda un primer sobre por ratchet`() = runTest {
+        conRatchet {
+            val signaling = FakeSignaling()
+            val contacts = FakeContacts(listOf(contact))
+            val chat = ChatService(signaling, cipher, FakeMessages(), contacts, FakeKeyExchange(), RendezvousService(), FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange()))
+
+            chat.onReceived(contact.peerId, cipher.encrypt(secret, MessageEnvelope.encodeHello(ChatService.PROTOCOL_VERSION, knows = ChatService.PROTOCOL_VERSION)))
+
+            assertEquals(ChatService.PROTOCOL_VERSION, contacts.findById(contact.id)!!.peerProtocol)
+            assertEquals("log=${chat.log.value}", 1, signaling.sentAll.size)
+            assertTrue("tiene que ir por ratchet", Ratchet.looksLikeRatchet(signaling.sentAll.single()))
+        }
+    }
+
+    /**
+     * **H-3.** Un anuncio con una versión menor que la apuntada no la baja. Si la bajara, quien
+     * tenga el secreto compartido podría devolver la conversación a la clave estática con un solo
+     * sobre y leer en pasivo todo lo que viniera después, sin romper nada que se notara.
+     */
+    @Test
+    fun `un anuncio con una version menor no rebaja la del contacto`() = runTest {
+        conRatchet {
+            val signaling = FakeSignaling()
+            val contacts = FakeContacts(listOf(contactoV2))
+            val chat = ChatService(signaling, cipher, FakeMessages(), contacts, FakeKeyExchange(), RendezvousService(), FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange()))
+
+            chat.onReceived(contactoV2.peerId, cipher.encrypt(secret, MessageEnvelope.encodeHello(1)))
+
+            assertEquals(ChatService.PROTOCOL_VERSION, contacts.findById(contactoV2.id)!!.peerProtocol)
+            chat.send(contacts.findById(contactoV2.id)!!, "sigo por ratchet".toByteArray())
+            assertTrue(
+                "debe seguir escribiéndole por ratchet · log=${chat.log.value}",
+                Ratchet.looksLikeRatchet(signaling.sentCiphertext!!),
+            )
+        }
+    }
+
+    /**
+     * **H-2.** Verificar o bloquear desde la copia que tenía la pantalla —leída antes de que llegara
+     * el anuncio del contacto— lo devolvía a v1 para siempre. Lo impide el contrato del repositorio
+     * (en Room, el SQL que prueba `ContactUpsertSqlTest`); esto fija el caso real en el dominio.
+     */
+    @Test
+    fun `verificar desde una copia vieja del contacto no lo devuelve a la clave estatica`() = runTest {
+        val contacts = FakeContacts(listOf(contact))
+        val chat = ChatService(FakeSignaling(), cipher, FakeMessages(), contacts, FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        val copiaDeLaPantalla = contacts.findById(contact.id)!!
+
+        chat.onReceived(contact.peerId, cipher.encrypt(secret, MessageEnvelope.encodeHello(ChatService.PROTOCOL_VERSION)))
+        chat.setVerified(copiaDeLaPantalla, true)
+        chat.setBlocked(copiaDeLaPantalla.copy(verified = true), false)
+
+        val guardado = contacts.findById(contact.id)!!
+        assertTrue("lo que se quería guardar se guarda", guardado.verified)
+        assertEquals("y lo que anunció no se pierde", ChatService.PROTOCOL_VERSION, guardado.peerProtocol)
+    }
+
+    /**
+     * Al ratchet se le cree lo que demuestra: un sobre v2 que **abre** prueba que el contacto lo
+     * habla, y uno relleno, que habla la v3. Cura a quien ya se quedó en v1 por H-2 antes del
+     * arreglo: en cuanto escriba, vuelve a constar su versión.
+     */
+    @Test
+    fun `un sobre de ratchet que abre sube la version apuntada del contacto`() = runTest {
+        val contacts = FakeContacts(listOf(contact))
+        val chat = ChatService(FakeSignaling(), cipher, FakeMessages(), contacts, FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        val (ratchet, estado) = emisorRatchet()
+
+        val sinRelleno = ratchet.encrypt(estado, MessageEnvelope.encodeText("r-1", "hola".toByteArray()))
+        assertNotNull(chat.onReceived(contact.peerId, sinRelleno.ciphertext))
+        assertEquals(ChatService.RATCHET_MIN_PROTOCOL, contacts.findById(contact.id)!!.peerProtocol)
+
+        val relleno = ratchet.encrypt(sinRelleno.state, MessageEnvelope.encodeText("r-2", "otra".toByteArray()), pad = true)
+        assertNotNull(chat.onReceived(contact.peerId, relleno.ciphertext))
+        assertEquals(ChatService.PADDING_MIN_PROTOCOL, contacts.findById(contact.id)!!.peerProtocol)
+    }
+
+    /** **H-6.** Volver a dar de alta (p. ej. renombrar) a un contacto bloqueado no lo desbloquea. */
+    @Test
+    fun `volver a anadir a un contacto bloqueado no lo desbloquea ni olvida su version`() = runTest {
+        val bloqueado = contact.copy(
+            id = contact.peerId, blocked = true,
+            peerProtocol = ChatService.PROTOCOL_VERSION, announcedProtocol = ChatService.PROTOCOL_VERSION,
+        )
+        val contacts = FakeContacts(listOf(bloqueado))
+        val chat = ChatService(FakeSignaling(), cipher, FakeMessages(), contacts, FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+
+        chat.addContact("Bob renombrado", contact.peerId)
+
+        val guardado = contacts.findById(contact.peerId)!!
+        assertEquals("Bob renombrado", guardado.displayName)
+        assertTrue("sigue bloqueado", guardado.blocked)
+        assertEquals(ChatService.PROTOCOL_VERSION, guardado.peerProtocol)
+        assertEquals("no hace falta volver a anunciarse", ChatService.PROTOCOL_VERSION, guardado.announcedProtocol)
     }
 }
