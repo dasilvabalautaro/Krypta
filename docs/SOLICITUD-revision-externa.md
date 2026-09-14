@@ -357,8 +357,15 @@ respuesta.*
 > version of this text said NDK 26.1: the `.comment` section of the libraries shows otherwise,
 > because the build machine's `ANDROID_NDK_HOME` overrode the script's default.
 >
-> **The build is not reproducible yet**: the native libraries embed local build paths and no commit
-> identifier, so rebuilding the tag will not match these hashes byte for byte.
+> **This tag's build is not reproducible**: its native libraries embed local build paths and no
+> commit identifier, so rebuilding the tag will not match these hashes byte for byte.
+>
+> **From commit `8d02875` on, `build-aar.sh` is reproducible.** The same commit gives the same AAR
+> bytes from any folder and with an empty Go cache (verified on one Mac with two clones), and the
+> commit is embedded in the library (`Bridge.version()`). If the review uses a later commit, its AAR
+> can be checked by rebuilding it. The `libgojni.so` inside an APK is, byte for byte, the AAR's
+> library passed through `llvm-strip --strip-unneeded` (the Android Gradle Plugin strips native
+> libraries when packaging), so it can be tied to the AAR too.
 
 ---
 

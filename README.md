@@ -67,8 +67,10 @@ La arquitectura completa está en [docs/architecture.md](docs/architecture.md).
 
 ## Compilar
 
-Requisitos: JDK 25, Android SDK (compileSdk 36.1), NDK `26.1.10909125`, y Go 1.26 con `gomobile`
-en el `PATH`. La app pide Android 11 (API 30) o superior.
+Requisitos: JDK 25, Android SDK (compileSdk 36.1), NDK `26.1.10909125` y Go 1.26.4. Con
+`GOTOOLCHAIN=auto`, Go se descarga solo la versión que pide `go.mod`. `build-aar.sh` comprueba
+esas versiones e instala gomobile y gobind a la versión fijada. La app pide Android 11 (API 30) o
+superior.
 
 ```bash
 # 1. El puente Go. El AAR (~75 MB) no se versiona: hay que generarlo en un clon limpio.
@@ -84,7 +86,14 @@ Usa `:app:assembleDebug`: el `assembleDebug` agregado sin módulo no funciona co
 Los binarios exactos de la versión que se somete a revisión externa (el AAR y el APK de
 depuración arm64, con su sha256) están en la release
 [`revision-externa-1`](https://github.com/dasilvabalautaro/Krypta/releases/tag/revision-externa-1).
-Son de depuración y todavía no son reproducibles; los avisos están en la propia release.
+Son de depuración, y los de esa etiqueta no son reproducibles; los avisos están en la propia
+release.
+
+**El AAR es reproducible desde el commit `8d02875`.** `build-aar.sh` compila el mismo commit a los
+mismos bytes desde cualquier carpeta y con la caché vacía, mete el commit dentro de la librería y
+comprueba las versiones de Go, gomobile, el NDK y el JDK. Para comprobar un AAR, compila su commit
+y compara el sha256 que imprime el script. Solo se ha comprobado en una Mac; entre sistemas
+distintos no se ha probado.
 
 Para montar un nodo propio (también sirve para hacer pruebas de carga sin tocar los públicos),
 sigue [infra/node/README.md](infra/node/README.md).
@@ -147,6 +156,8 @@ Build: run `native-bridge/libp2p/build-aar.sh` (Go 1.26 + gomobile + NDK 26.1), 
 `./gradlew :app:assembleDebug`. The binaries of the version under external review (AAR and arm64
 debug APK, with sha256) are in the release
 [`revision-externa-1`](https://github.com/dasilvabalautaro/Krypta/releases/tag/revision-externa-1).
+The AAR build is reproducible from commit `8d02875` on: the same commit gives the same bytes, and
+the commit is embedded in the library.
 Security reports: [SECURITY.md](SECURITY.md),
 info@4000msnm.com.
 

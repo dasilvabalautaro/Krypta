@@ -211,13 +211,33 @@ no tiene nada de esto.
    `build-aar.sh` **fallaba en un clon limpio** (el directorio de salida no existe); ya está
    arreglado.
 
-   Lo que falta para que alguien pueda obtener los mismos bytes:
-   - Las `libgojni.so` llevan **rutas locales** y **ningún identificador de commit**. Haría falta
-     compilar con `-trimpath` e inyectar el commit en `Version()` con `-ldflags -X`; hoy
-     `Version()` dice `0.0.18-rdv1pass`, que está desfasado.
-   - Las **herramientas no están fijadas del todo**: falta la directiva `toolchain` en `go.mod`,
-     gomobile se instala con `@latest` en vez de con una versión concreta, y el script ejecuta
-     `go mod tidy`.
+   **AAR reproducible, 14 sep 2026 (commit `8d02875`).** Se cerró lo que faltaba:
+   - **Rutas locales.** `-trimpath`, y compilar desde una **ruta fija** (`/tmp/krypta-aar`).
+     Después de `-trimpath` quedaban 2 rutas: las de la directiva `replace` que gomobile escribe
+     apuntando a la carpeta del módulo, y `-trimpath` no las quita.
+   - **Commit dentro.** `Version()` lo devuelve, inyectado con `-ldflags -X`, con `-modificado` si
+     hay cambios sin confirmar. El script comprueba que está.
+   - **`proguard.txt` con fecha fija.** Antes cambiaba el AAR según la hora.
+   - **Herramientas fijadas y comprobadas**: `toolchain go1.26.4`, gomobile y gobind a la versión
+     de `go.mod`, NDK 26.1 y JDK 25. `go mod tidy -diff` sustituye a `go mod tidy`.
+
+   **Comprobado**: el commit `8d02875`, compilado desde dos clones en rutas distintas y con cachés
+   de Go vacías e independientes, dio el mismo AAR (`d817bae1…f4e0`) y los mismos ficheros dentro.
+
+   De paso salió que **todos los AAR anteriores se compilaron con el NDK 25.2**, no con el 26.1 que
+   decían los documentos: `~/.zprofile` exportaba `ANDROID_NDK_HOME`. El script ahora lo ignora.
+
+   Lo que **sigue pendiente** en este punto:
+   - **Otras máquinas**: solo se ha comprobado en una Mac. El NDK trae binarios distintos para macOS
+     y Linux, y nadie ha comparado entre ellos.
+   - **El APK**:
+     - Su **librería nativa sí queda ligada a la fuente**: es exactamente la del AAR pasada por
+       `llvm-strip --strip-unneeded`, porque AGP le quita los símbolos al empaquetar. Comprobado
+       byte a byte.
+     - **Lo demás no se ha intentado**: el dex, los recursos y la firma, que con la clave de
+       depuración es propia de cada máquina.
+   - **El binario del nodo** (`infra/node`).
+   - **Los binarios de `revision-externa-1`**: son anteriores a esto y no son reproducibles.
 4. **Página de operador** e informe de transparencia, aunque diga «0 peticiones».
 5. **Un segundo operador ajeno** en la lista de nodos por defecto.
 

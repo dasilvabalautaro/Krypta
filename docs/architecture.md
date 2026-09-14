@@ -756,8 +756,26 @@ dentro del WebSocket → Cloudflare no lee (E2EE) ni suplanta.
 
 ## Toolchain nativo (Go / gomobile) — Fase 0
 
-- **Go 1.26.4** (Homebrew) · **gomobile/gobind** (`~/go/bin`) · **NDK 26.1.10909125**.
-- Build del AAR: `native-bridge/libp2p/build-aar.sh` (envuelve `gomobile bind`).
+- **Herramientas:**
+  - **Go 1.26.4**, fijado con `toolchain` en `go.mod`;
+  - **gomobile y gobind**, a la versión de `golang.org/x/mobile` de `go.mod` (los instala el
+    script);
+  - **NDK 26.1.10909125**;
+  - **JDK 25**.
+
+  Hasta el 14 sep 2026 los AAR salieron en realidad con el **NDK 25.2**: `~/.zprofile` exporta
+  `ANDROID_NDK_HOME` y el script lo respetaba. Ahora lo ignora y comprueba la versión.
+- **Build del AAR:** `native-bridge/libp2p/build-aar.sh` (envuelve `gomobile bind`).
+  **Reproducible desde el commit `8d02875`**, gracias a:
+  - `-trimpath`;
+  - compilar desde la ruta fija `/tmp/krypta-aar`;
+  - el commit inyectado en `Version()` con `-ldflags -X`;
+  - `proguard.txt` con fecha fija;
+  - herramientas comprobadas.
+
+  Dos clones de ese commit, en rutas distintas y con cachés vacías, dieron el mismo AAR
+  (`d817bae1…f4e0`). El script falla si alguna ABI no tiene páginas de 16 KB, no lleva el commit
+  o conserva rutas locales.
 - **Gotcha obligatorio:** `-ldflags="-checklinkname=0"`. go-libp2p usa
   `github.com/wlynxg/anet`, que hace `//go:linkname` contra `net.zoneCache`; Go ≥ 1.23 lo
   bloquea y el enlazado falla ("invalid reference to net.zoneCache") sin esa flag.
@@ -768,9 +786,10 @@ dentro del WebSocket → Cloudflare no lee (E2EE) ni suplanta.
   resuelve por nombre vía JNI). Con `-PslimAbi` el APK release arm64 queda en **~44 MB**
   (vs ~74 MB debug; el suelo es `libgojni.so`). Firmado con la clave debug para smoke-tests
   (publicar exigirá keystore propio); verificado en dispositivo: nodo, WAN, descifrado y
-  envío funcionan minificados. **Decisión abierta:** si versionar el `.aar` en git (repo
-  pesado pero build sin Go) o ignorarlo y exigir `build-aar.sh` (repo ligero, requiere
-  Go+NDK).
+  envío funcionan minificados.
+- **El `.aar` no se versiona** (decidido el 31 jul 2026): pesaría ~75 MB en la historia por
+  cada regeneración. Cada clon lo genera con `build-aar.sh`, y desde el commit `8d02875` esa
+  compilación es reproducible, así que un AAR publicado se puede comprobar compilando su commit.
 
 ## Verificación realizada
 

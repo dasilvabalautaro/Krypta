@@ -831,6 +831,11 @@ directa (DCUtR) o se queda en relay.
   Después se reinstaló el APK compilado **desde un clon limpio de la etiqueta
   `revision-externa-1`** (sha256 `a30ab852…76ea`, el de su release): arranca en 3,7 s y pinta lo
   mismo, con «conectado».
+  Más tarde ese día se instaló el APK compilado desde un clon del commit `8d02875`, el primero con
+  **AAR reproducible** (sha256 `c2e3f5fc…c463`). La instalación fue correcta, el proceso seguía vivo
+  y el servicio en primer plano estaba en marcha, lo que indica que la librería nativa cargó. El
+  móvil estaba bloqueado y no se pudo ver la pantalla: **falta abrirlo y comprobar que dice
+  «conectado»**.
   Lo que necesita el segundo móvil sigue pendiente en §16.11 (volver a añadir un contacto) y
   §16.12 (ráfagas cruzadas).
 - **Bloquear contacto (6 sep)**: en el TECNO, con un contacto de usar y tirar (creado con el

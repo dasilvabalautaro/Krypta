@@ -1453,9 +1453,36 @@ The libp2p transport is written in Go (`native-bridge/libp2p/`, package `bridge`
 compiled to an AAR with gomobile. Kotlin calls it through generated classes
 `chat.neto.krypta.bridge.{Bridge, Node}`, wrapped by `Libp2pNode`.
 
-- **Toolchain:** Go 1.26.4 (Homebrew), gomobile/gobind in `~/go/bin` (not on PATH),
-  NDK 26.1.10909125. `go`/`gomobile` are not on PATH — call them with explicit paths or
-  `export PATH="/usr/local/bin:$HOME/go/bin:$PATH"`.
+- **Toolchain:** Go 1.26.4 (Homebrew; pinned by `toolchain go1.26.4` in `go.mod`), NDK
+  26.1.10909125, JDK 25. `build-aar.sh` checks all three. It installs gomobile + gobind at the
+  `golang.org/x/mobile` version pinned in `go.mod`, into `$TMPDIR/krypta-gomobile-<ver>-<go>`,
+  because gomobile looks `gobind` up in `PATH`. `go` is not on PATH in this shell: use
+  `export PATH="/usr/local/bin:$PATH"`.
+- **`~/.zprofile` exports `ANDROID_NDK_HOME` pointing at NDK 25.2.** Until 14 Sep 2026 the
+  script honoured it, so **every AAR up to then was built with NDK 25.2** (clang 14.0.7, visible
+  in `.comment`), not 26.1 as this file claimed. The script now ignores that variable.
+- **The AAR build is reproducible** (14 Sep 2026, commit `8d02875`): same commit + same tools →
+  same bytes, from any folder and with an empty Go cache.
+  - **Verified** by building `8d02875` from two clones in different paths, each with its own empty
+    `GOCACHE` (1.2 GB each): identical AAR (`d817bae1…f4e0`) and identical files inside, on one Mac.
+  - **What it took:**
+    - `-trimpath`;
+    - building from the fixed path `/tmp/krypta-aar`. gomobile writes a `replace` pointing at the
+      module dir into `libgojni.so`, and `-trimpath` doesn't remove it; those were the last 2
+      local paths;
+    - injecting the commit with `-ldflags -X chat.neto.krypta/nativego.buildCommit=<sha>[-modificado]`.
+      `Version()` returns it, and the hand-written `0.0.18-rdv1pass` is gone;
+    - rewriting `proguard.txt` with a fixed UTC date and `zip -X`;
+    - `go mod tidy -diff` instead of `go mod tidy`;
+    - pinned tools.
+  - **The script fails** unless every ABI has 16 KB pages, contains the commit and has no local
+    paths.
+  - **Gotcha:** those checks first used `llvm-strings | grep -q` under `pipefail`. `grep -q` exits
+    early, the writer dies of SIGPIPE, and the pipeline fails *even on a match*, while the "no
+    local paths" check could pass falsely. They grep a file now.
+  - **Limits:** not tested across host OSes (the NDK ships different binaries for macOS and
+    Linux). Building a *different* commit changes the embedded string, so compare against the hash
+    for that exact commit.
 - **The AAR is NOT in git** (31 Jul 2026, when the repo was first versioned): at ~75 MB it
   would trip GitHub's 50 MB warning and add another 75 MB of permanent history on every
   regeneration, so `.gitignore` excludes `native-bridge/libs/*.aar` (and its sources jar).
@@ -1486,8 +1513,9 @@ compiled to an AAR with gomobile. Kotlin calls it through generated classes
   links segments at 4 KB (`0x1000`) by default — `libgojni.so` was non-compliant and the AAB
   would be rejected. With the flag all four ABIs link at `0x4000`. Verify after rebuilding:
   `llvm-readelf -l <so> | grep LOAD` (last column must be `0x4000`) and, on the APK,
-  `zipalign -c -P 16 -v 4 app.apk`. NDK r27+ would default to 16 KB, but 26.1 is pinned here
-  to match the AAR's build.
+  `zipalign -c -P 16 -v 4 app.apk`; the script now checks the four ABIs itself. NDK r27+ would
+  default to 16 KB; 26.1 is the pinned NDK, enforced by the script since 14 Sep 2026. Before that
+  the AAR was actually built with 25.2 (see the toolchain bullet).
 - **gomobile API constraints:** only export functions/structs using gomobile-friendly
   types (string, int→long, bool, []byte, structs-with-methods, error). No maps/slices of
   structs, no channels across the boundary; use callback interfaces for async events.
@@ -1759,8 +1787,14 @@ change the wire format (REVISION §5.4); if it has to change before the review s
 - **`build-aar.sh` failed on a fresh clone**, which the rebuild exposed. `native-bridge/libs/`
   holds only ignored files, so a fresh clone doesn't have it, and gomobile died *after* compiling
   all four ABIs. Fixed with `mkdir -p ../libs`.
-- **Builds are still not reproducible.** `libgojni.so` embeds local paths and no commit id (the
-  module shows as `(devel)`), and `Version()` still says `0.0.18-rdv1pass`.
+- **That tag's binaries are not reproducible.** Their `libgojni.so` embeds local paths and no
+  commit id, and they were built with NDK 25.2. Fixed from commit `8d02875` (see the Native Go
+  bridge section).
+- **The TECNO now runs an APK built from a clone of `8d02875`** (APK `c2e3f5fc…c463`).
+- **The APK's `libgojni.so` is `llvm-strip --strip-unneeded` applied to the AAR's.** Same bytes
+  (`c7eac43b…`), with either NDK, because AGP strips native libs when packaging. So the native
+  library inside an APK can be tied byte for byte to a reproducible AAR. The rest of the APK (dex,
+  resources, signature) is not reproducible yet.
 - **`gh` is not installable via Homebrew on this Mac.** macOS 26 on Intel is Tier 3: there is no
   bottle, and building from source would upgrade Homebrew's Go, the one that builds the AAR. The
   official binary, checksum-verified, lives in `~/.local/bin/gh`, which is not on `PATH`.
