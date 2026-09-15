@@ -89,7 +89,7 @@ object HelpContent {
                 "incluye mensajes ni archivos, y no existe ninguna otra copia en ningún sitio. " +
                 "Sin ella, perder el móvil significa perder tu PeerID, y tus contactos tendrían " +
                 "que volver a añadirte y verificarte. Guarda la copia y su frase-clave en un " +
-                "lugar seguro.",
+                "lugar seguro, y antes de importarla pon el móvil en fecha y hora automáticas.",
         ),
         HelpItem(
             category = "Mensajes y llamadas",
@@ -190,6 +190,19 @@ object HelpContent {
                 "usa el candado: así queda fuera de “Cerrar todo”. Otras apps de mensajería no " +
                 "lo necesitan porque usan los servidores de Google; Krypta no los usa, y por " +
                 "eso depende de seguir viva en tu móvil.",
+        ),
+        // W-6 de docs/ESPECIFICACION-protocolo.md: tras restaurar con el reloj atrasado, lo que
+        // escribe el otro se pierde y corregir la hora no basta. El remedio va en el móvil
+        // restaurado, que no tiene historial que perder (el .krbk no lleva mensajes).
+        HelpItem(
+            category = "Problemas frecuentes",
+            question = "Importé mi copia de seguridad y no me llegan los mensajes de un contacto",
+            answer = "Una causa posible es que, al importar, el móvil tuviera la fecha u hora " +
+                "atrasada. Entonces lo que tú escribes le llega, pero lo suyo no te llega a ti, y " +
+                "poner la hora bien después no basta. Solución: activa la fecha y hora " +
+                "automáticas, elimina ese contacto y vuelve a añadirlo con su PeerID (se borra " +
+                "esa conversación en tu móvil y tendréis que verificaros de nuevo). Para " +
+                "evitarlo, pon la hora automática antes de importar.",
         ),
     )
 

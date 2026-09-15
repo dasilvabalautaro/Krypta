@@ -1871,6 +1871,14 @@ these decisions, and no production code changed:
   - a new table would need a v10 migration.
 - The user-facing effect of W-6 is security-model §9.13. The H-4 candidates analysis is deferred until
   the review starts.
+- **W-6 in the in-app help and the manual** (same day).
+  - `HelpContent`: the account-recovery answer now says to set automatic date and time before
+    importing a `.krbk`.
+  - A new "Problemas frecuentes" entry covers the symptom (after importing, one contact's messages
+    stop arriving) and the fix: set automatic time, then delete and re-add that contact.
+  - The fix is done **on the restored phone** on purpose. It has no history to lose, because
+    `.krbk` carries no messages; deleting on the other side would wipe that person's chat.
+  - The manual's §2.8 says the same.
 
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a

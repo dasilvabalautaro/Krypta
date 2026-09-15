@@ -192,6 +192,11 @@ recuperar tu PeerID ni de que tus contactos te reconozcan como el mismo interloc
   secretos compartidos, que se regeneran solos al reinstalar).
 - **Importar**: elige el archivo `.krbk`, introduce la contraseña; la app te pedirá
   cerrarse y reabrirse para aplicar la identidad importada.
+- **Antes de importar, pon el móvil en fecha y hora automáticas.** Si al importar la fecha está
+  atrasada, lo que escribes a un contacto le llega, pero **lo que te escribe él se pierde**, y
+  corregir la hora después no basta. Si ya te ha pasado: activa la hora automática, elimina ese
+  contacto y vuelve a añadirlo con su PeerID. Se borra esa conversación en tu móvil (tras importar
+  apenas tiene nada, porque la copia no lleva mensajes) y tendréis que volver a verificaros.
 - Guarda ese archivo en un sitio seguro (gestor de contraseñas, almacenamiento cifrado) —
   quien lo tenga y sepa la contraseña puede suplantarte.
 

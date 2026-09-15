@@ -855,6 +855,10 @@ directa (DCUtR) o se queda en relay.
 ## Verificado en 1 móvil (no requiere el segundo)
 - **Build de H-7 (15 sep)**: instalado en el TECNO con `:app:installDebug`, sin tocar datos. Arranca en
   frío y dice «conectado». Las llamadas no se pueden ejercitar con un solo móvil: van a §17.
+- **Ayuda sobre W-6 (15 sep)**: en el TECNO, Ayuda → «Problemas frecuentes» muestra «Importé mi copia
+  de seguridad y no me llegan los mensajes de un contacto», se despliega con su respuesta, y la de
+  «¿Puedo recuperar mi cuenta…?» pide la hora automática antes de importar. El efecto en sí (restaurar
+  con el reloj atrasado) no se ha reproducido en vivo: lo fija `RatchetTest`.
 - **Build de la revisión del protocolo (14 sep)**: instalado en el TECNO sobre la base real con
   `adb install -r`, sin tocar datos. Arranca, pinta las conversaciones con su vista previa
   descifrada y dice «conectado»; **el autor confirmó la verificación en el móvil** el mismo día.
