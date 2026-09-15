@@ -1841,6 +1841,37 @@ the code and the plan agreed with the author. Outcome in
 - **Installed on the TECNO:** cold start, "conectado". **Pending:** PRUEBAS-PENDIENTES §17 (two
   phones) and the port to Nyx.
 
+**Independent design review (15 Sep 2026).** A crypto design review of `a97cbab`, checked against
+`fe21111` (report `05-revision-diseno.md`, not versioned; the `evidence/…` files it cites were not
+provided). It found nothing undeclared. Evaluation in
+[docs/REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md) §9. The author took
+these decisions, and no production code changed:
+
+- **README no longer presents forward secrecy as a guarantee.** It is deployed, but epoch 0 lacks it,
+  only a normal conversation was tested on two phones, and it is unreviewed. The review was right that
+  declared limitations must not read as proven properties.
+- **W-6 is rewritten with its real effect, which is availability, not key reuse.** Pinned by
+  `RatchetTest` → `tras perder el estado con el reloj atrasado un sentido queda roto y no se arregla
+  solo`.
+  - If B loses state while its clock is behind the pair's current lineage, B's new lineage is lower.
+  - B→A arrives, via `openOld`, but stays in epoch 0 forever.
+  - A→B is lost: it is in epoch > 0 of the current lineage.
+  - Fixing the clock does not help, because the lineage is fixed at session creation. Only a new
+    lineage from A does (delete and re-add).
+  - Key reuse would need a lineage created in the same millisecond as an earlier one.
+  - A durable monotonic lineage is not done now. It touches the frozen lineage rule, would not cover a
+    `.krbk` import unless the last lineage traveled in the backup, and the H-4 redesign may absorb it.
+- **KCI resistance is not claimed**, and neither is deniability (spec W-3, §15.4; security-model
+  §9.11). Unsigned envelopes are deniable in practice. security-model used to say "no deniability by
+  design", which contradicted H-5.
+- **H-7's residual is accepted and declared as W-14.** A replayed invite can ring once more if the app
+  restarts within 10 min 45 s. Persisting that memory was rejected:
+  - in SharedPreferences, it would leave call metadata outside SQLCipher;
+  - reusing `ratchet_seen` would touch a component under review;
+  - a new table would need a v10 migration.
+- The user-facing effect of W-6 is security-model §9.13. The H-4 candidates analysis is deferred until
+  the review starts.
+
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a
 prioritized action plan; update it (or supersede it with a newer one) as items close.

@@ -366,7 +366,7 @@ llamada y no vuelve a avisar` y `el id de la fila de llamada perdida no lo elige
 **Lo que no arregla.**
 
 - Si el proceso se reinicia dentro de esos 10 min 45 s, el mismo invite puede sonar **una vez más**.
-  La fila de perdida sí resiste el reinicio.
+  La fila de perdida sí resiste el reinicio. Se acepta y se declara como W-14 (§9.3).
 - Vaciar el chat borra la fila y, con ella, su memoria: un invite rancio que llegue después deja una
   fila nueva.
 - Una llamada legítima de alguien con el reloj adelantado más de 10 min queda como perdida.
@@ -501,7 +501,8 @@ comprobable y no en otra afirmación.
 ## 6. Orden
 
 1. ✅ H-0, H-1, H-2, H-3 y H-6 arreglados con tests (14 sep 2026); H-4 y H-5 fijados y declarados.
-   H-7 arreglado y W-8 verificado contra el transporte el 15 sep 2026 (§8).
+   H-7 arreglado y W-8 verificado contra el transporte el 15 sep 2026 (§8). El mismo día, una
+   revisión de diseño independiente (§9): W-6 fijado en un test, W-14 declarado y KCI no prometido.
 2. ⬜ Este build en los dos móviles, y §16 entero, incluidos los puntos nuevos 11 y 12.
 3. ⬜ La comparación con SPQR en DISENO-postcuantico.
 4. 🟡 Solicitud al OTF, o presupuesto de una revisión acotada. **Textos listos y commit etiquetado
@@ -645,3 +646,100 @@ cuánto tiene que durar la memoria. Detalle, tests y arreglo en **H-7** (§2).
 > red: una vez por `(contacto, callId)`, 10 min de margen hacia el futuro y fila idempotente. No se
 > adoptó la ventana simétrica de 45 s porque haría perder llamadas legítimas con relojes desfasados.
 > Seis tests lo reproducían y fallaban antes del arreglo. La etiqueta `revision-externa-1` no cambia.
+
+---
+
+## 9. Revisión de diseño independiente (15 de septiembre de 2026)
+
+**Origen.** Una revisión del diseño criptográfico sobre `a97cbab`, contrastada con `fe21111`
+(`05-revision-diseno.md`, no versionado). **No encuentra nada que no estuviera declarado.** Su valor
+es confirmar de forma independiente que H-4, H-5 y las debilidades W siguen abiertas, y que H-7
+quedó corregido. Cita dos archivos de evidencia (`evidence/…`) que no se entregaron, así que su
+matriz de derivaciones y pruebas no se ha podido comprobar. Se contrastó con el código y los
+documentos sin tocar nada, y las decisiones las tomó el autor.
+
+### 9.1 Precisiones
+
+| Lo que dice | Lo que hay |
+|---|---|
+| Quedan abiertas H-4, H-5, W-1, W-2, W-6, W-10, W-12 y W-13 | Faltan **W-7** (sin post-cuántico), **W-11** (el `.krbk` solo lo protege la frase), W-9 y W-8. W-3 y W-5 son H-5 |
+| H-5 «afecta también buzón y rendezvous, cuyas etiquetas son recalculables desde `S`» | El buzón sí: el remitente se atribuye por la etiqueta, y eso es KCI. El rendezvous no autentica nada: que sea derivable de `S` es W-10 |
+| W-6 afecta a la «unicidad de claves» | Repetir claves exige crear un linaje en el mismo milisegundo que uno anterior. **El efecto real es de disponibilidad**, y no estaba bien escrito (§9.2) |
+| La corrección de H-7 «es solo en RAM» | Solo lo es no volver a sonar. La fila de llamada perdida no se repite porque su id va en la base. Lo que queda es un timbre de más tras un reinicio (W-14) |
+| La prueba «demuestra que Noise/TLS del circuito relayed rechaza duplicación, orden alterado y reflexión antes de entregar datos» | Se deduce de **dos** tests: la manipulación se probó sobre un tubo TCP directo, y el cifrado de extremo a extremo, sobre el circuito. Se negoció **TLS 1.3**, no Noise. Y el frame genuino sí se entregó, una vez: lo que nunca se entregó fue la copia |
+
+Y un punto en el que **tenía razón y obligaba**: «no deben presentarse como propiedades
+demostradas». El README anunciaba sin matices un «doble ratchet por épocas con secreto hacia
+adelante», en contra de security-model, que no lo cuenta aún como garantía, y de la regla de no
+prometerlo antes de la prueba en vivo; además, la época 0 no lo tiene. **Corregido.**
+
+### 9.2 W-6, con su efecto real
+
+Estaba escrito como «un reloj que retrocede podría reutilizar un linaje, y un linaje nuevo con el
+reloj por detrás del viejo no se adopta». Lo primero es despreciable, y lo segundo no decía qué pasa.
+Lo fija ahora `RatchetTest` → `tras perder el estado con el reloj atrasado un sentido queda roto y no
+se arregla solo`. Si B pierde el estado con el reloj por detrás del linaje vigente de la pareja:
+
+- **B → A llega**, por la época 0 derivable, pero A no adopta un linaje menor, así que B **no sale
+  nunca de la época 0**;
+- **A → B se pierde**: va en una época > 0 del linaje vigente, que B ya no tiene. El reengache no
+  ayuda, porque quien reengancha es B, desde su linaje menor;
+- **corregir el reloj no lo arregla**, porque el linaje se fija al crear la sesión. Lo arregla un
+  linaje nuevo de A (borrar y volver a añadir el contacto).
+
+El caso realista no es un reloj que retrocede en marcha. Es restaurar con la fecha mal puesta, o que
+el linaje vigente lo creara un móvil con el reloj adelantado.
+
+**Un linaje monótono duradero no se hace ahora**:
+
+- toca la regla del linaje, congelada por §5.4;
+- no cubriría la importación de un `.krbk` en un móvil nuevo, salvo que el último linaje viajara en
+  el respaldo;
+- y el rediseño de H-4 puede absorberlo.
+
+Se documenta el límite en la especificación (§5.7 y W-6), en DISENO-ratchet §1.6 y, para el usuario,
+en security-model §9.13.
+
+### 9.3 Decisiones
+
+1. **KCI y negación.** La resistencia a KCI **no se promete** hasta la revisión externa: se declara
+   como algo que Krypta no protege (security-model §9.11, especificación W-3), no como algo a medio
+   arreglar. Security-model decía «No hay negación … por diseño», lo que chocaba con H-5 («se pierde
+   la negación, que Krypta no promete pero tampoco ha decidido tirar»). Queda escrito lo que hay: los
+   sobres no van firmados y son negables de hecho, pero **no se promete**. Firmarlos la perdería, y
+   eso se decide con la revisión.
+2. **Lo que queda de H-7 se acepta y se declara como W-14**, en vez de dejarlo solo como condición de
+   P15. Persistir la memoria de timbre tenía tres caminos, y ninguno compensa un timbre de más tras
+   un reinicio:
+   - en SharedPreferences, dejaría metadatos de llamadas fuera de SQLCipher;
+   - reutilizando la tabla de vistos del ratchet, tocaría un componente que está en revisión (P7);
+   - con una tabla nueva, obligaría a una migración a v10.
+3. **El análisis de H-4 se aplaza.** Un documento con las candidatas sería útil para quien revise,
+   pero corre el riesgo de condicionarle. Se escribe cuando la revisión arranque.
+4. **Tras la revisión, sin cambios** (§6.7): rediseño del linaje (H-4, que puede absorber W-6), firma
+   de sobres (H-5) y un linaje monótono duradero.
+
+### 9.4 Qué cambió en el repositorio
+
+- Test: `RatchetTest` (+1, fija W-6).
+- Docs:
+  - README, que ya no presenta el secreto hacia adelante como garantía;
+  - especificación: §5.7, W-3, W-6, W-8, W-14 (nueva), P15, §15.2 y §15.4;
+  - DISENO-ratchet §1.6;
+  - security-model: la negación, §9.11, §9.13 (nuevo) y las llamadas;
+  - SOLICITUD-revision-externa, esta sección y CLAUDE.md.
+- **Sin cambios de código de producción, formato de red ni esquema.**
+
+### 9.5 Respuesta a la revisión
+
+> Gracias: coincide con lo declarado, y confirma de forma independiente que H-7 quedó corregido. Cinco
+> precisiones: (1) faltan en la lista W-7 y W-11; (2) el rendezvous no es un problema de KCI sino de
+> que se pueda ligar a la pareja (W-10); (3) W-6 no compromete la unicidad de claves en la práctica,
+> pero sí la disponibilidad —tras restaurar con el reloj atrasado un sentido se pierde y no se
+> recupera solo—, lo que ahora está fijado en un test y documentado; (4) en H-7 solo el timbre está
+> en RAM, y la fila de llamada perdida es persistente; el resto se acepta y se declara como W-14;
+> (5) lo de W-8 se deduce de dos pruebas distintas, se negoció TLS 1.3 y el frame genuino sí se
+> entregó una vez. Aplicado: el README ya no presenta el secreto hacia adelante como demostrado, y
+> se declara que la resistencia a KCI no se promete. H-4, H-5 y un linaje monótono duradero quedan
+> para después de la revisión externa, por la congelación del formato. Los archivos `evidence/…` que
+> cita no llegaron.

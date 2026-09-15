@@ -148,6 +148,24 @@ Coste honesto: quien pueda **reproducir** un mensaje antiguo de época 0 y linaj
 degradación a época 0 durante una ronda. Lo acota la deduplicación (§1.5), que descarta el
 duplicado antes de mirarlo. Forjar uno nuevo exige `S`, y quien tiene `S` ya tiene la identidad.
 
+**Coste con el reloj** (W-6; fijado el 15 sep 2026 en `RatchetTest`). La regla da por hecho que el
+linaje nuevo es mayor que el vigente, porque es «la hora actual». No lo es si quien pierde el estado
+tiene el reloj por detrás del linaje vigente de la pareja: por ejemplo, al restaurar con la fecha mal
+puesta, o si el linaje vigente lo creó un móvil con el reloj adelantado. Entonces:
+
+- lo que escribe **llega**, por la época 0 derivable, pero el otro no adopta un linaje menor, así que
+  **no sale nunca de la época 0**;
+- lo que le escribe el otro, en una época > 0 del linaje vigente, **no se puede abrir y se pierde**;
+- y **corregir el reloj no lo arregla**, porque el linaje se fija al crear la sesión. Lo arregla que
+  el otro arranque un linaje nuevo (borrar y volver a añadir el contacto).
+
+Repetir claves, en cambio, exigiría crear un linaje en el mismo milisegundo que uno anterior.
+
+Un **linaje monótono duradero** (guardar el último emitido y no bajar nunca de él) no se hace
+ahora, por tres motivos. Toca la regla del linaje, congelada hasta la revisión externa. No cubriría
+la importación de un `.krbk` en un móvil nuevo, salvo que el último linaje viajara en el respaldo. Y
+el rediseño de H-4 puede absorberlo.
+
 ### 1.7 Formato de la cabecera
 
 Va **en claro** (el AEAD la autentica como AAD, así que no se puede tocar) delante del ciphertext:

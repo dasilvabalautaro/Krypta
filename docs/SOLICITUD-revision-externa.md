@@ -280,7 +280,9 @@ respuesta.*
 >    post-compromise security?
 > 2. **Lineage rule (§5.7).** A strictly greater lineage is adopted, a lower one never is. This
 >    gives automatic recovery from state loss, but an `S` holder can hijack a session (known issue
->    W-4, pinned in a test). Is there a rule that keeps recovery without the hijack?
+>    W-4, pinned in a test). Is there a rule that keeps recovery without the hijack? The same rule
+>    decides W-6: after losing state with the clock behind the current lineage, one direction stays
+>    broken and does not recover on its own (pinned in a test added after the tag).
 > 3. **Replay (§5.9).** Epoch 0 is re-derivable, so replay protection depends on a deduplication
 >    table (8 days ∪ newest 500). Is that acceptable?
 > 4. **Capability negotiation and downgrade (§7).** An in-band `V` envelope, a per-contact version
@@ -328,7 +330,9 @@ respuesta.*
 > monotonicity relying on the clock (W-6); no post-quantum protection (W-7); call frames without a
 > counter (W-8); `PN` unused (W-9); labels and rendezvous derivable from `S` forever (W-10); `.krbk`
 > backup protected only by a passphrase (W-11); Ed25519 seed reuse (W-12); metadata visible to the
-> node operator (W-13). A cheaper or new way to exploit them *is* in scope.
+> node operator (W-13); and, declared after the tag, a replayed call invite that rings once more
+> after an app restart (W-14). **Resistance to KCI is not claimed.** A cheaper or new way to exploit
+> them *is* in scope.
 >
 > **Already found and fixed by the internal review** (worth re-checking): H-0 (per-conversation
 > exclusion; key/nonce reuse under concurrency), H-1 (capability loss after re-adding a contact or

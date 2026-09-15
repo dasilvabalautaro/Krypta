@@ -96,8 +96,9 @@ sigue siendo cierto hasta que pasen las pruebas con dos móviles.)
   los reordene o se los devuelva a quien los mandó es que el stream va dentro del cifrado de
   transporte de libp2p (TLS 1.3 o Noise) de teléfono a teléfono, también cuando pasa por un relay.
   Comprobado con tests el 15 sep 2026: manipular esos bytes corta la conexión, y el relay no ve lo
-  que viaja por el circuito. Y un **invite de llamada repetido** ya no vuelve a sonar ni suma otra
-  «llamada perdida» (H-7 de la revisión del protocolo).
+  que viaja por el circuito. Y un **invite de llamada repetido** ya no suma otra «llamada perdida»,
+  y no vuelve a sonar salvo en un caso: si la app se reinicia en los 10 min 45 s siguientes, puede
+  sonar una vez más (H-7 de la revisión del protocolo, y W-14 de la especificación).
 
 ### Lo que NO se garantiza (importante)
 
@@ -115,7 +116,12 @@ sigue siendo cierto hasta que pasen las pruebas con dos móviles.)
     garantía, solo como un mecanismo desplegado;
   - **no es retroactivo**: los mensajes anteriores no ganan PFS, y el historial guardado se
     protege con el cifrado de la base (§7), no con el ratchet.
-- **No hay negación (deniability) ni protección de metadatos por diseño.** Ver §5 y §6.
+- **La negación (deniability) no se promete, y tampoco se ha renunciado a ella.** Los sobres se
+  autentican con el secreto compartido de la pareja, no con una firma, así que cualquiera de los
+  dos pudo fabricarlos: frente a un tercero son negables de hecho. Pero no hay análisis que lo
+  respalde, y los metadatos (§5 y §6) pueden delatar igualmente quién habló con quién. Firmar los
+  sobres para resistir KCI (§9, punto 11) la perdería; se decide con la revisión externa.
+- **No hay protección de metadatos por diseño.** Ver §5 y §6.
 - **El tamaño se cuantiza, no se oculta.** Desde el 11 sep 2026 el texto en claro va **relleno
   por tramos** dentro del cifrado (160 B hasta 4 KiB, 1 KiB hasta 64 KiB), así que los mensajes
   de control —acuses de lectura, anuncios de capacidad, señales de llamada— y los textos cortos
@@ -477,6 +483,9 @@ escrituras.
       un contacto usando **tu propia** identidad robada, por ejemplo de tu `.krbk` (H-5).
     - La variante **silenciosa**, degradar la pareja a la clave estática con un anuncio forjado,
       estaba abierta y **se cerró el mismo día** (H-3).
+    - **Krypta no promete resistencia a KCI** (decisión del 15 sep 2026). Mientras no haya revisión
+      externa se declara como algo que no protege, no como algo a medio arreglar. Lo que lo
+      cerraría, firmar los sobres con la identidad, cuesta la negación, y eso está por decidir.
 12. **Dos fallos de implementación que ya no están, pero que estuvieron** (revisión del 14 sep
     2026). Con el envío por ratchet encendido desde el 10 sep:
     - dos operaciones simultáneas sobre la misma conversación podían **repetir clave y nonce**
@@ -486,6 +495,11 @@ escrituras.
 
     Solo afectaba a parejas con los dos móviles en un build del 10 al 13 sep, y no hay forma de
     saber desde fuera si llegó a ocurrir.
+13. **Restaurar la identidad con el reloj del móvil atrasado** (W-6 de la especificación). Si al
+    reinstalar o importar el `.krbk` la fecha del móvil es anterior al momento en que la pareja
+    empezó su sesión actual, lo que escribes llega pero sin secreto hacia adelante, y **lo que te
+    escribe el otro se pierde sin aviso**. Poner bien la hora después no lo arregla; lo arregla que
+    el otro te borre y te vuelva a añadir. Con el reloj en hora automática no pasa.
 
 ---
 

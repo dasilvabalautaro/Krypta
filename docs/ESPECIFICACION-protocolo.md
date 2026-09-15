@@ -240,6 +240,12 @@ cadena de recepción actual a `past` y conservando `skipped`.
   reinstalación).
 - **Requisito**: los linajes que emite una identidad tienen que ser monótonos. Hoy lo garantiza el
   reloj, no el protocolo (W-6).
+- **Si no se cumple** (W-6, fijado en `RatchetTest`): quien pierde el estado con el reloj por detrás
+  del linaje vigente de la pareja crea un linaje menor. Lo que escribe llega por `openOld`, pero el
+  otro no lo adopta y no sale nunca de la época 0; lo que escribe el otro, en una época > 0 del
+  linaje vigente, no se puede abrir y se pierde. El linaje se fija al crear la sesión, así que
+  **corregir el reloj no lo arregla**: lo arregla un linaje nuevo del otro lado (borrar y volver a
+  añadir el contacto).
 - Recuperación: como la época 0 de cualquier linaje es derivable de `S`, el lado que pierde el
   estado siempre puede volver a hablar, y el otro adopta su linaje (que es mayor). Si el otro sigue
   escribiendo en el viejo, el que perdió el estado responde con un `V` (reengache, §7.6).
@@ -470,7 +476,7 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 | **P12** | La clave de una llamada no se deriva de la identidad (con quien negocia) | A4 sin la señalización | Probada | `CallServiceTest` |
 | **P13** | El disco del nodo no liga etiquetas del buzón con PeerIDs | A1 (volcado) | Probada en el nodo | Go `TestMailboxV2NoGuardaNiRemitenteNiDestinatario`, `TestMailboxV2LaEtiquetaEsLaLlave`, [DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) |
 | **P14** | Separación de dominio entre todas las derivaciones de `S` | — | Por inspección | Etiquetas `info` de §4, §5.2, §8, §9 y §10, todas distintas |
-| **P15** | Un `invite` genuino hace sonar como mucho una vez y deja como mucho una fila de llamada perdida, lo entregue quien lo entregue y cuantas veces | A1 | Probada desde el 15 sep 2026, **condicionada**: si el proceso se reinicia dentro de los 10 min 45 s puede sonar una vez más, y vaciar el chat borra la fila y con ella su memoria | `CallServiceTest` (7 tests de H-7), `ChatServiceTest` |
+| **P15** | Un `invite` genuino hace sonar como mucho una vez y deja como mucho una fila de llamada perdida, lo entregue quien lo entregue y cuantas veces | A1 | Probada desde el 15 sep 2026, **condicionada**: si el proceso se reinicia dentro de los 10 min 45 s puede sonar una vez más (W-14), y vaciar el chat borra la fila y con ella su memoria | `CallServiceTest` (7 tests de H-7), `ChatServiceTest` |
 
 ---
 
@@ -480,17 +486,18 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 |---|---|---|---|
 | **W-1** | La **época 0** no tiene secreto hacia adelante, y si el primer mensaje del usuario sale en ella **depende de los relojes** | A4 | DISENO-ratchet §1.8.4 |
 | **W-2** | Un sobre de época 0 **reproducido** fuera de la ventana de deduplicación (8 días ∪ 500) se vuelve a entregar | A1 | DISENO-ratchet §1.9 |
-| **W-3** | **La autenticación del origen es la de `S`**. Quien tenga *cualquiera* de las dos identidades puede inyectar como el otro por tres vías: v1, época 0 de un linaje ajeno (se abre sin adoptarlo) y un linaje nuevo. Con el depósito ciego eso incluye **suplantar a cualquier contacto ante quien perdió su propia clave** (KCI) | A4 | H-5 de la revisión |
+| **W-3** | **La autenticación del origen es la de `S`**. Quien tenga *cualquiera* de las dos identidades puede inyectar como el otro por tres vías: v1, época 0 de un linaje ajeno (se abre sin adoptarlo) y un linaje nuevo. Con el depósito ciego eso incluye **suplantar a cualquier contacto ante quien perdió su propia clave** (KCI). **La resistencia a KCI no se promete** (decisión del 15 sep 2026, hasta la revisión externa) | A4 | H-5 de la revisión |
 | **W-4** | **Secuestro por linaje**: un sobre de época 0 con un linaje forjado muy alto es adoptado, el receptor avanza con la propuesta del atacante y le escribe con material que este conoce; el extremo legítimo queda fuera **sin vuelta atrás** hasta borrar la sesión | A4 activo | H-4; fijado en `RatchetTest` |
 | **W-5** | La recepción v1 se acepta siempre, de cualquier contacto, aunque la pareja ya use v2 | A4 | Ligado a W-3: cerrar solo esta vía no compra nada |
-| **W-6** | La monotonía del linaje la da el reloj. Un reloj que retrocede podría reutilizar un linaje, y un linaje nuevo con el reloj por detrás del viejo no se adopta | — | Sin arreglo |
+| **W-6** | La monotonía del linaje la da el reloj. **El efecto real es de disponibilidad**: quien pierde el estado con el reloj por detrás del linaje vigente (restaurar con la fecha mal puesta, o un linaje vigente creado por un móvil con el reloj adelantado) crea un linaje menor; lo que escribe llega pero sin salir de la época 0, lo que le escriben **se pierde**, y corregir el reloj no lo arregla (§5.7). Repetir claves exigiría crear un linaje en el mismo milisegundo que uno anterior | — | Sin arreglo; fijado en `RatchetTest`. Un linaje monótono duradero toca la regla congelada (REVISION §9.2) |
 | **W-7** | Sin post-cuántico: todo es X25519, y el PeerID *es* la clave pública | A6 | [DISENO-postcuantico.md](DISENO-postcuantico.md) |
-| **W-8** | Los **frames de una llamada** no llevan contador ni ventana, y la clave es la misma en los dos sentidos: **la capa de aplicación** no distingue un frame repetido, reordenado o devuelto al emisor. **Impacto limitado mientras la seguridad de transporte de libp2p (TLS 1.3 o Noise) mantenga autenticidad, orden y anti-replay de extremo a extremo**, y eso está comprobado (15 sep 2026): un intermediario que duplica, reordena o refleja bytes corta la conexión sin entregar nada repetido, y un relay no ve ni el frame ni lo negociado dentro del circuito. Sin comprobar: la vía QUIC directa tras DCUtR (por inspección, go-libp2p no usa 0-RTT). Y la app no puede verificarlo en ejecución: go-libp2p deja vacío `ConnState().Security` en las conexiones relayed | A1, si cambiara el transporte | Pregunta para la revisión (§15.5); evidencia en [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md) §8 |
+| **W-8** | Los **frames de una llamada** no llevan contador ni ventana, y la clave es la misma en los dos sentidos: **la capa de aplicación** no distingue un frame repetido, reordenado o devuelto al emisor. **Impacto limitado mientras la seguridad de transporte de libp2p (TLS 1.3 o Noise) mantenga autenticidad, orden y anti-replay de extremo a extremo**, y eso está comprobado (15 sep 2026): un intermediario que duplica, reordena o refleja bytes corta la conexión sin entregar nada repetido, y un relay no ve ni el frame ni lo negociado dentro del circuito. En los tests se negoció TLS 1.3. Sin comprobar: la vía QUIC directa tras DCUtR (por inspección, go-libp2p no usa 0-RTT). No da frescura frente a un extremo comprometido ni frente a código que reinyecte frames después del transporte, y no sustituye a un contador si cambia el transporte. Y la app no puede verificarlo en ejecución: go-libp2p deja vacío `ConnState().Security` en las conexiones relayed | A1, si cambiara el transporte | Pregunta para la revisión (§15.5); evidencia en [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md) §8 |
 | **W-9** | `PN` se transmite y no se usa; las claves de la época anterior salen de la cadena retirada, acotadas por `MAX_SKIP` | — | Pregunta para la revisión |
 | **W-10** | Etiquetas del buzón y rendezvous **derivables de `S` para siempre**: quien obtenga una identidad puede decir qué etiquetas eran de esa pareja en cualquier volcado pasado | A4 | DISENO-ratchet §7.2 |
 | **W-11** | El `.krbk` solo lo protege la frase (PBKDF2, 310 000 iteraciones): quien lo obtenga puede probar frases sin límite, y acertar es A4 | A4 | security-model §7 |
 | **W-12** | La misma semilla Ed25519 sirve para firmar (Noise de libp2p) y, convertida, para X25519 | — | Pregunta para la revisión |
 | **W-13** | Metadatos: el nodo ve el grafo de parejas del día (DHT), la presencia (wake) y quién habla con quién en vivo (relay); y, por identify, qué protocolos admite cada teléfono | A1 | security-model §5 y §6 |
+| **W-14** | Si la app se reinicia en los 10 min 45 s siguientes a un `invite`, quien pueda reenviarlo (el nodo, por el buzón) lo hace **sonar una vez más**: la memoria de invites atendidos vive en RAM. La fila de llamada perdida no se repite, porque su id va en la base | A1 | Aceptado el 15 sep 2026: persistir esa memoria dejaría metadatos de llamadas fuera de SQLCipher o tocaría la tabla de vistos del ratchet (REVISION §9.3) |
 
 ---
 
@@ -523,13 +530,16 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 2. **Linaje** (W-4, W-6): ¿hay una regla que conserve la recuperación automática tras perder el
    estado sin permitir que quien tenga `S` secuestre la sesión? Candidatas que no se han hecho:
    acotar `L` a «ahora + margen», exigir prueba de época ≥ 1 para adoptar, no adoptar nunca un
-   linaje de una sesión con épocas avanzadas sin confirmación del usuario.
+   linaje de una sesión con épocas avanzadas sin confirmación del usuario. La misma regla tendría que
+   resolver W-6: tras perder el estado con el reloj atrasado, un sentido queda roto y no se recupera
+   solo (fijado en `RatchetTest`).
 3. **Época 0 derivable** (W-1, W-2): ¿es aceptable que la protección contra reproducciones dependa de
    una tabla de deduplicación con ventana, o conviene rechazar la época 0 de un linaje que ya no es
    el vigente?
 4. **Autenticación a nivel de `S`** (W-3, W-5): ¿vale la pena firmar los sobres con la identidad
    (resistencia a KCI) a cambio de perder la negación, que Krypta no promete? ¿Cuándo debería dejar
-   de aceptarse v1?
+   de aceptarse v1? Hoy **no se promete ninguna de las dos**: ni resistencia a KCI (W-3) ni negación.
+   Los sobres no van firmados y en la práctica son negables, pero no hay análisis que lo respalde.
 5. **Llamadas** (W-8, P15): hoy lo que impide repetir, reordenar o reflejar frames es el transporte
    de libp2p, comprobado con tests. ¿Conviene un contador por frame y claves separadas por sentido
    para no depender de él? ¿Es suficiente la regla del `invite` de §8 (una vez por `callId` en RAM,

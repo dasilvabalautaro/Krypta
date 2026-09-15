@@ -156,6 +156,62 @@ class RatchetTest {
         assertEquals("no hay vuelta atrás: Bob sigue en el linaje forjado", forjadoLinaje, b.lineage)
     }
 
+    /**
+     * **Limitación conocida, fijada a propósito** (W-6 de `docs/ESPECIFICACION-protocolo.md`). La
+     * monotonía del linaje la da el reloj. Si B pierde el estado (reinstala e importa su `.krbk`, o
+     * el estado no se puede leer) y su reloj va **por detrás del linaje vigente** de la pareja, su
+     * sesión nueva nace con un linaje menor, y entonces:
+     *
+     * - lo que escribe B **llega**, porque la época 0 de cualquier linaje es derivable, pero A no
+     *   adopta un linaje menor y B **no sale nunca de la época 0**: sin secreto hacia adelante;
+     * - lo que escribe A **se pierde**: va en una época > 0 del linaje vigente, que B ya no tiene;
+     * - y **no se arregla solo** cuando el reloj de B alcanza la hora buena, porque el linaje de
+     *   una sesión se fija al crearla. Lo arregla que **A** arranque un linaje nuevo (borrar y
+     *   volver a añadir el contacto), o que lo haga B con el reloj ya bien.
+     *
+     * El caso realista no es un reloj que retrocede en marcha, sino restaurar con una fecha mal
+     * puesta, o que el linaje vigente lo creara un móvil con el reloj adelantado. Repetir claves,
+     * en cambio, exigiría crear un linaje en el mismo milisegundo que uno anterior. Si algún cambio
+     * lo cierra, este test tiene que cambiar con él.
+     */
+    @Test
+    fun `tras perder el estado con el reloj atrasado un sentido queda roto y no se arregla solo`() {
+        var (a, b) = sessions(lineage = 5_000L)
+        repeat(2) {
+            val m = ratchet.encrypt(a, "a".toByteArray()); a = m.state
+            b = ratchet.decrypt(b, secret, m.ciphertext).state
+            val r = ratchet.encrypt(b, "b".toByteArray()); b = r.state
+            a = ratchet.decrypt(a, secret, r.ciphertext).state
+        }
+        assertTrue("la sesión debía ir ya por varias épocas", a.epoch >= 2)
+
+        // B pierde el estado y su reloj marca una hora anterior al linaje vigente.
+        b = ratchet.initial(secret, bob, alice, lineage = 3_000L)
+
+        repeat(3) {
+            // B → A llega, siempre en la época 0 de su linaje, y A no lo adopta.
+            val deB = ratchet.encrypt(b, "he vuelto".toByteArray()); b = deB.state
+            assertEquals(0, Ratchet.Header.decode(deB.ciphertext)!!.epoch)
+            val enA = ratchet.decrypt(a, secret, deB.ciphertext); a = enA.state
+            assertEquals("he vuelto", String(enA.plaintext))
+            assertEquals("A no adopta un linaje menor", 5_000L, a.lineage)
+
+            // A → B no se abre, y el estado de B no se mueve.
+            val deA = ratchet.encrypt(a, "¿me lees?".toByteArray()); a = deA.state
+            assertThrows(RatchetException::class.java) { ratchet.decrypt(b, secret, deA.ciphertext) }
+            assertEquals(3_000L, b.lineage)
+        }
+
+        // Lo arregla un linaje nuevo de A, que es mayor: B lo adopta.
+        a = ratchet.initial(secret, alice, bob, lineage = 6_000L)
+        val nuevo = ratchet.encrypt(a, "de nuevo".toByteArray()); a = nuevo.state
+        val enB = ratchet.decrypt(b, secret, nuevo.ciphertext); b = enB.state
+        assertEquals("de nuevo", String(enB.plaintext))
+        assertEquals(6_000L, b.lineage)
+        val respuesta = ratchet.encrypt(b, "te leo".toByteArray()); b = respuesta.state
+        assertEquals("te leo", String(ratchet.decrypt(a, secret, respuesta.ciphertext).plaintext))
+    }
+
     @Test
     fun `los dos hablan a la vez sin que se rompa la sesion`() {
         var (a, b) = sessions()

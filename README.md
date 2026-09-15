@@ -23,8 +23,10 @@ cuando el otro está desconectado.
   PeerID —la clave pública— es tu dirección. Se comparte como texto o QR, y un número de
   seguridad (o el QR) permite comprobar que nadie ha sustituido el PeerID por el camino.
 - **Mensajes, fotos, archivos, notas de voz, GIF, respuestas con cita y llamadas de voz y vídeo.**
-- **Cifrado de extremo a extremo**: acuerdo X25519 y AES-256-GCM; doble ratchet por épocas con
-  secreto hacia adelante (con cada contacto cuya app también lo anuncia); el tamaño de los
+- **Cifrado de extremo a extremo**: acuerdo X25519 y AES-256-GCM, y un doble ratchet por épocas
+  **pensado para dar secreto hacia adelante**, con cada contacto cuya app también lo anuncia. Está
+  desplegado, pero **todavía no es una garantía**: la primera época no lo tiene, entre dos móviles
+  solo se ha probado la conversación normal y nadie de fuera lo ha revisado. El tamaño de los
   mensajes va relleno por tramos para que no delate qué son.
 - **Sin directorio de usuarios.** Cada pareja se cita en un punto de encuentro de la DHT que
   cambia cada día y solo pueden calcular sus dos miembros.
