@@ -171,8 +171,9 @@ Quarkslab. Para un modelo formal, Cryspen.
 
 > All at tag `revision-externa-1`:
 >
-> - Normative protocol specification, with numbered properties P1–P14, declared weaknesses
->   W-1–W-13 and questions for the reviewer: `docs/ESPECIFICACION-protocolo.md`
+> - Normative protocol specification, with numbered properties P1–P15, declared weaknesses
+>   W-1–W-14 (P15 and W-14 added after the tag) and questions for the reviewer:
+>   `docs/ESPECIFICACION-protocolo.md`
 > - Internal review and its findings: `docs/REVISION-protocolo-2026-09-14.md`
 > - Design rationale: `docs/DISENO-ratchet.md`, `docs/DISENO-buzon-ciego.md`,
 >   `docs/DISENO-postcuantico.md`, `docs/DISENO-rotacion-identidad.md`

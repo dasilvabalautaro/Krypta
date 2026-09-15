@@ -404,15 +404,15 @@ No se ha visto un ataque concreto con ninguna de las tres; son preguntas para qu
 
 ## 3. Cada parte de la observación, y qué se ha hecho con ella
 
-| Parte | Qué significa | Qué se ha hecho (14 sep 2026) | Qué falta, y de quién depende |
+| Parte | Qué significa | Qué se ha hecho (a 15 sep 2026) | Qué falta, y de quién depende |
 |---|---|---|---|
-| **«Protocolo maduro»** | Años de uso real que destapan los casos límite | No se compra. Lo que la sustituye en parte, **hecho**: pruebas de propiedades (10 sep), fuzzing del parseo (12 sep), pruebas de concurrencia (**hoy**), esta revisión interna (**hoy**) | Tiempo, y [PRUEBAS-PENDIENTES.md](PRUEBAS-PENDIENTES.md) §16 con dos móviles |
-| **«Auditado»** | Terceros revisan diseño y código | **No lo está.** Queda el **paquete listo**: especificación normativa, diseños, modelo de seguridad, mapa de código y tests, debilidades y preguntas (§5) | Una revisión externa: OTF o pagada (§5) |
-| **«Analizado formalmente»** | Un modelo del protocolo y pruebas de sus propiedades | **No lo está.** Queda un **plan** con alcance, lemas y comprobación de cordura (§4) | Decidir si se hace en casa o se encarga; instalar Tamarin |
-| **«Deliberadamente sin revisión externa»** | La decisión de DISENO-ratchet §8.6 | **Revertida hoy**: se busca, y §8.6 lo dice | El autor: hacer la solicitud |
-| **«Las primitivas no son caseras»** | X25519, AES-GCM, HMAC y HKDF son estándar | **Confirmado, con un matiz**: HKDF sí está implementado a mano (`Hkdf.kt`, 38 líneas). Desde hoy lo fijan los **vectores de RFC 5869**, calculados aparte con una implementación independiente (`HkdfTest`) | — |
-| **«El protocolo que las combina sí lo es»** | La composición es propia y sin revisar | **Especificado normativamente** ([ESPECIFICACION-protocolo.md](ESPECIFICACION-protocolo.md)), con 14 propiedades numeradas y 13 debilidades declaradas. **La revisión interna encontró 7 hallazgos**, 5 arreglados | La revisión externa |
-| **«Es el mayor riesgo»** | — | **Sigue siéndolo.** Hoy está más acotado y hay evidencia de que revisar encuentra cosas | — |
+| **«Protocolo maduro»** | Años de uso real que destapan los casos límite | No se compra. Lo que la sustituye en parte: pruebas de propiedades (10 sep), fuzzing del parseo (12 sep), pruebas de concurrencia y esta revisión interna (14 sep), y una revisión preparatoria independiente con pruebas dinámicas (15 sep, §8 y §9). 291 tests JVM | Tiempo, y [PRUEBAS-PENDIENTES.md](PRUEBAS-PENDIENTES.md) §16 y §17 con dos móviles |
+| **«Auditado»** | Terceros revisan diseño y código | **No lo está.** La revisión preparatoria independiente **no es** la auditoría: sirvió para llegar a ella con H-7 arreglado, H-5 y W-6 fijados en tests y la documentación sin afirmaciones de más. El **paquete está listo**: especificación normativa, diseños, modelo de seguridad, mapa de código y tests, debilidades y preguntas (§5) | La auditoría pública oficial: OTF o pagada (§5) |
+| **«Analizado formalmente»** | Un modelo del protocolo y pruebas de sus propiedades | **No lo está.** Hay un **plan** con alcance, lemas y comprobación de cordura (§4); nada ejecutado | Decidir quién hace M1 y M2 |
+| **«Deliberadamente sin revisión externa»** | La decisión de DISENO-ratchet §8.6 | **Revertida el 14 sep**: se busca, y §8.6 lo dice. El encendido del 10 sep no se puede deshacer, y **tuvo coste**: H-0 estuvo en producción cuatro días. El formato de red está congelado desde el 14 sep | El autor: enviar la solicitud |
+| **«Las primitivas no son caseras»** | X25519, AES-GCM, HMAC y HKDF son estándar | **Confirmado, con un matiz**: HKDF sí está implementado a mano (`Hkdf.kt`, 38 líneas). Lo fijan los **vectores de RFC 5869**, calculados aparte con una implementación independiente (`HkdfTest`) | — |
+| **«El protocolo que las combina sí lo es»** | La composición es propia y sin revisar | **Especificado normativamente** ([ESPECIFICACION-protocolo.md](ESPECIFICACION-protocolo.md)): 15 propiedades numeradas y 14 debilidades declaradas. **8 hallazgos (H-0 a H-7)**: 6 corregidos, cada uno con un test que lo reproducía antes, y 2 limitaciones de la composición (H-4, H-5) fijadas en tests y llevadas a la auditoría | La auditoría |
+| **«Es el mayor riesgo»** | — | **Sigue siéndolo.** Más acotado y medido; lo que queda abierto es de la composición, no de las primitivas | — |
 
 ---
 
@@ -479,7 +479,7 @@ la revisión.
 ### 5.2 Qué pedir, en este orden
 
 1. **Revisión de diseño** del protocolo por un criptógrafo, de pocos días. Es lo que más aporta por
-   lo que cuesta. Cubre §5 a §9 de la especificación, las debilidades W-1 a W-12 y los diseños
+   lo que cuesta. Cubre §5 a §9 de la especificación, las debilidades W-1 a W-14 y los diseños
    post-cuántico y de rotación.
 2. **Auditoría del código del camino criptográfico**, no de toda la app:
    - **Kotlin**: `Ratchet`, `RatchetState`, `RatchetSessions`, `RoomRatchetStore` y `RatchetDao`,

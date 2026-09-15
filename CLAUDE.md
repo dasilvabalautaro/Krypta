@@ -1724,7 +1724,7 @@ against a thief it only helps if both notices reach the contact. Phases 1–3 do
 its own design docs, done to address the "custom, days-old, unreviewed protocol" observation.
 Findings, and the plan for the external review and the formal model:
 [docs/REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md). The **normative
-spec** (bytes, derivations, rules, numbered properties P1–P14, known weaknesses W-1–W-13, questions
+spec** (bytes, derivations, rules, numbered properties P1–P15, known weaknesses W-1–W-14, questions
 for a reviewer) is [docs/ESPECIFICACION-protocolo.md](docs/ESPECIFICACION-protocolo.md). **Keep the
 spec in sync with the code in the same change**: if they disagree, the code wins and the spec is
 wrong. Every finding was reproduced by a test that failed before its fix.
@@ -1905,6 +1905,14 @@ these decisions, and no production code changed:
   `ebf2d43`, is faithful, but it still omits W-7, W-11 and W-9, leaves the DHT pair graph out of
   W-13, and repeats the W-8 overstatement. A response asking for those fixes, the concrete pinning
   tests as evidence, and the cost of the W-12/W-6 recommendations was handed to the reviewer.
+- **REVISION §3 updated to 15 Sep.** It answers the "mature, audited, formally analyzed protocol"
+  observation part by part. The verdict still stands: not mature, not officially audited, not
+  formally analyzed.
+  - The preparatory independent review is explicitly **not** the audit.
+  - Turning the ratchet on before any review had a real cost: H-0 was live from 10 to 14 Sep.
+  - 8 findings: 6 fixed with a reproducing test first. The 2 still open (H-4, H-5) are flaws of the
+    composition, not of the primitives.
+  - Counts across docs now read P1–P15 / W-1–W-14 (SECURITY.md, SOLICITUD, REVISION §5.2).
 
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a

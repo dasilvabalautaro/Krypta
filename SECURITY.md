@@ -44,7 +44,7 @@ Interesan especialmente:
 - lo que rompa la confidencialidad o la autenticidad de los mensajes y las llamadas;
 - los fallos del ratchet por épocas: reutilización de claves o nonces, degradaciones, abrir un
   mensaje con otra clave;
-- **cualquier propiedad de las numeradas (P1–P14) en el §12 de la especificación que no se
+- **cualquier propiedad de las numeradas (P1–P15) en el §12 de la especificación que no se
   cumpla**;
 - las formas de que un desconocido obtenga datos de un usuario a partir de su PeerID;
 - los fallos de parseo de datos que llegan de la red;
@@ -100,7 +100,7 @@ within these rules will not be pursued.
 **In scope:** the Android app, the Go libp2p bridge, the infrastructure node and the public nodes
 `krypta-sp.neto.chat` / `krypta-dal.neto.chat`, the normative protocol specification
 (`docs/ESPECIFICACION-protocolo.md`) and the protocol designs under `docs/`. A violation of any
-numbered property (P1–P14, spec §12) is especially welcome.
+numbered property (P1–P15, spec §12) is especially welcome.
 
 **Known limits** are listed in §9 of `docs/security-model.md` and §13 of the specification:
 operator-visible metadata, IP exposure to contacts and the operator, no post-quantum crypto, no
