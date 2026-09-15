@@ -787,3 +787,31 @@ Se cambiaron por su escape de texto, y un test nuevo (`el id de la fila de llama
 la especificacion`) calcula aparte, byte a byte, el id de §8 de la especificación: garantiza que el
 valor no cambió y que ningún cambio en cómo se escribe el separador puede alterarlo sin que se note.
 Ningún otro archivo de texto versionado tiene bytes NUL.
+
+### 9.7 Registro de hallazgos AK-2026-001
+
+**Origen.** Registro de hallazgos y estado de retest de la auditoría AK-2026-001, sobre `a97cbab`
+con las correcciones verificadas hasta `ebf2d43` (`10-registro-hallazgos.md`, no versionado).
+**Es fiel en lo esencial**: sus estados coinciden con los de esta revisión, y los hashes que cita
+son correctos. La respuesta completa se entregó al auditor (`respuesta-10-registro-hallazgos.md`,
+tampoco versionada); en resumen, pide:
+
+1. **Añadir las limitaciones abiertas que faltan**: W-7 (sin post-cuántico, la ausencia más seria),
+   W-11 (el `.krbk` solo lo protege la frase, que es además la vía hacia H-5) y W-9. Ya se había
+   señalado en §9.5 y no se recogió.
+2. **Completar W-13**, que dejaba fuera el grafo diario de parejas en la DHT y la lista de protocolos
+   que revela identify.
+3. **Precisar W-8**, que repetía la imprecisión de §9.1: la conclusión sale de dos pruebas distintas,
+   se negoció TLS 1.3 y la vía QUIC directa no tiene test.
+4. **Citar la evidencia concreta**: el test de H-6, y los que fijan H-4, H-5 y W-6, para distinguir
+   las limitaciones reproducidas de las solo declaradas.
+5. **Recoger el coste de las recomendaciones** de W-12 (cambia el formato de red y todos los secretos
+   compartidos) y W-6 (un linaje monótono duradero no cubre la importación de un `.krbk`), y que H-4,
+   H-5, W-6 y W-12 están congeladas por §5.4.
+6. **Anotar el fallo de higiene de §9.6** (los bytes NUL), ya que el registro se verifica hasta el
+   commit que lo corrigió.
+
+Se aceptan sin reparos: C-001 absorbido por H-7 y W-14, las severidades de H-4 y H-5, llamar a H-7
+«corregido parcialmente» (aquí figura como corregido, con lo restante declarado como W-14), la
+separación entre la procedencia del AAR de `revision-externa-1` y la reproducibilidad posterior, y su
+criterio de cierre.

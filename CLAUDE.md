@@ -1902,6 +1902,10 @@ these decisions, and no production code changed:
   - Git never flagged it, because its binary check stops at 8000 bytes.
   - The bytes were replaced by the escape text. `el id de la fila de llamada perdida es el de la
     especificacion` recomputes the spec §8 id byte by byte.
+- **Audit registry AK-2026-001 reviewed** (same day, REVISION §9.7). Its findings log, verified up to
+  `ebf2d43`, is faithful, but it still omits W-7, W-11 and W-9, leaves the DHT pair graph out of
+  W-13, and repeats the W-8 overstatement. A response asking for those fixes, the concrete pinning
+  tests as evidence, and the cost of the W-12/W-6 recommendations was handed to the auditor.
 
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a
