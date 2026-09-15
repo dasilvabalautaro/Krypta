@@ -1645,7 +1645,7 @@ class ChatService @Inject constructor(
          */
         fun missedCallId(contactId: String, callId: String): String =
             MessageDigest.getInstance("SHA-256")
-                .digest("krypta-missed-call-v1 $contactId $callId".toByteArray(Charsets.UTF_8))
+                .digest("krypta-missed-call-v1\u0000$contactId\u0000$callId".toByteArray(Charsets.UTF_8))
                 .joinToString("") { "%02x".format(it) }
         // Sobre válido de un tipo que esta versión no conoce (cliente más nuevo).
         const val UNSUPPORTED_TEXT = "[mensaje no compatible con esta versión]"

@@ -1554,6 +1554,13 @@ compiled to an AAR with gomobile. Kotlin calls it through generated classes
 - **Crypto must stay correct.** `RendezvousService` is real (HKDF-SHA256). The rendezvous
   is intentionally rotating-by-day and non-enumerable without the shared secret — preserve
   those properties (there are unit tests asserting them).
+- **No raw NUL bytes in source files.** Write NUL separators as `Char(0)` / `0.toByte()`. When an
+  escape sequence has to be written by a tool, build it with a script: typed into an edit it can land
+  as the byte itself.
+  - A NUL beyond the first 8000 bytes compiles fine and git does not flag it, but `grep` treats the
+    file as binary and silently finds nothing.
+  - It happened on 15 Sep 2026.
+  - Check with a scan of tracked `.kt/.go/.md` files for byte 0.
 - **Compose-only UI:** no XML layouts/View system. Compose compiler via the
   `kotlin-compose` plugin (no `composeOptions` block). Theme in
   [app/src/main/java/chat/neto/krypta/ui/theme/](app/src/main/java/chat/neto/krypta/ui/theme/).
@@ -1879,6 +1886,22 @@ these decisions, and no production code changed:
   - The fix is done **on the restored phone** on purpose. It has no history to lose, because
     `.krbk` carries no messages; deleting on the other side would wipe that person's chat.
   - The manual's §2.8 says the same.
+- **Retest and H-5 pinned** (same day, REVISION §9.6).
+  - The retest of H-4/H-5/W-6 on `f8d9a75` checked out: 289 JVM tests and the bridge's Go suite
+    with `-race` pass.
+  - H-5 was only declared. It is now pinned by `ChatServiceTest` → `con tu identidad robada te pueden
+    escribir como cualquier contacto por el buzon ciego`. With real X25519 keys, the victim's private
+    key plus the contact's PeerID give the same `S` as the contact. The forged envelope enters through
+    the blind mailbox; it does not enter through the PeerID mailbox with an honest node; it does enter
+    if the node lies about `from`.
+- **Own hygiene bug, fixed the same day.** `fe21111` put raw NUL bytes in `CallService.kt` and
+  `ChatService.kt`: the `(contact, callId)` separators were typed as escapes and the edit tool wrote
+  the byte.
+  - Behavior was unchanged, but macOS `grep` treated both files as binary and silently matched
+    nothing. That matters because `ChatService.kt` is in the external review's scope.
+  - Git never flagged it, because its binary check stops at 8000 bytes.
+  - The bytes were replaced by the escape text. `el id de la fila de llamada perdida es el de la
+    especificacion` recomputes the spec §8 id byte by byte.
 
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a

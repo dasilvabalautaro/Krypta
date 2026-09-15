@@ -34,7 +34,7 @@ La especificación normativa que se escribió para esto está en
 | **H-2** | Media | Guardar una **copia vieja** del contacto (verificar, bloquear, renombrar, importar) lo devolvía a la clave estática **para siempre** | ✅ Arreglado: la versión no baja, y un sobre v2 la vuelve a subir |
 | **H-3** | Media (exige `S`) | Un anuncio `V` **forjado** con una versión menor degradaba la pareja a v1 y dejaba **leer en pasivo** lo que viniera | ✅ Arreglado: misma regla que H-2 |
 | **H-4** | Media (exige `S`) | Un sobre con un **linaje forjado** secuestra la sesión, sin vuelta atrás | 📌 Limitación de diseño; fijada en un test y llevada a la revisión externa |
-| **H-5** | Baja–media (exige `S`) | La autenticación del remitente es la de `S`: incluye **suplantar a un contacto ante quien perdió su propia clave** (KCI) | 📌 Limitación de diseño; llevada a la revisión externa |
+| **H-5** | Baja–media (exige `S`) | La autenticación del remitente es la de `S`: incluye **suplantar a un contacto ante quien perdió su propia clave** (KCI) | 📌 Limitación de diseño; fijada en un test (15 sep 2026) y llevada a la revisión externa |
 | **H-6** | Baja | Volver a añadir a un contacto **bloqueado** lo desbloqueaba | ✅ Arreglado |
 | **H-7** | Baja | Por el camino v1, un **invite de llamada reenviado** volvía a sonar, repetía el `busy` y sumaba **una fila de «llamada perdida» por entrega**; y un invite con la fecha adelantada seguía «fresco». Salió de la verificación dinámica del 15 sep (§8) | ✅ Arreglado el 15 sep 2026: una vez por `callId`, 10 min de margen hacia el futuro, fila idempotente |
 
@@ -304,6 +304,19 @@ del buzón no pasaba, porque el nodo fija `from` con la identidad libp2p del que
 **Por qué no se arregla aquí.** Lo que lo resuelve es firmar los sobres con la identidad del
 emisor, y eso es un cambio de formato con coste: se pierde la negación, que Krypta no promete pero
 tampoco ha decidido tirar. Es la pregunta 4 de la especificación.
+
+**Test que lo fija** (15 sep 2026, `ChatServiceTest` → `con tu identidad robada te pueden escribir
+como cualquier contacto por el buzon ciego`). Modela la variante KCI con claves X25519 reales: quien
+tiene la privada de la víctima y la pública del contacto (su PeerID) calcula el mismo `S` que el
+contacto, sin su privada. Y fija por qué vía entra:
+
+- **por el buzón ciego, entra** como del contacto;
+- **por el buzón con PeerID y un nodo honrado, no entra**, porque el nodo pone de remitente la
+  identidad robada, que es el PeerID de la propia víctima;
+- **con un nodo que mienta sobre el remitente, también entra**. Esa negativa depende de la honradez
+  del nodo.
+
+Si algún cambio lo cierra, el test tiene que cambiar con él.
 
 ### H-6 (Baja): volver a añadir a un contacto bloqueado lo desbloqueaba
 
@@ -743,3 +756,34 @@ en security-model §9.13.
 > se declara que la resistencia a KCI no se promete. H-4, H-5 y un linaje monótono duradero quedan
 > para después de la revisión externa, por la congelación del formato. Los archivos `evidence/…` que
 > cita no llegaron.
+
+### 9.6 Retest, H-5 fijada y un fallo de higiene
+
+**Retest de H-4, H-5 y W-6** (`retest-h4-h5-w6-2026-09-15.md`, no versionado) sobre `f8d9a75`. Se
+contrastó y es correcto:
+
+- los tres tests que cita existen con esos nombres;
+- la suite JVM, relanzada, dio **289 tests, 0 fallos**;
+- la suite Go del puente pasa con `-race`.
+
+Un matiz en su conclusión: decía que las pruebas «validan que las limitaciones están reproducidas»,
+y eso valía para H-4 y W-6, que tenían un test que las fijaba, pero **no para H-5**, que solo estaba
+declarada. **Ahora H-5 también está fijada** (§2, H-5).
+
+**Un fallo propio, encontrado al escribir ese test.** El commit `fe21111` metió **tres bytes NUL
+literales** en el código fuente, en [CallService.kt](../p2p-signaling/src/main/java/chat/neto/krypta/p2p/CallService.kt)
+y [ChatService.kt](../p2p-signaling/src/main/java/chat/neto/krypta/p2p/ChatService.kt): los separadores de
+`(contacto, callId)` se escribieron como escape, y la herramienta de edición los guardó como el byte.
+
+- **No cambió el comportamiento**: en una cadena de Kotlin un NUL literal es el mismo carácter que
+  su escape, y los tests pasaban.
+- **Pero `grep` trataba los dos archivos como binarios y no encontraba nada en ellos.**
+  `ChatService.kt` entra en el alcance de la revisión externa, y quien lo recorriera con `grep`
+  no habría visto ni una coincidencia.
+- **Git no lo avisó**: solo mira los primeros 8000 bytes para decidir si un archivo es binario, y
+  los NUL estaban en las líneas 592 y 1648.
+
+Se cambiaron por su escape de texto, y un test nuevo (`el id de la fila de llamada perdida es el de
+la especificacion`) calcula aparte, byte a byte, el id de §8 de la especificación: garantiza que el
+valor no cambió y que ningún cambio en cómo se escribe el separador puede alterarlo sin que se note.
+Ningún otro archivo de texto versionado tiene bytes NUL.

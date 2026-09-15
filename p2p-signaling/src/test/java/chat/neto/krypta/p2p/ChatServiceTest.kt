@@ -849,6 +849,26 @@ class ChatServiceTest {
         assertTrue(id != ChatService.missedCallId("contacto-a", "call-2"))
     }
 
+    /**
+     * El id de la fila de llamada perdida es el de la especificación §8: SHA-256 de la etiqueta, el
+     * contacto y el `callId`, separados por **el byte 0**. El valor esperado se calcula aquí aparte,
+     * byte a byte, para que un cambio en cómo se escribe el separador en el código fuente no pueda
+     * alterar el id sin que se note (el 15 sep 2026 se coló un NUL literal en ese fuente; se cambió
+     * por su escape sin tocar el valor).
+     */
+    @Test
+    fun `el id de la fila de llamada perdida es el de la especificacion`() {
+        val esperado = java.security.MessageDigest.getInstance("SHA-256").run {
+            update("krypta-missed-call-v1".toByteArray(Charsets.UTF_8))
+            update(0.toByte())
+            update("contacto-a".toByteArray(Charsets.UTF_8))
+            update(0.toByte())
+            update("call-1".toByteArray(Charsets.UTF_8))
+            digest().joinToString("") { "%02x".format(it) }
+        }
+        assertEquals(esperado, ChatService.missedCallId("contacto-a", "call-1"))
+    }
+
     /** Un aviso que revienta no debe impedir el ack: el mensaje ya está persistido. */
     @Test
     fun `a failing notifier does not block the mailbox ack`() = runTest {
@@ -1850,6 +1870,73 @@ class ChatServiceTest {
         assertEquals(contact.id, guardado.conversationId)
         assertEquals("el mensaje es del contacto, no propio", contact.id, guardado.senderId)
         assertEquals("hola a ciegas", String(chat.decrypt(contact, guardado)))
+    }
+
+    /**
+     * **Limitación conocida, fijada a propósito** (H-5 de `docs/REVISION-protocolo-2026-09-14.md`,
+     * W-3 de la especificación). La autenticación del remitente es la del secreto compartido `S`,
+     * y `S` sale igual de la privada de cualquiera de los dos extremos. Quien robe **tu** identidad
+     * —por ejemplo, tu `.krbk` con su frase— calcula el mismo `S` que cada uno de tus contactos
+     * **sin tener la privada de ninguno**, y puede escribirte como cualquiera de ellos: suplantación
+     * ante el compromiso de la propia clave (KCI). Krypta no promete resistirla (15 sep 2026).
+     *
+     * Lo que fija el test es **por qué vía entra y por cuál no**:
+     *
+     * - **buzón ciego**: el sobre no lleva remitente y lo atribuye la etiqueta, que también sale de
+     *   `S`. Entra como del contacto;
+     * - **buzón por PeerID, con un nodo honrado**: el nodo pone de remitente la identidad del stream,
+     *   que es la robada, o sea tu propio PeerID. No es un contacto y no entra;
+     * - **pero con un nodo que miente** sobre el remitente también entra: esa negativa depende de
+     *   que el nodo sea honrado.
+     *
+     * Por stream directo no hace falta probarlo: el remitente lo autentica libp2p con la clave del
+     * contacto, que el ladrón no tiene. Si algún cambio lo cierra (firmar los sobres con la
+     * identidad), este test tiene que cambiar con él.
+     */
+    @Test
+    fun `con tu identidad robada te pueden escribir como cualquier contacto por el buzon ciego`() = runTest {
+        val curva = JdkCurve25519()
+        val yo = curva.generateKeyPair() // este móvil, la víctima
+        val bob = curva.generateKeyPair() // el contacto al que se suplanta
+        val sDeMiMovil = curva.agree(yo.privateKey, bob.publicKey)
+        // El ladrón tiene mi privada y la pública de Bob, que es su PeerID. La de Bob no le hace falta.
+        val robada = yo.privateKey.copyOf()
+        val sDelLadron = curva.agree(robada, bob.publicKey)
+        assertArrayEquals(
+            "sin la privada de Bob, el ladrón calcula el mismo S que Bob",
+            curva.agree(bob.privateKey, yo.publicKey),
+            sDelLadron,
+        )
+
+        val bobContacto = contact.copy(sharedSecret = sDeMiMovil)
+        val signaling = FakeSignaling()
+        val messages = FakeMessages()
+        signaling.bootstrapAddr = "/ip4/1.2.3.4/tcp/4001/p2p/12D3KooWNodo"
+        val chat = ChatService(signaling, cipher, messages, FakeContacts(listOf(bobContacto)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        chat.pollOnce() // construye el índice de etiquetas
+        val procesar = signaling.registeredMailboxProcessor!!
+
+        // Todo lo que sigue lo fabrica el ladrón con S y los dos PeerID, nada más.
+        fun comoBob(id: String, texto: String) =
+            cipher.encrypt(sDelLadron, MessageEnvelope.encodeText(id, texto.toByteArray()))
+        val etiqueta = MailboxLabel.toHex(
+            MailboxLabel.outbox(sDelLadron, myPeerId = bobContacto.peerId, theirPeerId = chat.myPeerId()),
+        )
+
+        // 1. Buzón ciego: entra como de Bob.
+        assertTrue(procesar("", comoBob("kci-ciego", "soy Bob"), "env-1", 1L, etiqueta))
+        val suplantado = messages.saved.single()
+        assertEquals("el buzón ciego lo atribuye a Bob", bobContacto.id, suplantado.senderId)
+        assertEquals("soy Bob", String(chat.decrypt(bobContacto, suplantado)))
+
+        // 2. Buzón por PeerID con un nodo honrado: el remitente es la identidad robada, la mía.
+        procesar(chat.myPeerId(), comoBob("kci-peerid", "soy Bob otra vez"), "env-2", 2L, "")
+        assertEquals("por PeerID y con un nodo honrado no entra", 1, messages.saved.size)
+
+        // 3. Un nodo que miente sobre el remitente sí lo cuela.
+        assertTrue(procesar(bobContacto.peerId, comoBob("kci-nodo", "soy Bob, dice el nodo"), "env-3", 3L, ""))
+        assertEquals(2, messages.saved.size)
+        assertEquals("con un nodo que miente, también entra", bobContacto.id, messages.saved.last().senderId)
     }
 
     @Test

@@ -480,7 +480,9 @@ escrituras.
       escriba el otro, sin vuelta atrás hasta borrar el contacto (H-4).
     - Como la autenticación del remitente es la del secreto compartido, **puede escribir como
       cualquiera de tus contactos**. Con el depósito ciego eso incluye ponerte palabras en boca de
-      un contacto usando **tu propia** identidad robada, por ejemplo de tu `.krbk` (H-5).
+      un contacto usando **tu propia** identidad robada, por ejemplo de tu `.krbk` (H-5). Está
+      fijado en un test: por el buzón ciego entra; por el buzón con PeerID, solo si además el nodo
+      miente sobre quién deposita.
     - La variante **silenciosa**, degradar la pareja a la clave estática con un anuncio forjado,
       estaba abierta y **se cerró el mismo día** (H-3).
     - **Krypta no promete resistencia a KCI** (decisión del 15 sep 2026). Mientras no haya revisión

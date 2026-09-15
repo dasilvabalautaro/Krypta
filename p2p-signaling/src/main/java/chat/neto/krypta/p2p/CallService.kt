@@ -589,7 +589,7 @@ class CallService @Inject constructor(
         synchronized(seenInvites) {
             val horizon = now - INVITE_MEMORY_MS
             seenInvites.entries.removeIf { it.value < horizon }
-            val key = "$contactId $callId"
+            val key = "$contactId\u0000$callId"
             if (key in seenInvites) return false
             seenInvites[key] = now
             while (seenInvites.size > SEEN_INVITES_MAX) seenInvites.remove(seenInvites.keys.first())

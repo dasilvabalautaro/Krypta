@@ -325,7 +325,8 @@ respuesta.*
 >
 > **Known issues, please do not re-report** (spec §13 and internal review): no forward secrecy in
 > epoch 0 (W-1); replay of epoch-0 envelopes beyond the deduplication window (W-2); sender
-> authentication at the level of `S`, including KCI through mailbox labels (W-3 / H-5); session
+> authentication at the level of `S`, including KCI through mailbox labels (W-3 / H-5, pinned in a
+> test after the tag); session
 > hijack through a forged lineage (W-4 / H-4); v1 always accepted on receive (W-5); lineage
 > monotonicity relying on the clock (W-6); no post-quantum protection (W-7); call frames without a
 > counter (W-8); `PN` unused (W-9); labels and rendezvous derivable from `S` forever (W-10); `.krbk`
