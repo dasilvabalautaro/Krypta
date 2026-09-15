@@ -549,7 +549,7 @@ comprobable y no en otra afirmación.
 ## 8. Verificación dinámica independiente (15 de septiembre de 2026)
 
 **Origen.** Un lote de verificación dinámica sobre `a97cbab`, hecho en una copia aislada, con pruebas
-temporales que no forman parte de Krypta. El informe (`08-verificacion-dinamica.md`) no se versiona,
+temporales que no forman parte de Krypta. El informe no se versiona,
 igual que las comparaciones con Signal: lo que se versiona es lo que sale de él. Planteaba dos
 observaciones. Las dos se contrastaron primero con el código **sin tocar nada**, y la evaluación y
 el plan se discutieron con el autor antes de implementar.
@@ -665,9 +665,9 @@ cuánto tiene que durar la memoria. Detalle, tests y arreglo en **H-7** (§2).
 ## 9. Revisión de diseño independiente (15 de septiembre de 2026)
 
 **Origen.** Una revisión del diseño criptográfico sobre `a97cbab`, contrastada con `fe21111`
-(`05-revision-diseno.md`, no versionado). **No encuentra nada que no estuviera declarado.** Su valor
+(no versionada). **No encuentra nada que no estuviera declarado.** Su valor
 es confirmar de forma independiente que H-4, H-5 y las debilidades W siguen abiertas, y que H-7
-quedó corregido. Cita dos archivos de evidencia (`evidence/…`) que no se entregaron, así que su
+quedó corregido. Cita dos archivos de evidencia que no se entregaron, así que su
 matriz de derivaciones y pruebas no se ha podido comprobar. Se contrastó con el código y los
 documentos sin tocar nada, y las decisiones las tomó el autor.
 
@@ -754,12 +754,12 @@ en security-model §9.13.
 > (5) lo de W-8 se deduce de dos pruebas distintas, se negoció TLS 1.3 y el frame genuino sí se
 > entregó una vez. Aplicado: el README ya no presenta el secreto hacia adelante como demostrado, y
 > se declara que la resistencia a KCI no se promete. H-4, H-5 y un linaje monótono duradero quedan
-> para después de la revisión externa, por la congelación del formato. Los archivos `evidence/…` que
+> para después de la revisión externa, por la congelación del formato. Los archivos de evidencia que
 > cita no llegaron.
 
 ### 9.6 Retest, H-5 fijada y un fallo de higiene
 
-**Retest de H-4, H-5 y W-6** (`retest-h4-h5-w6-2026-09-15.md`, no versionado) sobre `f8d9a75`. Se
+**Retest de H-4, H-5 y W-6** (no versionado) sobre `f8d9a75`. Se
 contrastó y es correcto:
 
 - los tres tests que cita existen con esos nombres;
@@ -788,13 +788,12 @@ la especificacion`) calcula aparte, byte a byte, el id de §8 de la especificaci
 valor no cambió y que ningún cambio en cómo se escribe el separador puede alterarlo sin que se note.
 Ningún otro archivo de texto versionado tiene bytes NUL.
 
-### 9.7 Registro de hallazgos AK-2026-001
+### 9.7 Registro de hallazgos de la revisión independiente
 
-**Origen.** Registro de hallazgos y estado de retest de la auditoría AK-2026-001, sobre `a97cbab`
-con las correcciones verificadas hasta `ebf2d43` (`10-registro-hallazgos.md`, no versionado).
-**Es fiel en lo esencial**: sus estados coinciden con los de esta revisión, y los hashes que cita
-son correctos. La respuesta completa se entregó al auditor (`respuesta-10-registro-hallazgos.md`,
-tampoco versionada); en resumen, pide:
+**Origen.** Registro de hallazgos y estado de retest de la misma revisión independiente, sobre
+`a97cbab`, con las correcciones verificadas hasta `ebf2d43` (no versionado). **Es fiel en lo
+esencial**: sus estados coinciden con los de esta revisión, y los hashes que cita son correctos. La
+respuesta completa se entregó a quien hizo la revisión (tampoco versionada); en resumen, pide:
 
 1. **Añadir las limitaciones abiertas que faltan**: W-7 (sin post-cuántico, la ausencia más seria),
    W-11 (el `.krbk` solo lo protege la frase, que es además la vía hacia H-5) y W-9. Ya se había
