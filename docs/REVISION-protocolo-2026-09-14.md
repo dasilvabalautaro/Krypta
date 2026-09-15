@@ -36,6 +36,7 @@ La especificación normativa que se escribió para esto está en
 | **H-4** | Media (exige `S`) | Un sobre con un **linaje forjado** secuestra la sesión, sin vuelta atrás | 📌 Limitación de diseño; fijada en un test y llevada a la revisión externa |
 | **H-5** | Baja–media (exige `S`) | La autenticación del remitente es la de `S`: incluye **suplantar a un contacto ante quien perdió su propia clave** (KCI) | 📌 Limitación de diseño; llevada a la revisión externa |
 | **H-6** | Baja | Volver a añadir a un contacto **bloqueado** lo desbloqueaba | ✅ Arreglado |
+| **H-7** | Baja | Por el camino v1, un **invite de llamada reenviado** volvía a sonar, repetía el `busy` y sumaba **una fila de «llamada perdida» por entrega**; y un invite con la fecha adelantada seguía «fresco». Salió de la verificación dinámica del 15 sep (§8) | ✅ Arreglado el 15 sep 2026: una vez por `callId`, 10 min de margen hacia el futuro, fila idempotente |
 
 **Verificación tras los arreglos.**
 
@@ -310,9 +311,77 @@ tampoco ha decidido tirar. Es la pregunta 4 de la especificación.
 desde «Nuevo contacto» lo desbloqueaba sin avisar. **Arreglo**: se conserva lo que había. **Test**:
 `volver a anadir a un contacto bloqueado no lo desbloquea ni olvida su version`.
 
+### H-7 (Baja): señales de llamada reproducidas por el camino v1
+
+**Origen.** No salió de esta revisión, sino de la verificación dinámica del 15 sep 2026 sobre
+`a97cbab` (§8), que lo planteó como «invite con timestamp futuro». La causa de fondo era otra.
+
+**Qué pasaba.** Por la clave estática (v1) no hay deduplicación de sobres, y `CallService` no
+recordaba qué `callId` había atendido. Quien pudiera devolver un sobre auténtico —el nodo, con lo que
+guarda en el buzón (A1)— conseguía:
+
+- que una llamada **ya rechazada o colgada volviera a sonar**, mientras el invite siguiera fresco;
+- **un `busy` más** por cada copia que llegara estando en otra llamada;
+- **una fila de «📞 Llamada perdida» y una notificación por cada entrega** de un invite rancio, sin
+  límite, porque `recordMissedCall` generaba un UUID nuevo cada vez.
+
+Y la ventana no tenía límite hacia el futuro: un invite fechado por delante del reloj del receptor
+seguía «fresco» tanto tiempo como el adelanto. La red no puede cambiar el `ts`, que va cifrado, así
+que eso solo alargaba la ventana de reproducción cuando el reloj del emisor iba adelantado. Y quien
+tiene `S` no necesita reproducir nada: puede llamar cuando quiera.
+
+**Exposición.** Las señales que van por v1: contactos con `peerProtocol < 2`. Por v2, la tabla de
+vistos del ratchet descarta una copia idéntica antes de descifrar, salvo la época 0 fuera de su
+ventana (W-2).
+
+**Reproducción** (`CallServiceTest`; **las seis fallaron con el código anterior**, con el síntoma
+que se indica):
+
+- `un invite reenviado tras rechazar la llamada no vuelve a sonar` → volvía a RINGING;
+- `un invite rancio entregado varias veces deja una sola llamada perdida` → 3 filas;
+- `colgar mientras suena y recibir despues el mismo invite ni suena ni duplica la perdida` → RINGING;
+- `tras reiniciar el proceso el mismo invite rancio no crea otra fila de perdida` → 2 filas;
+- `un invite con la fecha muy adelantada no suena` → RINGING;
+- `un invite repetido mientras hay otra llamada no manda un segundo busy` → 2 `busy`.
+
+Más una guarda que pasa antes y después: `un invite con el reloj del emisor algo adelantado sigue
+sonando`.
+
+**Arreglo**, sin cambio del formato de red:
+
+1. `CallService` atiende un invite **una vez por `(contacto, callId)`**. La memoria vive en RAM, dura
+   45 s + 10 min desde que se ve y guarda como mucho 256: ese intervalo es toda la vida en la que un
+   mismo invite puede timbrar.
+2. **Límite hacia el futuro** de 10 min (`INVITE_FUTURE_MS`). Pasado, no timbra, queda como perdida y
+   el Diagnóstico lo dice. Es holgado a propósito: un reloj algo desajustado no puede costar la
+   llamada.
+3. **La fila de llamada perdida es idempotente**: su id es `SHA-256` de `(contacto, callId)` con
+   separación de dominio, y si ya existe no se guarda ni se avisa. Hay que mirar antes, porque `save`
+   es un upsert y la volvería a marcar como no leída. El `callId` lo elige el otro, por eso va dentro
+   del hash y nunca se usa como id.
+
+Tests del arreglo: los siete de arriba y, en `ChatServiceTest`, `la fila de llamada perdida es una por
+llamada y no vuelve a avisar` y `el id de la fila de llamada perdida no lo elige el otro extremo`.
+
+**Lo que no arregla.**
+
+- Si el proceso se reinicia dentro de esos 10 min 45 s, el mismo invite puede sonar **una vez más**.
+  La fila de perdida sí resiste el reinicio.
+- Vaciar el chat borra la fila y, con ella, su memoria: un invite rancio que llegue después deja una
+  fila nueva.
+- Una llamada legítima de alguien con el reloj adelantado más de 10 min queda como perdida.
+
+**Por qué no la ventana simétrica que proponía el informe** (`|ahora − ts| ≤ 45 s`): un receptor con
+el reloj más de 45 s por detrás perdería todas las llamadas, y seguiría sin cubrir la reproducción
+dentro de la ventana ni las filas repetidas.
+
+**La etiqueta no se mueve.** No cambia el formato de red, así que `revision-externa-1` sigue valiendo;
+a quien revise hay que decirle que H-7 se cerró después de la etiqueta.
+
 ### Observaciones menores, llevadas a la especificación
 
 - **W-8**: los frames de llamada no llevan contador, y la clave es la misma en los dos sentidos.
+  **Verificado contra el transporte el 15 sep 2026** (§8.1).
 - **W-9**: `PN` viaja en la cabecera y no se usa.
 - **W-12**: la misma semilla Ed25519 firma y hace X25519.
 
@@ -432,6 +501,7 @@ comprobable y no en otra afirmación.
 ## 6. Orden
 
 1. ✅ H-0, H-1, H-2, H-3 y H-6 arreglados con tests (14 sep 2026); H-4 y H-5 fijados y declarados.
+   H-7 arreglado y W-8 verificado contra el transporte el 15 sep 2026 (§8).
 2. ⬜ Este build en los dos móviles, y §16 entero, incluidos los puntos nuevos 11 y 12.
 3. ⬜ La comparación con SPQR en DISENO-postcuantico.
 4. 🟡 Solicitud al OTF, o presupuesto de una revisión acotada. **Textos listos y commit etiquetado
@@ -459,3 +529,119 @@ comprobable y no en otra afirmación.
 - Docs: esta revisión, [ESPECIFICACION-protocolo.md](ESPECIFICACION-protocolo.md) (nueva), y las
   actualizaciones de DISENO-ratchet (§1.11 y §8.6), security-model, PLAN-privacidad-y-confianza,
   PRUEBAS-PENDIENTES (§16.11 y §16.12), architecture y CLAUDE.md.
+
+---
+
+## 8. Verificación dinámica independiente (15 de septiembre de 2026)
+
+**Origen.** Un lote de verificación dinámica sobre `a97cbab`, hecho en una copia aislada, con pruebas
+temporales que no forman parte de Krypta. El informe (`08-verificacion-dinamica.md`) no se versiona,
+igual que las comparaciones con Signal: lo que se versiona es lo que sale de él. Planteaba dos
+observaciones. Las dos se contrastaron primero con el código **sin tocar nada**, y la evaluación y
+el plan se discutieron con el autor antes de implementar.
+
+### 8.1 W-8: repetición de frames de llamada
+
+**Lo que decía.** Una prueba descifró dos veces el mismo frame, y concluía que «un relay que duplique
+o reordene bytes de un stream puede provocar que el receptor procese de nuevo un frame válido».
+
+**Evaluación.** Que la capa de aplicación no tiene anti-replay es cierto, y ya estaba declarado como
+W-8. La prueba no añade nada a la inspección: un AES-GCM sin estado abre dos veces lo mismo por
+definición. Lo que no se sostenía era la conclusión sobre el relay. **Tampoco la respuesta inicial de
+esta revisión** («TLS o Noise lo impiden»), porque ninguna de las dos estaba comprobada en un stream
+relayed. La redacción que se acordó: *impacto limitado si la seguridad de transporte mantiene
+autenticidad, orden y anti-replay de extremo a extremo; falta verificarlo en streams relayed*. Y se
+verificó:
+
+| Pregunta | Cómo | Resultado |
+|---|---|---|
+| ¿Un intermediario puede duplicar, reordenar o devolver al emisor bytes de un stream de llamada? | `TestTransporteRechazaBytesManipulados`: un proxy TCP entre dos nodos reales, con un caso de control que no toca nada | **No.** `tls: bad record MAC`: la conexión cae en los dos extremos y nunca se entrega un frame repetido, fuera de orden ni reflejado. El control entrega los dos frames, en orden |
+| ¿El cifrado de una conexión por relay termina en el relay? | Código de go-libp2p v0.48: el cliente del circuito pasa la conexión por el mismo upgrader al marcar y al aceptar (`circuitv2/client/transport.go:86` y `:104`) | **No termina en el relay** |
+| ¿Y en ejecución? | `TestRelayNoVeLoQueViajaPorElCircuito`: el relay lleva un TLS espía que guarda todo lo que descifra | **No ve** el frame de la llamada ni una negociación de protocolo hecha dentro del circuito. Controles: sí ve su propio protocolo `hop` y un marcador que solo va bajo su TLS |
+| ¿La sesión del circuito autentica al otro teléfono o al relay? | `TestRelayMessagingLocal` compara la clave remota de la conexión relayed, en los dos sentidos | Al otro teléfono |
+| ¿Qué seguridad se negocia? | Los mismos tests, sobre conexión directa | TLS 1.3 (`/tls/1.0.0`), que go-libp2p ofrece antes que Noise |
+| ¿La vía QUIC directa tras DCUtR admite 0-RTT, el caso en que QUIC acepta reenvíos? | Inspección de `p2p/transport/quic` y `quicreuse` | No aparece `ListenEarly`, `DialEarly` ni `Allow0RTT`, y quic-go lo trae apagado. **Sin test** |
+
+Los tres tests de Go pasaron tres veces seguidas, y la suite completa del puente sigue en verde.
+
+**Dos cosas que se aprendieron por el camino**, y que conviene no redescubrir:
+
+- **En una conexión relayed, `ConnState().Security` sale vacío aunque va cifrada.** El cliente del
+  circuito envuelve la conexión ya cifrada en un `capableConn` cuyo `ConnState()` solo devuelve el
+  transporte (`circuitv2/client/conn.go:160`). La primera versión del test la dio por conexión sin
+  cifrar. Consecuencia práctica: **la app no puede comprobar ni mostrar en ejecución** con qué va
+  cifrada una conexión por relay. Por eso la prueba mira desde el relay.
+- **identify le dice al relay qué protocolos admite cada teléfono**, `/krypta/call/1.0.0` incluido. La
+  segunda versión del test lo tomó por una fuga del circuito. La sonda es ahora un protocolo con un
+  nonce que no figura en esa lista, y el test fija que el relay ya conoce el nombre de la llamada
+  **antes** de abrir ningún stream. Es un metadato menor, porque el nodo ya sabe que habla con un
+  teléfono de Krypta, pero es cierto y queda en W-13.
+
+**Qué no se hace.** Un contador por frame y claves separadas por sentido cambian el formato de red, y
+§5.4 lo impide hasta tener el informe externo. W-8 queda como pregunta 5 de la especificación, ahora
+con la evidencia.
+
+### 8.2 C-001: invite con timestamp futuro, que pasa a ser H-7
+
+**Lo que decía.** Un invite con `ts = ahora + 1 h` timbra; no hay límite superior ni deduplicación
+persistente por `callId`. Recomendaba una ventana simétrica `|ahora − ts| ≤ 45 s`.
+
+**Evaluación.** Los hechos, ciertos. Pero:
+
+- el comentario del propio código declaraba la asimetría a propósito, frente a los relojes desfasados;
+- el adversario propuesto (un contacto con `S`) no necesita reproducir ni adelantar nada;
+- quien reproduce de verdad es el nodo, por el buzón, y no puede tocar el `ts`;
+- por v2 la tabla de vistos ya descarta la copia; el informe midió el camino v1 sin decirlo;
+- y la ventana simétrica haría perder llamadas a cualquier receptor con el reloj atrasado.
+
+El problema de fondo es la **reproducción de señales de llamada por el camino v1 sin deduplicar por
+`callId`**, con un impacto que el informe no llegó a ver: filas de «llamada perdida» sin límite. La
+fecha futura es secundaria, pero no irrelevante: amplía la ventana de aceptación, y es lo que acota
+cuánto tiene que durar la memoria. Detalle, tests y arreglo en **H-7** (§2).
+
+### 8.3 Tareas y estado
+
+| Tarea | Estado |
+|---|---|
+| Test de manipulación en tránsito | ✅ `TestTransporteRechazaBytesManipulados` |
+| Seguridad del circuito del relay | ✅ `TestRelayNoVeLoQueViajaPorElCircuito` y la autenticación en `TestRelayMessagingLocal`. Leer `ConnState()` resultó imposible (§8.1) |
+| Redacción condicionada de W-8 | ✅ especificación §8, §13 y §15.5 |
+| Tests que reproducen H-7 antes del arreglo | ✅ seis, y los seis fallaron con el código anterior |
+| Memoria de `callId` | ✅ |
+| Límite hacia el futuro | ✅ 10 min; pasado, llamada perdida y línea de Diagnóstico |
+| Fila de llamada perdida idempotente | ✅ |
+| Especificación (§8, P15, W-8, W-13, §14, §15.5) y esta revisión | ✅ |
+| Suites y móvil | ✅ JVM 288 tests, 0 fallos; Go del puente en verde; instalado en el TECNO, arranca en frío y dice «conectado» |
+| Prueba con dos móviles | ⬜ [PRUEBAS-PENDIENTES.md](PRUEBAS-PENDIENTES.md) §17 |
+| Porte a Nyx | ⬜ lo decide el autor |
+| Respuesta al informe | ✅ texto en §8.5; la envía el autor |
+
+### 8.4 Qué cambió en el repositorio
+
+- `p2p-signaling`: `CallService` (`firstSighting`, `INVITE_FUTURE_MS`, `INVITE_MEMORY_MS`,
+  `SEEN_INVITES_MAX`) y `ChatService` (`recordMissedCall(contact, callId)`, `missedCallId`).
+- Tests: `CallServiceTest` (+7), `ChatServiceTest` (+2, 1 adaptado a la firma nueva); en Go,
+  `transport_tamper_test.go` y `relay_espia_test.go` (nuevos) y `relay_msg_test.go`.
+- Docs: H-7 y esta sección, la especificación, security-model, architecture,
+  SOLICITUD-revision-externa, PRUEBAS-PENDIENTES §17 y CLAUDE.md.
+- **Sin cambio del formato de red ni del esquema** (la base sigue en v9), y **sin cambio en el AAR**:
+  en Go solo se añadieron tests.
+
+### 8.5 Respuesta al informe
+
+> **W-8.** De acuerdo con la redacción condicionada, y ya no queda condicionada a una suposición: el
+> 15 sep 2026 se comprobó que un intermediario que duplica, reordena o refleja bytes de un stream de
+> llamada provoca `tls: bad record MAC` y la caída de la conexión, sin entregar nada repetido
+> (`TestTransporteRechazaBytesManipulados`), y que un relay con un TLS espía no ve ni el frame ni lo
+> negociado dentro del circuito, con controles que prueban que sí ve lo que va bajo su propio TLS
+> (`TestRelayNoVeLoQueViajaPorElCircuito`). Queda sin test la vía QUIC directa, que por inspección no
+> usa 0-RTT. Nota para quien repita la prueba: en go-libp2p v0.48, `ConnState().Security` sale vacío
+> en las conexiones relayed aunque van cifradas. W-8 se mantiene abierto como defensa en profundidad:
+> un contador por frame cambia el formato de red y queda para después de la revisión externa.
+>
+> **C-001.** Reformulado como H-7: *reproducción de señales de llamada por el camino v1 sin
+> deduplicación por `callId`*. El impacto concreto, además de volver a sonar, era una fila de «llamada
+> perdida» y una notificación por cada entrega de un invite rancio. Arreglado sin cambio del formato de
+> red: una vez por `(contacto, callId)`, 10 min de margen hacia el futuro y fila idempotente. No se
+> adoptó la ventana simétrica de 45 s porque haría perder llamadas legítimas con relojes desfasados.
+> Seis tests lo reproducían y fallaban antes del arreglo. La etiqueta `revision-externa-1` no cambia.

@@ -480,8 +480,12 @@ desacoplados y testeables.
   "📞 Llamada perdida") por el camino de mensajes; medios por un stream libp2p
   `/krypta/call/1.0.0` (Go `CallStream`, framing uint16, admite conexiones relayed). Máquina
   de estados IDLE→CALLING/RINGING→CONNECTING→ACTIVE→ENDED con timeouts; **clave por llamada**
-  `HKDF(sharedSecret, callId)` y cada frame cifrado con `MessageCipher`; el que llama abre el
-  stream tras el accept y manda un hello cifrado que el receptor valida. Interfaces en
+  negociada con quien anuncia ≥ 2 (`HKDF(k_llamante ‖ k_contestador, salt = sharedSecret)`; con el
+  resto, `HKDF(sharedSecret, callId)`) y cada frame cifrado con `MessageCipher`; el que llama abre el
+  stream tras el accept y manda un hello cifrado que el receptor valida. Un `invite` se atiende
+  **una vez por `(contacto, callId)`** (memoria en RAM de 45 s + 10 min), no timbra si viene fechado
+  más de 10 min por delante, y la fila de llamada perdida tiene un id derivado de `(contacto, callId)`,
+  así que no se repite (H-7, 15 sep 2026). Interfaces en
   `:core`: `CallStream` y `AudioEngine`. Cubierto por `CallServiceTest` (dos extremos en
   memoria, audio E2EE bidireccional) y `TestCallStreamEcho` (Go). **Vídeo (7c)**: toggle 🎥
   dentro de la llamada ACTIVE — `startVideo()` abre un stream aparte `/krypta/video/1.0.0`

@@ -1799,6 +1799,48 @@ change the wire format (REVISION §5.4); if it has to change before the review s
   bottle, and building from source would upgrade Homebrew's Go, the one that builds the AAR. The
   official binary, checksum-verified, lives in `~/.local/bin/gh`, which is not on `PATH`.
 
+**Independent dynamic check (15 Sep 2026).** A dynamic verification of `a97cbab`, run on an isolated
+copy with temporary tests (report `08-verificacion-dinamica.md`, not versioned), raised W-8 (call
+frames replayable) and C-001 (a future-dated invite rings). Both were first checked read-only against
+the code and the plan agreed with the author. Outcome in
+[docs/REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md) H-7 and §8.
+
+- **H-7 (low), fixed. No wire or schema change, so `revision-externa-1` stays valid.**
+  - **The bug:** on the v1 path nothing dedups envelopes, so a node could replay a call invite. It
+    rang again after reject or hangup, re-sent `busy`, and each stale redelivery added another
+    "📞 Llamada perdida" row plus a notification, because `recordMissedCall` used a random UUID.
+  - **The fix:**
+    - `CallService` handles an invite once per `(contact, callId)`: in RAM, 256 entries, remembered
+      for 45 s + 10 min, which is the whole window in which one invite can ring;
+    - invites dated more than 10 min ahead are rejected (`INVITE_FUTURE_MS`), recorded as missed and
+      logged;
+    - `recordMissedCall(contact, callId)` uses `ChatService.missedCallId` (SHA-256 of the domain,
+      contact and `callId`) and skips both save and notify when the row exists. `save` is an upsert
+      and would re-mark the row unread.
+  - **The report's symmetric ±45 s window was deliberately not used:** a receiver whose clock is
+    behind would lose every call.
+  - **Tests:** 7 new in `CallServiceTest`; the 6 reproducers were checked to fail first. 2 more in
+    `ChatServiceTest`. JVM suite **288, 0 failures**.
+- **W-8 was verified at the transport, not fixed.** A per-frame counter would change the wire format,
+  so it waits for the review.
+  - `TestTransporteRechazaBytesManipulados`: a TCP proxy that duplicates, reorders or reflects bytes
+    gets `tls: bad record MAC`, the connection dies and nothing is delivered twice. A control case
+    delivers normally.
+  - `TestRelayNoVeLoQueViajaPorElCircuito`: a relay with a spying TLS sees neither the frame nor a
+    protocol negotiated inside the circuit. Controls prove it does see what travels under its own TLS.
+  - `TestRelayMessagingLocal` now checks that the circuit session authenticates the far peer, not
+    the relay.
+- **Two go-libp2p v0.48 facts that cost a wrong test each:**
+  - **A relayed conn's `ConnState().Security` is empty even though it is encrypted.** The circuit
+    client wraps the upgraded conn in a `capableConn` whose `ConnState()` returns only the transport
+    (`circuitv2/client/conn.go:160`). Never use it to judge whether a relayed conn is secure; the app
+    cannot check this at runtime.
+  - **identify tells the relay each phone's protocol list** (e.g. `/krypta/call/1.0.0`), which looked
+    like a circuit leak. The in-circuit probe uses a nonce protocol matched by prefix.
+  - Also, by inspection, its QUIC transport does not use 0-RTT.
+- **Installed on the TECNO:** cold start, "conectado". **Pending:** PRUEBAS-PENDIENTES §17 (two
+  phones) and the port to Nyx.
+
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a
 prioritized action plan; update it (or supersede it with a newer one) as items close.

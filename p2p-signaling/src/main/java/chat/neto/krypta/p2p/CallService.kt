@@ -234,7 +234,7 @@ class CallService @Inject constructor(
                             teardownLocked()
                             _state.value = CallState()
                         }
-                        runCatching { chat.recordMissedCall(contact) }
+                        runCatching { chat.recordMissedCall(contact, sig.callId) }
                     }
                     CallPhase.CALLING, CallPhase.CONNECTING, CallPhase.ACTIVE ->
                         endCall("finalizada", sendHangup = false)
@@ -246,10 +246,31 @@ class CallService @Inject constructor(
 
     private suspend fun onInvite(contact: Contact, sig: MessageEnvelope.Decoded.Call) {
         val secret = contact.sharedSecret ?: return
-        // Un invite rancio (llegó por buzón mucho después; reloj adelantado cuenta como
-        // fresco) ya no debe timbrar: fila de "llamada perdida" y listo.
-        if (System.currentTimeMillis() - sig.ts > INVITE_FRESH_MS) {
-            runCatching { chat.recordMissedCall(contact) }
+        val now = System.currentTimeMillis()
+        // Un invite se atiende UNA vez por llamada (H-7). Por la clave estática no hay
+        // deduplicación de sobres, así que un nodo que guarde un invite del buzón podía
+        // devolverlo y hacer sonar otra vez una llamada ya rechazada, mandar otro "busy", o
+        // sumar una fila de "llamada perdida" por cada entrega.
+        if (!firstSighting(contact.id, sig.callId, now)) {
+            chat.diagnose("📞 invite repetido de ${contact.displayName}: ignorado")
+            return
+        }
+        // Límite hacia el futuro. Antes no había ninguno, y un invite con la fecha adelantada
+        // seguía «fresco» tanto tiempo como el adelanto: es lo que acota cuánto tiene que durar
+        // la memoria de arriba. Es holgado a propósito, porque un reloj algo desajustado no puede
+        // costar la llamada; pasado el límite queda como perdida, no desaparece en silencio.
+        if (sig.ts - now > INVITE_FUTURE_MS) {
+            chat.diagnose(
+                "📞 invite de ${contact.displayName} con el reloj ${(sig.ts - now) / 60_000} min " +
+                    "adelantado: no timbra",
+            )
+            runCatching { chat.recordMissedCall(contact, sig.callId) }
+            return
+        }
+        // Un invite rancio (llegó por buzón mucho después) ya no debe timbrar: fila de
+        // "llamada perdida" y listo.
+        if (now - sig.ts > INVITE_FRESH_MS) {
+            runCatching { chat.recordMissedCall(contact, sig.callId) }
             return
         }
         val busy = mutex.withLock {
@@ -532,7 +553,7 @@ class CallService @Inject constructor(
             _state.value = CallState()
             s
         }
-        st.contact?.let { runCatching { chat.recordMissedCall(it) } }
+        st.contact?.let { runCatching { chat.recordMissedCall(it, st.callId) } }
     }
 
     private fun scheduleReset() {
@@ -549,6 +570,31 @@ class CallService @Inject constructor(
         _state.value.phase == CallPhase.IDLE || _state.value.phase == CallPhase.ENDED
 
     private fun currentCall(callId: String): Boolean = _state.value.callId == callId
+
+    /**
+     * `(contacto, callId)` de los invites ya atendidos, con la hora a la que llegaron (H-7).
+     * Solo hace falta para `invite`: `accept`, `reject`, `busy` y `hangup` ya se ignoran fuera
+     * de la llamada en curso, cuyo `callId` es aleatorio.
+     *
+     * Vive en memoria y no sobrevive a un reinicio, y basta: un invite con fecha `ts` solo puede
+     * timbrar mientras `now ∈ [ts − INVITE_FUTURE_MS, ts + INVITE_FRESH_MS]`, un intervalo de
+     * [INVITE_MEMORY_MS], así que recordarlo ese tiempo desde que se ve cubre toda su vida útil.
+     * Lo que sí puede volver días después, la fila de llamada perdida, es idempotente en la base
+     * (`ChatService.recordMissedCall`).
+     */
+    private val seenInvites = LinkedHashMap<String, Long>()
+
+    /** True la primera vez que se ve este invite; false si ya se atendió. */
+    private fun firstSighting(contactId: String, callId: String, now: Long): Boolean =
+        synchronized(seenInvites) {
+            val horizon = now - INVITE_MEMORY_MS
+            seenInvites.entries.removeIf { it.value < horizon }
+            val key = "$contactId $callId"
+            if (key in seenInvites) return false
+            seenInvites[key] = now
+            while (seenInvites.size > SEEN_INVITES_MAX) seenInvites.remove(seenInvites.keys.first())
+            true
+        }
 
     private fun armTimeout(ms: Long, action: suspend () -> Unit) {
         timeoutJob?.cancel()
@@ -609,6 +655,18 @@ class CallService @Inject constructor(
         const val RING_TIMEOUT_MS = 45_000L
         /** Un invite más viejo que esto (p. ej. del buzón) ya no timbra: perdida. */
         const val INVITE_FRESH_MS = 45_000L
+        /**
+         * Cuánto puede ir adelantado el reloj de quien llama. Más allá, el invite no timbra y
+         * queda como perdida. Holgado: los móviles sincronizan la hora, pero no todos.
+         */
+        const val INVITE_FUTURE_MS = 10 * 60_000L
+        /** Lo que dura la ventana en la que un mismo invite podría timbrar (ver `seenInvites`). */
+        const val INVITE_MEMORY_MS = INVITE_FRESH_MS + INVITE_FUTURE_MS
+        /**
+         * Tope de invites recordados. Echar uno fuera exige cientos de invites auténticos
+         * distintos y frescos a la vez; la red sola no los tiene.
+         */
+        const val SEEN_INVITES_MAX = 256
         /** Tras aceptar, cuánto esperar el stream de medios. */
         const val CONNECT_TIMEOUT_MS = 20_000L
         /** Espera del hello en un stream entrante. */

@@ -1,7 +1,7 @@
 # Especificación del protocolo de Krypta
 
 **Qué es.** La descripción **normativa** de lo que hace el código de Krypta en `main` a fecha
-**14 de septiembre de 2026** (protocolo anunciado: **v3**), escrita para que alguien de fuera pueda
+**15 de septiembre de 2026** (protocolo anunciado: **v3**), escrita para que alguien de fuera pueda
 revisarlo sin leerse las 1600 líneas de `ChatService`. Los `DISENO-*.md` cuentan **por qué** se
 decidió cada cosa; este documento cuenta **qué** hace: los bytes, las derivaciones y las reglas.
 **Si este documento y el código discrepan, manda el código y el documento está mal**: se corrige
@@ -370,8 +370,21 @@ usuario, pero sí delata por su tamaño que es un anuncio.
 
 ## 8. Llamadas
 
-- **Señalización**: sobres `C` por el camino normal (§7.3). Un `invite` con más de 45 s según el
-  reloj del emisor ya no timbra: queda como llamada perdida.
+- **Señalización**: sobres `C` por el camino normal (§7.3). Al recibir un `invite`, en este orden
+  (`CallService.onInvite`; H-7 de la revisión):
+
+  1. **Una vez por llamada.** Si ese `(contacto, callId)` ya se atendió, se ignora. La memoria es
+     local y en RAM, dura `45 s + 10 min` desde que se ve y guarda como mucho 256 entradas: es el
+     intervalo entero en el que un mismo invite podría timbrar.
+  2. **Fecha futura.** Si `ts − ahora > 10 min`, no timbra: queda como llamada perdida.
+  3. **Rancio.** Si `ahora − ts > 45 s`, no timbra: queda como llamada perdida.
+  4. Si no hay otra llamada, timbra; si la hay, se responde `busy`.
+
+  `ahora` es el reloj del **receptor** y `ts` el del **emisor**, así que las dos ventanas absorben
+  el desfase entre ambos. La **fila de llamada perdida es idempotente**: su id es
+  `hex(SHA-256("krypta-missed-call-v1" ‖ 0x00 ‖ id_contacto ‖ 0x00 ‖ callId))` y, si ya existe, no
+  se guarda ni se avisa otra vez. `accept`, `reject`, `busy` y `hangup` solo actúan sobre la llamada
+  en curso (mismo `callId`, que es aleatorio), así que no necesitan memoria.
 - **Clave** (`CallService`):
 
   ```
@@ -387,7 +400,11 @@ usuario, pero sí delata por su tamaño que es un anuncio.
   (vídeo, marco `uint32`, 1 MiB). Cada frame va como `AesGcmMessageCipher.encrypt(K_call, frame)`,
   es decir `n ‖ AEAD(HKDF(K_call, ∅, "krypta-msg-key-v1", 32), n, frame, ∅)` con `n` aleatorio. El
   primer frame de cada stream es `HELLO:<callId>` (audio) o `VHELLO:<callId>` (vídeo) cifrado, y el
-  receptor lo valida. **Los frames no llevan contador** (W-8).
+  receptor lo valida. **Los frames no llevan contador** (W-8). Lo que impide que la red los repita,
+  los reordene o se los devuelva al emisor es que el stream va dentro de la seguridad de transporte
+  de libp2p (TLS 1.3 o Noise) de teléfono a teléfono, también cuando pasa por un relay. Está
+  comprobado con tests (Go `TestTransporteRechazaBytesManipulados`,
+  `TestRelayNoVeLoQueViajaPorElCircuito`), no supuesto.
 
 ---
 
@@ -453,6 +470,7 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 | **P12** | La clave de una llamada no se deriva de la identidad (con quien negocia) | A4 sin la señalización | Probada | `CallServiceTest` |
 | **P13** | El disco del nodo no liga etiquetas del buzón con PeerIDs | A1 (volcado) | Probada en el nodo | Go `TestMailboxV2NoGuardaNiRemitenteNiDestinatario`, `TestMailboxV2LaEtiquetaEsLaLlave`, [DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) |
 | **P14** | Separación de dominio entre todas las derivaciones de `S` | — | Por inspección | Etiquetas `info` de §4, §5.2, §8, §9 y §10, todas distintas |
+| **P15** | Un `invite` genuino hace sonar como mucho una vez y deja como mucho una fila de llamada perdida, lo entregue quien lo entregue y cuantas veces | A1 | Probada desde el 15 sep 2026, **condicionada**: si el proceso se reinicia dentro de los 10 min 45 s puede sonar una vez más, y vaciar el chat borra la fila y con ella su memoria | `CallServiceTest` (7 tests de H-7), `ChatServiceTest` |
 
 ---
 
@@ -467,12 +485,12 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 | **W-5** | La recepción v1 se acepta siempre, de cualquier contacto, aunque la pareja ya use v2 | A4 | Ligado a W-3: cerrar solo esta vía no compra nada |
 | **W-6** | La monotonía del linaje la da el reloj. Un reloj que retrocede podría reutilizar un linaje, y un linaje nuevo con el reloj por detrás del viejo no se adopta | — | Sin arreglo |
 | **W-7** | Sin post-cuántico: todo es X25519, y el PeerID *es* la clave pública | A6 | [DISENO-postcuantico.md](DISENO-postcuantico.md) |
-| **W-8** | Los **frames de una llamada** no llevan contador ni ventana: dentro de la llamada, el relay puede reproducirlos, reordenarlos o devolvérselos al emisor (la clave es la misma en los dos sentidos) | A1 | Pregunta para la revisión |
+| **W-8** | Los **frames de una llamada** no llevan contador ni ventana, y la clave es la misma en los dos sentidos: **la capa de aplicación** no distingue un frame repetido, reordenado o devuelto al emisor. **Impacto limitado mientras la seguridad de transporte de libp2p (TLS 1.3 o Noise) mantenga autenticidad, orden y anti-replay de extremo a extremo**, y eso está comprobado (15 sep 2026): un intermediario que duplica, reordena o refleja bytes corta la conexión sin entregar nada repetido, y un relay no ve ni el frame ni lo negociado dentro del circuito. Sin comprobar: la vía QUIC directa tras DCUtR (por inspección, go-libp2p no usa 0-RTT). Y la app no puede verificarlo en ejecución: go-libp2p deja vacío `ConnState().Security` en las conexiones relayed | A1, si cambiara el transporte | Pregunta para la revisión (§15.5); evidencia en [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md) §8 |
 | **W-9** | `PN` se transmite y no se usa; las claves de la época anterior salen de la cadena retirada, acotadas por `MAX_SKIP` | — | Pregunta para la revisión |
 | **W-10** | Etiquetas del buzón y rendezvous **derivables de `S` para siempre**: quien obtenga una identidad puede decir qué etiquetas eran de esa pareja en cualquier volcado pasado | A4 | DISENO-ratchet §7.2 |
 | **W-11** | El `.krbk` solo lo protege la frase (PBKDF2, 310 000 iteraciones): quien lo obtenga puede probar frases sin límite, y acertar es A4 | A4 | security-model §7 |
 | **W-12** | La misma semilla Ed25519 sirve para firmar (Noise de libp2p) y, convertida, para X25519 | — | Pregunta para la revisión |
-| **W-13** | Metadatos: el nodo ve el grafo de parejas del día (DHT), la presencia (wake) y quién habla con quién en vivo (relay) | A1 | security-model §5 y §6 |
+| **W-13** | Metadatos: el nodo ve el grafo de parejas del día (DHT), la presencia (wake) y quién habla con quién en vivo (relay); y, por identify, qué protocolos admite cada teléfono | A1 | security-model §5 y §6 |
 
 ---
 
@@ -488,7 +506,8 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 | Persistencia, cerrojo, deduplicación | `RatchetSessions.kt`, `RoomRatchetStore.kt`, `RatchetDao` | `RatchetSessionsTest`, `RatchetSeenPruneSqlTest` |
 | Relleno | `Padding.kt` | `PaddingTest`, `RatchetPaddingTest` |
 | Capacidades | `ChatService` (`usesRatchet`, `pads`, `seal`, `onHello`, `learnFromRatchet`, `rehook`, `announceCapabilities`), `ContactDao` | `ChatServiceTest`, `ContactUpsertSqlTest` |
-| Llamadas | `CallService.kt` | `CallServiceTest`, Go `TestCallStreamEcho`, `TestVideoStreamEcho` |
+| Llamadas | `CallService.kt`, `ChatService.recordMissedCall` | `CallServiceTest`, `ChatServiceTest`, Go `TestCallStreamEcho`, `TestVideoStreamEcho` |
+| Transporte bajo las llamadas (W-8) | go-libp2p: TLS 1.3 o Noise por defecto, también en el circuito del relay | Go `TestTransporteRechazaBytesManipulados`, `TestRelayNoVeLoQueViajaPorElCircuito`, `TestRelayMessagingLocal` |
 | Buzón ciego | `MailboxLabel.kt`, `ChatService` (`outboxLabel`, `inboxLabels`), `infra/node/mailbox.go` | `MailboxLabelTest`, `ChatServiceTest`, Go `TestMailboxV2NoGuardaNiRemitenteNiDestinatario`, `TestMailboxV2LaEtiquetaEsLaLlave` |
 | Rendezvous | `RendezvousService.kt` | `RendezvousServiceTest` |
 | Número de seguridad | `SafetyNumber.kt`, `QrCode` | `SafetyNumberTest`, `QrCodeTest` |
@@ -511,7 +530,10 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 4. **Autenticación a nivel de `S`** (W-3, W-5): ¿vale la pena firmar los sobres con la identidad
    (resistencia a KCI) a cambio de perder la negación, que Krypta no promete? ¿Cuándo debería dejar
    de aceptarse v1?
-5. **Llamadas** (W-8): ¿contador por frame y claves separadas por sentido?
+5. **Llamadas** (W-8, P15): hoy lo que impide repetir, reordenar o reflejar frames es el transporte
+   de libp2p, comprobado con tests. ¿Conviene un contador por frame y claves separadas por sentido
+   para no depender de él? ¿Es suficiente la regla del `invite` de §8 (una vez por `callId` en RAM,
+   10 min hacia el futuro, 45 s hacia el pasado, fila de perdida idempotente)?
 6. **`PN` sin usar** (W-9) y `MAX_SKIPPED_KEYS = 2000` global con descarte de las más antiguas:
    ¿hay pérdida o abuso que no se haya visto?
 7. **Negociación de capacidades** (§7): ¿se puede forzar una degradación por alguna vía que no sea

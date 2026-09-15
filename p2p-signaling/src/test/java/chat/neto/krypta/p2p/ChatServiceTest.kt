@@ -807,11 +807,46 @@ class ChatServiceTest {
         assertTrue(processor(contact.peerId, texto, "env-1", 111L))
         assertTrue(processor(contact.peerId, cipher.encrypt(secret, MessageEnvelope.encodeFileMeta("f1", "n.txt", "text/plain", 4L, 1)), "env-2", 222L))
         assertTrue(processor(contact.peerId, cipher.encrypt(secret, MessageEnvelope.encodeFileChunk("f1", 0, "hola".toByteArray())), "env-3", 333L))
-        chat.recordMissedCall(contact)
+        chat.recordMissedCall(contact, "call-1")
 
         assertEquals(listOf("mid-1", "f1"), avisados.take(2).map { it.second })
         assertEquals(3, avisados.size) // + la fila de llamada perdida
         assertTrue(avisados.all { it.first == contact.id })
+    }
+
+    /**
+     * H-7: una llamada deja **una** fila de perdida y **un** aviso, la registre quien la registre y
+     * cuantas veces llegue. Otra llamada del mismo contacto sí deja la suya.
+     */
+    @Test
+    fun `la fila de llamada perdida es una por llamada y no vuelve a avisar`() = runTest {
+        val messages = FakeMessages()
+        val chat = ChatService(FakeSignaling(), cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        val avisados = mutableListOf<String>()
+        chat.setIncomingNotifier { _, m -> avisados.add(m.id) }
+
+        chat.recordMissedCall(contact, "call-1")
+        val fila = messages.saved.single()
+        chat.recordMissedCall(contact, "call-1")
+        chat.recordMissedCall(contact, "call-1")
+
+        assertEquals(1, messages.saved.size)
+        assertEquals("la segunda vez no la reescribe (volvería a no leída)", fila, messages.saved.single())
+        assertEquals(1, avisados.size)
+
+        chat.recordMissedCall(contact, "call-2")
+        assertEquals(2, messages.saved.size)
+        assertEquals(2, avisados.size)
+    }
+
+    /** El id no es el `callId` que manda el otro, y depende del contacto. */
+    @Test
+    fun `el id de la fila de llamada perdida no lo elige el otro extremo`() {
+        val id = ChatService.missedCallId("contacto-a", "call-1")
+        assertEquals(id, ChatService.missedCallId("contacto-a", "call-1"))
+        assertTrue(id != "call-1")
+        assertTrue(id != ChatService.missedCallId("contacto-b", "call-1"))
+        assertTrue(id != ChatService.missedCallId("contacto-a", "call-2"))
     }
 
     /** Un aviso que revienta no debe impedir el ack: el mensaje ya está persistido. */

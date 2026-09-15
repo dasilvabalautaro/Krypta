@@ -289,7 +289,10 @@ respuesta.*
 >    attacker, or an `S` holder, force a downgrade?
 > 5. **Padding (§6)**: bands, and a flag bit carried in the AAD.
 > 6. **Calls (§8)**: a negotiated per-call key `HKDF(k_caller ‖ k_callee, salt = S)`; media frames
->    are AES-GCM with random nonces and no counter (W-8).
+>    are AES-GCM with random nonces and no counter (W-8). Replay, reordering and reflection by a relay
+>    are currently stopped by libp2p's transport security (TLS 1.3 or Noise) running end to end
+>    through the circuit, which Go tests added after the tag check (see the note on H-7 below). Is a
+>    per-frame counter with per-direction keys worth it?
 > 7. **Derived identifiers (§9, §10)**: mailbox labels and rendezvous keys from `S`, and sender
 >    attribution by label (the KCI concern, W-3).
 > 8. **Key reuse (W-12)**: the Ed25519 seed is used both for signing (libp2p Noise) and, converted,
@@ -330,6 +333,13 @@ respuesta.*
 > **Already found and fixed by the internal review** (worth re-checking): H-0 (per-conversation
 > exclusion; key/nonce reuse under concurrency), H-1 (capability loss after re-adding a contact or
 > restoring a backup), H-2 and H-3 (the recorded peer version could decrease), H-6.
+>
+> **Fixed after the tag, with no wire-format change:** H-7, found by an independent dynamic check on
+> 15 Sep 2026. On the v1 path a replayed call invite rang again, repeated `busy`, and added one
+> "missed call" row per delivery. Invites are now handled once per `(contact, callId)`, with a
+> 10-minute future bound and an idempotent missed-call row. The same check led to Go tests showing
+> that tampering with call-stream bytes in transit kills the connection, and that a relay cannot read
+> what crosses the circuit.
 >
 > **Deliverables:** a written report with severity ratings and reproduction steps; a retest of the
 > fixes; permission to publish after fixes or 90 days. *Optional:* a symbolic model (Tamarin or

@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import java.security.MessageDigest
 import java.time.LocalTime
 import java.util.UUID
 import javax.inject.Inject
@@ -897,10 +898,19 @@ class ChatService @Inject constructor(
         sendRaw(contact, MessageEnvelope.encodeCall(kind, callId, System.currentTimeMillis(), negociada))
     }
 
-    /** Persiste una fila local "📞 Llamada perdida" en el chat de [contact] y la emite. */
-    suspend fun recordMissedCall(contact: Contact) {
-        val secret = contact.sharedSecret ?: return
-        val id = UUID.randomUUID().toString()
+    /**
+     * Persiste una fila local "📞 Llamada perdida" en el chat de [contact] y la emite, **una sola
+     * vez por llamada** (H-7). El id sale de `(contacto, callId)`: un invite rancio que el buzón
+     * devuelva días después, o el mismo invite tras colgar mientras sonaba, encuentra la fila hecha
+     * y no guarda ni avisa otra vez. Hay que mirar antes de guardar porque `save` es un upsert y la
+     * volvería a marcar como no leída. El `callId` lo elige el otro extremo, así que nunca se usa
+     * tal cual como id, que es la clave primaria de todos los mensajes (ver [missedCallId]).
+     * Límite: vaciar el chat borra la fila y, con ella, esa memoria.
+     */
+    suspend fun recordMissedCall(contact: Contact, callId: String) {
+        contact.sharedSecret ?: return
+        val id = missedCallId(contact.id, callId)
+        if (messages.findById(id) != null) return
         val message = Message(
             id = id,
             conversationId = contact.id,
@@ -1627,6 +1637,16 @@ class ChatService @Inject constructor(
         val ANIMATED_IMAGE_MIMES = setOf("image/gif", "image/webp")
         // Texto de la fila local de llamada perdida (no viaja por la red).
         const val MISSED_CALL_TEXT = "📞 Llamada perdida"
+
+        /**
+         * Id de la fila de llamada perdida de `(contacto, callId)`: el mismo cada vez, y dentro de
+         * un hash con el contacto para que un `callId` elegido por el otro no pueda coincidir con
+         * el id de ningún otro mensaje, de esta conversación o de otra.
+         */
+        fun missedCallId(contactId: String, callId: String): String =
+            MessageDigest.getInstance("SHA-256")
+                .digest("krypta-missed-call-v1 $contactId $callId".toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
         // Sobre válido de un tipo que esta versión no conoce (cliente más nuevo).
         const val UNSUPPORTED_TEXT = "[mensaje no compatible con esta versión]"
         // Bucle ágil cuando el wake no está (sonda buzón + redescubre). Bien por debajo del

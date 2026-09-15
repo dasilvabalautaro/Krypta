@@ -22,6 +22,9 @@
 > - ⚠️ Quedan **4 sobres sin recoger** en los nodos (3 en São Paulo, 1 en Dallas) para dos
 >   PeerID que **no son** el TECNO ni el contacto de la prueba. Caducan a los 7 días; ver §12.
 >
+> Después, el 15 sep: §17 añadida (señales de llamada repetidas, H-7), con el build instalado en el
+> TECNO; necesita el segundo móvil.
+>
 > Antes, el 10 sep por la mañana: §16 añadida al encender el ratchet. Y el 2 sep: auditoría
 > previa a preparar la versión de producción.
 >
@@ -814,6 +817,31 @@ lo que esta prueba va antes del encendido.
 
 ---
 
+## 17. Señales de llamada repetidas (H-7) — **PENDIENTE**
+
+Arreglado el 15 sep 2026 y cubierto por tests (`CallServiceTest`, siete; `ChatServiceTest`, dos);
+detalle en [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md) H-7. Una reproducción
+maliciosa del nodo no se puede montar con dos móviles, así que esto comprueba sobre todo que **nada
+legítimo se ha roto**, y que la fila de llamada perdida sale una vez. Hace falta el build del 15 sep o
+posterior **en el móvil que recibe** (la regla es solo del receptor).
+
+1. - [ ] **Llamada normal.** A llama a B: suena, B contesta, hay audio en los dos sentidos, A cuelga.
+     Repetir con vídeo. Nada distinto de §9 y §11.
+2. - [ ] **Rechazar no vuelve a sonar.** A llama, B rechaza. Durante los 2–3 minutos siguientes
+     (incluido un ciclo WAN, que recoge el buzón) B **no** vuelve a sonar. Si en el Diagnóstico de B
+     sale `📞 invite repetido de … ignorado`, es la regla nueva actuando (el invite llegó por dos
+     caminos), no un fallo.
+3. - [ ] **Colgar mientras suena deja una sola perdida.** A llama y cuelga antes de que B conteste. En
+     el chat de B aparece **una** fila «📞 Llamada perdida», y una sola notificación.
+4. - [ ] **Receptor sin red.** B en modo avión. A llama y cuelga. B vuelve a tener red y abre la app:
+     **no** suena, y aparece **una** fila de llamada perdida, no dos.
+5. - [ ] **Reloj adelantado.** En A, hora manual 15 minutos adelantada. A llama a B. **Esperado en B**:
+     no suena, aparece la fila de llamada perdida y el Diagnóstico dice
+     `📞 invite de … con el reloj 15 min adelantado: no timbra`. Con 2–3 minutos de adelanto **sí**
+     tiene que sonar. Devolver A a la hora automática al terminar.
+
+---
+
 ## 10. DCUtR directo en celular (gate de NAT) — **BLOQUEADO por hardware**
 Requiere **2 SIMs de operadoras distintas** (CGNAT real). Medir si la conexión sube a
 directa (DCUtR) o se queda en relay.
@@ -825,6 +853,8 @@ directa (DCUtR) o se queda en relay.
 ---
 
 ## Verificado en 1 móvil (no requiere el segundo)
+- **Build de H-7 (15 sep)**: instalado en el TECNO con `:app:installDebug`, sin tocar datos. Arranca en
+  frío y dice «conectado». Las llamadas no se pueden ejercitar con un solo móvil: van a §17.
 - **Build de la revisión del protocolo (14 sep)**: instalado en el TECNO sobre la base real con
   `adb install -r`, sin tocar datos. Arranca, pinta las conversaciones con su vista previa
   descifrada y dice «conectado»; **el autor confirmó la verificación en el móvil** el mismo día.

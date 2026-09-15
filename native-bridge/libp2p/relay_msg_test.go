@@ -61,6 +61,10 @@ func TestRelayMessagingLocal(t *testing.T) {
 	if err := a.h.Connect(ctx, peer.AddrInfo{ID: b.h.ID(), Addrs: []multiaddr.Multiaddr{circuit}}); err != nil {
 		t.Fatalf("A connect B via relay: %v", err)
 	}
+	// W-8: la sesión que va por el circuito autentica a B ante A y a A ante B, no al relay. Que
+	// además va cifrada lo comprueba TestRelayNoVeLoQueViajaPorElCircuito.
+	exigirCifradoDeExtremoAExtremo(t, a, b, true)
+	exigirCifradoDeExtremoAExtremo(t, b, a, true)
 
 	if err := a.SendMessage(b.PeerID(), []byte("hola por relay")); err != nil {
 		t.Fatalf("SendMessage: %v", err)

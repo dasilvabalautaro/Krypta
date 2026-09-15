@@ -92,6 +92,12 @@ sigue siendo cierto hasta que pasen las pruebas con dos móviles.)
   identidad podía abrir cualquier llamada que hubiera grabado; ahora necesita además el sobre de
   señalización de esa llamada concreta. Con un contacto que aún no lo entiende se sigue por el
   camino antiguo.
+- Los frames de una llamada **no llevan contador propio**. Lo que impide que el relay los repita,
+  los reordene o se los devuelva a quien los mandó es que el stream va dentro del cifrado de
+  transporte de libp2p (TLS 1.3 o Noise) de teléfono a teléfono, también cuando pasa por un relay.
+  Comprobado con tests el 15 sep 2026: manipular esos bytes corta la conexión, y el relay no ve lo
+  que viaja por el circuito. Y un **invite de llamada repetido** ya no vuelve a sonar ni suma otra
+  «llamada perdida» (H-7 de la revisión del protocolo).
 
 ### Lo que NO se garantiza (importante)
 
