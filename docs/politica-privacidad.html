@@ -130,7 +130,7 @@
   <header>
     <span class="badge">🔒 Krypta</span>
     <h1>Política de Privacidad</h1>
-    <p class="subtitle">Última actualización: 10 de septiembre de 2026</p>
+    <p class="subtitle">Última actualización: 18 de septiembre de 2026</p>
   </header>
 
   <nav class="toc">
@@ -218,22 +218,41 @@
   el nodo puede leer el contenido de tus mensajes: solo maneja bloques de datos cifrados
   y opacos.</p>
   <ul>
-    <li>Los mensajes depositados en el buzón se identifican por el PeerID del
-    destinatario, se autentican con la propia conexión criptográfica del remitente, y se
-    borran automáticamente al ser recogidos o, como máximo, a los <strong>7 días</strong>.</li>
+    <li>Los mensajes depositados en el buzón se identifican, cuando tu contacto usa una
+    versión reciente de Krypta, por una <strong>etiqueta opaca</strong> derivada del secreto
+    que solo tenéis vosotros dos y que cambia cada día: el nodo guarda el sobre sin saber de
+    quién viene ni para quién es. Con un contacto que aún no ha actualizado se siguen
+    identificando por su PeerID. En ambos casos se autentican con la propia conexión
+    criptográfica del remitente, y se borran automáticamente al ser recogidos o, como
+    máximo, a los <strong>7 días</strong>.</li>
     <li>Existen límites de uso por destinatario (máx. ~200 mensajes o 5 MiB en buzón a la
     vez) para evitar abuso, aplicados sobre datos cifrados que el nodo no puede
     interpretar. Además, ningún remitente puede acaparar el buzón de otra persona: si hay
     mensajes de varios remitentes, cada uno tiene su parte, de modo que un desconocido no
     pueda dejarte sin recibir los de tus contactos.</li>
-    <li><strong>Lo que el nodo sí ve mientras entrega:</strong> para poder guardar y entregar
-    un mensaje diferido necesita saber el PeerID de quien lo deposita, el de quien lo recibe y
-    la hora, y mientras la app está conectada sabe que ese PeerID está en línea. Es decir, el
-    nodo no puede leer lo que dices, pero sí puede deducir <em>con quién</em> te escribes y
-    <em>cuándo</em>, mientras el mensaje está en el buzón o el tráfico pasa por el repetidor.
-    No se guarda ningún registro más allá de eso, y esos datos desaparecen al entregarse el
-    mensaje (o a los 7 días). Si prefieres no depender de nuestros nodos, la app permite
-    configurar los tuyos en Ajustes → Nodo WAN.</li>
+    <li><strong>Lo que el nodo sí ve:</strong> no puede leer lo que dices, pero sí ve
+    metadatos, y conviene ser preciso sobre cuáles:
+      <ul>
+        <li><strong>Con quién hablas.</strong> Para poder encontraros, tu contacto y tú
+        publicáis en la red el mismo punto de cita, y quienes almacenan esas publicaciones
+        son los nodos. Un nodo puede por tanto saber qué dos identidades forman una pareja,
+        día a día, <em>aunque vuestros mensajes viajen directos</em> y no pasen nunca por
+        él. Esa información vive en la memoria del nodo, no en su disco.</li>
+        <li><strong>Cuándo estás en línea</strong>, mientras la app mantiene abierta su
+        conexión de aviso.</li>
+        <li><strong>Qué dos identidades intercambian tráfico, cuándo y cuánto</strong>,
+        cuando la conexión directa no es posible y el tráfico pasa por el repetidor.</li>
+        <li><strong>Tu dirección IP</strong>, como cualquier servicio al que te conectas.
+        Tus contactos también la ven en cuanto hay conexión directa. Ocultarla requiere una
+        VPN o Tor, igual que en cualquier otra aplicación de mensajería.</li>
+        <li>En el buzón, <strong>la hora del depósito</strong> y el tamaño del sobre; con un
+        contacto que aún no ha actualizado, también los PeerID de quien deposita y de quien
+        recibe; con uno al día, solo la etiqueta opaca.</li>
+      </ul>
+    No se guarda ningún registro más allá de eso: el nodo no escribe identificadores de
+    usuario (PeerID, direcciones IP, etiquetas de buzón) en sus registros de funcionamiento, y
+    el correo del buzón desaparece al entregarse el mensaje (o a los 7 días). Si prefieres no
+    depender de nuestros nodos, la app permite configurar los tuyos en Ajustes → Nodo WAN.</li>
   </ul>
 
   <h2 id="permisos">6. Permisos del sistema</h2>

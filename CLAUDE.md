@@ -1914,6 +1914,37 @@ these decisions, and no production code changed:
     composition, not of the primitives.
   - Counts across docs now read P1–P15 / W-1–W-14 (SECURITY.md, SOLICITUD, REVISION §5.2).
 
+**The user-facing texts said less than the code did — and one thing more (18 Sep 2026).**
+Verifying an external observation about metadata found the versioned security docs current
+(`security-model.md` §5/§5.1/§6, `DISENO-buzon-ciego.md` §0/§5) and the **user-facing** texts
+stale in both directions.
+
+- **The one error in the unsafe direction: the privacy policy omitted the DHT pair graph.** Its
+  §5 implied the node learns who talks to whom only through the mailbox or the relay. Both ends
+  publish the **same** rendezvous key and the nodes are what store it, so the pair is known
+  **even for conversations that go direct and never touch either**. The README already said this
+  (it has since 12 Sep); the policy and the manual did not. The policy now says it in plain
+  language, and mentions the **IP** for the first time — it did not appear anywhere in the
+  document.
+- **The rest understated protection**, which is the safe direction to be wrong in but still
+  false: the policy described the mailbox as pre-blind-deposit ("identified by the recipient's
+  PeerID"), when since 12 Sep a pair announcing protocol ≥ 2 deposits under an opaque label.
+- **`MANUAL.md` claimed "metadatos mínimos"** and, in the comparison table against Signal's
+  sealed sender, "Mínimos" — a word that does not survive the pair graph. Two more stale rows
+  fixed there: the call key (negotiated since fase 7, `HKDF(k_caller ‖ k_callee, salt = S)`) and
+  the payload cipher (ratchet since 10 Sep, written with the "protocolo propio, sin auditoría
+  externa todavía" caveat, never as a guarantee).
+- **In-app help** (`HelpContent`): the same two corrections; 560 chars, inside `HelpContentTest`'s
+  40..600.
+
+**Rule earned: the security docs being current is no evidence that the user-facing ones are.**
+Different work updates them — a protocol change forces `security-model.md` and forces nothing
+else. When what the node sees changes, check `docs/politica-privacidad.html`, `docs/MANUAL.md`
+and `ui/HelpContent.kt` too.
+
+Still stale, left on purpose pending the author's call: `MANUAL.md` §3.2 says the identity lives
+in SharedPreferences, when it has been Keystore-wrapped (`IdentityStore`) since 8 Sep.
+
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a
 prioritized action plan; update it (or supersede it with a newer one) as items close.

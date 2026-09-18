@@ -155,11 +155,14 @@ object HelpContent {
         HelpItem(
             category = "Privacidad y seguridad",
             question = "¿Qué sabe de mí el nodo que ayuda a entregar los mensajes?",
-            answer = "El contenido, nada: solo maneja bloques cifrados que no puede abrir. Pero " +
-                "cuando escribes a alguien desconectado, el mensaje pasa por su buzón, y ahí el " +
-                "nodo sí ve qué PeerID deposita para qué PeerID y a qué hora, hasta que se " +
-                "recoge. Tampoco es secreto cuándo estás conectado. Si eso te importa, puedes " +
-                "cambiar el nodo por otro tuyo en Ajustes → Nodo WAN.",
+            answer = "El contenido, nada: solo maneja bloques cifrados que no puede abrir. " +
+                "Metadatos sí. Como tu contacto y tú publicáis el mismo punto de cita para " +
+                "poder encontraros, el nodo puede saber que sois pareja aunque vuestros " +
+                "mensajes viajen directos y no pasen por él; también sabe cuándo estás " +
+                "conectado y ve tu IP. Y si escribes a alguien desconectado, el mensaje " +
+                "espera en su buzón: con un contacto que tenga Krypta al día va bajo una " +
+                "etiqueta opaca, sin remitente ni destinatario; si no, con los dos PeerID y " +
+                "la hora. Puedes usar tu propio nodo en Ajustes → Nodo WAN.",
         ),
         HelpItem(
             category = "Privacidad y seguridad",

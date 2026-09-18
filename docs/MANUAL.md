@@ -320,16 +320,21 @@ vía Hilt. Detalle completo en [architecture.md](architecture.md).
 |---|---|
 | Identidad de dispositivo | Par Ed25519 persistente (SharedPreferences); el `PeerID` es la clave pública |
 | Secreto compartido por par | X25519 ECDH entre tu clave privada y la pública embebida en el PeerID del contacto (`KeyExchange` / `Bridge.sharedSecretFor`) — **no requiere intercambio de claves manual**, solo conocer el PeerID |
-| Cifrado de payload | AES-256-GCM, clave derivada por HKDF del secreto compartido (`MessageCipher`) |
+| Cifrado de payload | AES-256-GCM. Entre clientes actualizados, clave **por mensaje** de un doble trinquete por épocas (`Ratchet`, activo desde el 10 sep 2026); con un contacto que aún no lo anuncia, clave estática derivada por HKDF del secreto compartido (`MessageCipher`) |
 | Rendezvous (descubrimiento) | `HKDF(secreto_compartido, fecha)` → punto de encuentro diario en la DHT, no enumerable sin el secreto |
 | Verificación anti-MITM | *Safety number* = 60 dígitos decimales de `SHA-256(dominio ‖ peerIdA ordenado ‖ peerIdB)`, simétrico; también disponible como QR (`krypta:verify:<PeerID>`) |
 | Huella visual del avatar | Color y **forma** del avatar derivados por hash del `PeerID` (color: `AvatarColors[hash]`; forma: `avatarShapeFor` sobre un hash decorrelacionado, set de formas de igual área en `ui/theme/AvatarShape.kt`). No es criptográfico ni sustituye al *safety number*, pero es una pista estable: un cambio de PeerID cambia color/forma. La **inicial** (una letra) deriva del nombre local, no del PeerID |
 | Backup de identidad | `"KRBK1" ‖ salt ‖ nonce ‖ AES-256-GCM(payload)`, clave = PBKDF2-HMAC-SHA256 · 310.000 iteraciones, magic como AAD |
-| Llamadas (voz/vídeo) | Clave de sesión por llamada = `HKDF(secreto_compartido, callId)` |
+| Llamadas (voz/vídeo) | Clave de sesión por llamada = `HKDF(k_llamante ‖ k_contestador, salt = secreto_compartido)`: cada lado sortea 32 bytes al azar y los manda dentro del sobre cifrado (fase 7 del ratchet). Con un contacto que no negocia se usa el camino antiguo, `HKDF(secreto_compartido, callId)` |
 
 Ningún servidor ve nunca texto en claro, ni siquiera los nodos de infraestructura propios
-de Krypta: solo ven blobs cifrados y metadatos mínimos (PeerID origen/destino, tamaño,
-timestamp) necesarios para enrutar.
+de Krypta: solo manejan blobs cifrados. Metadatos sí ven, y **no son mínimos**: el grafo
+diario de parejas (los dos extremos publican el mismo punto de cita y quien lo almacena es el
+nodo, también si vuestro tráfico va directo y no pasa por él), quién está en línea, la IP, y
+qué dos PeerID hablan y cuánto cuando el tráfico pasa por el relevo. En el buzón, desde el
+depósito ciego (12 sep 2026) el sobre va bajo una etiqueta opaca para las parejas que anuncian
+protocolo ≥ 2; para el resto, con PeerID de origen y destino. Detalle completo en
+[security-model.md](security-model.md) §5 y §6.
 
 ### 3.3 Descubrimiento y transporte
 
@@ -473,12 +478,12 @@ a fecha de este documento **falta**:
 
 | Aspecto | **Krypta** | **Signal** | **WhatsApp** |
 |---|---|---|---|
-| Cifrado extremo a extremo | Sí (X25519 ECDH + HKDF + AES-256-GCM, por par de contactos) | Sí (Signal Protocol, doble trinquete) | Sí (Signal Protocol con licencia) |
+| Cifrado extremo a extremo | Sí (X25519 ECDH + HKDF + AES-256-GCM, por par de contactos). Desde el 10 sep 2026, doble trinquete propio por épocas entre clientes actualizados — protocolo propio, **sin auditoría externa todavía** | Sí (Signal Protocol, doble trinquete) | Sí (Signal Protocol con licencia) |
 | Servidor central | **No** — enrutamiento P2P (libp2p/DHT); un nodo propio solo relevo/buzón cifrado y opcional | Sí — servidor central de Signal Foundation (código servidor abierto) | Sí — servidores de Meta (propietario) |
 | Identidad | Par de claves generado en el dispositivo; el PeerID **es** la clave pública, sin número de teléfono | Número de teléfono (con *usernames* opcionales recientes) | Número de teléfono obligatorio |
 | Descubrimiento de contactos | Manual: compartes tu PeerID por otro canal; sin directorio central | Servidor central + *contact discovery* con hashing/SGX | Servidor central, sube tu agenda |
 | Multi-dispositivo | No (una identidad = un dispositivo; hay backup/restauración manual) | Sí (vinculación de dispositivos) | Sí (multi-dispositivo nativo) |
-| Metadatos visibles al operador | Mínimos: PeerID origen/destino y tamaño en el nodo de relevo/buzón, que es reemplazable/auto-hospedable | Diseño *sealed sender* minimiza metadatos, pero corre en infraestructura centralizada | Meta ve metadatos de comunicación (a quién, cuándo) aunque no el contenido |
+| Metadatos visibles al operador | **No son mínimos**: el nodo tiene el grafo diario de parejas (vía rendezvous, incluso si el tráfico va directo y no pasa por él), la presencia, la IP, y qué dos PeerID hablan y cuánto cuando hay relevo. El buzón va bajo etiqueta opaca entre clientes actualizados. El nodo es reemplazable/auto-hospedable | Diseño *sealed sender* minimiza metadatos, pero corre en infraestructura centralizada | Meta ve metadatos de comunicación (a quién, cuándo) aunque no el contenido |
 | Código abierto | Sí (app + puente Go + nodo de infra, todo en este repo) | Sí (cliente y servidor) | No (cliente y servidor propietarios) |
 | Backup de historial | Copia de la **identidad + contactos** cifrada localmente (`.krbk`); el historial de mensajes no sale del dispositivo | Backup local cifrado (o en la nube cifrado con PIN) | Backup en Google Drive/iCloud (cifrado opcional) |
 | Llamadas voz/vídeo | Sí, sobre el propio transporte P2P/relay (sin WebRTC/TURN) | Sí (WebRTC) | Sí (WebRTC) |
@@ -551,9 +556,10 @@ de Play Store. Debe describir, entre otras cosas:
 - Qué datos recoge la app y con qué fin (en Krypta: PeerID de contactos añadidos
   localmente, identidad criptográfica generada en el dispositivo; **no hay servidor con
   cuentas de usuario ni recolección de mensajes en claro**).
-- Qué ve el nodo de infraestructura (metadatos mínimos de enrutamiento — PeerID
-  origen/destino, tamaño de blob, timestamp — y blobs cifrados de buzón, nunca contenido
-  legible) y su política de retención (TTL de 7 días, cuotas).
+- Qué ve el nodo de infraestructura (metadatos de enrutamiento: el grafo diario de parejas,
+  la presencia, la IP, el tamaño de blob y el timestamp, más los PeerID de origen y destino en
+  el buzón cuando el contacto no está actualizado; blobs cifrados, nunca contenido legible) y su
+  política de retención (TTL de 7 días, cuotas).
 - Que no hay compartición con terceros ni publicidad.
 - Datos de diagnóstico si en algún momento se añade *crash reporting*/analítica (hoy el
   proyecto no integra ninguno; si se añade, hay que declararlo aquí y en el formulario de
