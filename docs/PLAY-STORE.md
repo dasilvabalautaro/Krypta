@@ -252,9 +252,11 @@ incumplimiento afecta a **visibilidad y capacidad de publicación**, no es un re
 - [ ] **Justificar `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` en Console** (entrega de mensajes en
       2.º plano sin push de terceros). La política ya lo explica al usuario; esto es la
       declaración ante Play.
-- [ ] **Prueba cerrada previa**: si la cuenta de desarrollador es personal y posterior a
-      nov 2023, Play pide 12 testers durante 14 días antes de habilitar producción. Son dos
-      semanas de calendario: conviene arrancarla cuanto antes.
+- [ ] **Prueba cerrada previa**: Play pide 12 testers durante 14 días antes de habilitar
+      producción **a las cuentas personales** creadas después de nov 2023. La cuenta de Krypta
+      es de **organización** (4000MSNM S.R.L.), así que no debería aplicar — **confirmarlo en Console
+      antes de dar el punto por cerrado**, porque son dos semanas de calendario si aplica.
+      El nombre de desarrollador tiene que coincidir con la entidad verificada.
 - [ ] **Assets**: icono 512, gráfico destacado 1024×500, capturas, descripción corta y larga
       (reciclables de [MANUAL.md](MANUAL.md)).
       ⚠️ **La captura del chat no se puede hacer con el gesto del móvil**: desde la 1.5 la

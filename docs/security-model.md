@@ -297,9 +297,12 @@ No ve el contenido (doble cifrado: Noise + E2EE).
 ### 6.4 Concentración de operador
 
 Los dos nodos de `Libp2pNode.DEFAULT_BOOTSTRAP` (VPS en São Paulo y en Dallas, de dos proveedores
-distintos desde el 10 sep 2026) los opera **la misma persona** (el autor). Eso
-significa que, hoy, un solo operador está en posición de observar todo lo anterior para todos
-los usuarios. Es coherente con la decisión de "descentralizar la confianza, no la
+distintos desde el 10 sep 2026) los opera **4000MSNM S.R.L.**, la empresa responsable de
+Krypta. Eso significa que, hoy, **un solo operador** está en posición de observar todo lo
+anterior para todos los usuarios. Que el titular sea una empresa y no una persona física **no
+cambia esa propiedad**: la concentración depende de cuántos actores independientes hay, no de la
+forma jurídica. Quién tiene acceso operativo a las máquinas (root, claves SSH, `node.key`) es
+una decisión **todavía sin definir**, y conviene que lo esté antes de publicar. Es coherente con la decisión de "descentralizar la confianza, no la
 infraestructura" —el operador no puede leer nada— pero **no** con una lectura ingenua de
 "descentralizado".
 
@@ -576,7 +579,7 @@ escrituras.
      Cloudflare del camino** (terminaba el TLS del `wss`: no veía contenido, pero sí IPs,
      tiempos y volumen de cada usuario) — para los móviles actualizados; los que sigan con la
      versión anterior siguen pasando por los nodos caseros hasta actualizar. No reduce la
-     concentración de operador: sigue siendo una persona. Logs sin identificadores (§6.5) y
+     concentración de operador: sigue siendo un solo operador. Logs sin identificadores (§6.5) y
      `node.key` respaldado fuera de cada máquina, hechos; quedan las alertas reales.
   3. **Transparencia del cliente**, que es la confianza más grande de todas — quien firma la
      APK puede leerlo todo, con E2EE o sin él —: código público del cliente y del nodo (**hecho
@@ -590,5 +593,8 @@ escrituras.
      comparta sus nodos de buzón preferidos **dentro del E2EE**, para depositar donde elige el
      destinatario y no donde elige el autor; y algún operador ajeno (una organización de
      derechos digitales) en la lista por defecto.
-  6. **Largo plazo**: auditoría externa y una entidad legal, para que no haya una sola persona
-     a la que presionar.
+  6. **Largo plazo**: auditoría externa. La **entidad legal** ya existe —4000MSNM S.R.L. es quien
+     desarrolla Krypta y opera los nodos— pero conviene no confundirla con el objetivo de este
+     punto: constituir una empresa **no** hace que desaparezca el actor único al que presionar,
+     solo cambia su forma. Eso lo da la diversidad de operadores del punto 5, no el registro
+     mercantil.

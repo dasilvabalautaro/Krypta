@@ -5,9 +5,9 @@ número de teléfono**. Los móviles se encuentran y hablan entre sí sobre
 [libp2p](https://libp2p.io) (DHT, Circuit Relay v2 y hole punching), con un buzón cifrado para
 cuando el otro está desconectado.
 
-> **Estado: beta, sin publicar en tiendas.** Lo desarrolla y opera una sola persona. La
-> criptografía de sesión (un doble ratchet por épocas) es propia y **no ha tenido revisión
-> externa**; la revisión está **en trámite**. Mientras tanto, el protocolo está
+> **Estado: beta, sin publicar en tiendas.** Lo desarrolla y opera **4000MSNM S.R.L.**, un solo
+> operador. La criptografía de sesión (un doble ratchet por épocas) es propia y **no ha tenido
+> revisión externa**; la revisión está **en trámite**. Mientras tanto, el protocolo está
 > [especificado](docs/ESPECIFICACION-protocolo.md) para poder revisarse, y una
 > [revisión interna](docs/REVISION-protocolo-2026-09-14.md) del 14 sep 2026 encontró y arregló
 > dos fallos graves. Antes de confiarle nada sensible, lee
@@ -39,9 +39,10 @@ cuando el otro está desconectado.
 
 ## Lo que conviene saber
 
-- **Los nodos de infraestructura** (dos VPS, en São Paulo y Dallas) los opera una persona. No ven
-  el contenido, pero sí metadatos: quién está conectado, quién habla con quién cuando el tráfico
-  pasa por el relay, y el grafo diario de parejas en la DHT.
+- **Los nodos de infraestructura** (dos VPS, en São Paulo y Dallas) los opera **4000MSNM S.R.L.**:
+  un solo operador, y que sea una empresa y no una persona no cambia esa concentración. No ven el
+  contenido, pero sí metadatos: quién está conectado, quién habla con quién cuando el tráfico pasa
+  por el relay, y el grafo diario de parejas en la DHT.
 - **Tus contactos y el operador del nodo pueden ver tu IP.**
 - **Quien robe tu identidad y además actúe** (no solo escuche) puede suplantar a tus contactos y
   secuestrar una conversación. El ratchet protege frente a quien solo escucha. Está declarado en
@@ -144,9 +145,10 @@ phone number**. Phones find and talk to each other over libp2p (DHT, Circuit Rel
 punching), with an encrypted store-and-forward mailbox for offline delivery and a
 Google-free wake channel.
 
-**Status: beta, not published.** Built and operated by one person. The session protocol (an
-epoch-based double ratchet) is custom and **has not been externally reviewed yet**; a review is
-being requested. In the meantime, the protocol has a normative specification
+**Status: beta, not published.** Built and operated by **4000MSNM S.R.L.**, a single operator.
+The session protocol (an epoch-based double ratchet) is custom and **has not been externally
+reviewed yet**; a review is being requested. In the meantime, the protocol has a normative
+specification
 ([docs/ESPECIFICACION-protocolo.md](docs/ESPECIFICACION-protocolo.md), Spanish), with numbered
 properties and declared weaknesses. An internal review on 14 Sep 2026
 ([docs/REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md)) found and fixed

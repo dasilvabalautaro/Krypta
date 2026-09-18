@@ -1,8 +1,8 @@
 # Seguridad de Krypta
 
 Krypta es un mensajero cifrado de extremo a extremo, sin servidor central y sin cuentas. Lo
-desarrolla y lo opera **una persona**. Si has encontrado un fallo de seguridad, gracias por
-avisar: esta página dice cómo hacerlo y qué puedes esperar.
+desarrolla y lo opera **4000MSNM S.R.L.**, un equipo pequeño. Si has encontrado un fallo de
+seguridad, gracias por avisar: esta página dice cómo hacerlo y qué puedes esperar.
 
 *(English below.)*
 
@@ -19,7 +19,7 @@ Escribe a **[info@4000msnm.com](mailto:info@4000msnm.com)** con el asunto `[segu
 
 ## Qué puedes esperar
 
-- **Acuse de recibo en un plazo de 7 días.** Es un proyecto de una persona; si no llega
+- **Acuse de recibo en un plazo de 7 días.** Es un equipo pequeño; si no llega
   respuesta en ese plazo, reenvía el correo.
 - Una valoración honesta: si es un fallo, si ya estaba documentado como límite conocido, y qué
   se va a hacer.
@@ -77,7 +77,7 @@ cabeceras o configuraciones «recomendadas» sin un ataque concreto.
 - **Prueba solo contra tus propios dispositivos, identidades y contactos.** No intentes leer,
   alterar o bloquear los mensajes de otras personas.
 - **No hagas pruebas de carga ni de denegación de servicio contra los nodos públicos**: los
-  usan personas reales y los opera una sola persona. Para eso, levanta tu propio nodo con
+  usan personas reales y los opera un equipo pequeño. Para eso, levanta tu propio nodo con
   `infra/node` (instrucciones en [infra/node/README.md](infra/node/README.md)).
 - Si en el camino accedes a datos de otra persona, para, no los guardes y avisa.
 
@@ -85,7 +85,8 @@ cabeceras o configuraciones «recomendadas» sin un ataque concreto.
 
 ## English
 
-Krypta is an end-to-end encrypted, server-less messenger built and operated by **one person**.
+Krypta is an end-to-end encrypted, server-less messenger built and operated by **4000MSNM S.R.L.**,
+a small team.
 
 **Report** to **[info@4000msnm.com](mailto:info@4000msnm.com)** with `[security]` in the
 subject. In the first email, describe the area and impact rather than the full exploit; there is

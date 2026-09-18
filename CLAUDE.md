@@ -1957,6 +1957,35 @@ Written into `DISENO-buzon-ciego.md` §2.3/§4.2 (and its point 3 on presence) a
 `security-model.md` §6.2. **Closing it needs phase 2 applied to the wake too, not just to the
 deposit**, which §5 does not currently contemplate.
 
+The framing that came out of explaining all this is now `PLAN-privacidad-y-confianza.md` **§2.0**:
+the root is that the PeerID is address and identity at once, so one lever (ephemeral transport
+identity, authentication a layer up) moves mailbox, wake and rendezvous — and it costs less than
+it looks, because in the blind mailbox the authenticated transport identity **no longer buys any
+security property** (v1's non-spoofable `from` is now the E2EE's job); all it still holds up is
+anti-abuse. Only the relay is inherent, and only at one hop. **What makes it total today is the
+deployment, not the protocol**: in a large DHT each pair's record lands near its key and the key
+rotates daily, so no operator holds the whole graph; with two nodes both the author's, they all
+land on the same two. So the highest return per unit of cost is **§4.5, an outside second
+operator** — no wire change, no review needed — and not a crypto measure. Floor stated there
+too: timing and volume stay visible, and a small user base is a small anonymity set.
+
+**The operator is a company, and that changes nothing about the concentration (18 Sep 2026).**
+The public docs said the two VPS are run by "una persona (el autor)". They are run by **4000MSNM
+S.R.L.**, the company behind Krypta, and the Play developer account is an organization account in
+its name. Corrected in `security-model.md` §6.4, `README.md` (both languages), `SECURITY.md` (both
+languages), `politica-privacidad.html` (§5 names the operator; §12 now identifies a **responsable
+del tratamiento**, which the policy lacked entirely), `PLAN-privacidad-y-confianza.md` §2.0 and
+`PLAY-STORE.md`. **Written as a correction of *who*, never as a mitigation**: concentration depends
+on how many independent actors there are, not on legal form, so every one of those places keeps
+"un solo operador" next to the name. Two consequences worth keeping: `security-model.md` §10's
+long-term item asked for "una entidad legal, para que no haya una sola persona a la que presionar"
+— the entity now exists and **does not deliver that goal**, which needs operator diversity (§10.5),
+so the item says so; and **who holds root, SSH keys and `node.key` is still undefined** — today
+they are on the author's Mac (`~/keystores/krypta/`), and if ownership moved to the company, that
+access and that backup should follow. If the registry spells the name differently, it is one
+search-and-replace: the exact string `4000MSNM S.R.L.` was confirmed by the author, not read from
+a document.
+
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a
 prioritized action plan; update it (or supersede it with a newer one) as items close.

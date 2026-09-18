@@ -76,6 +76,58 @@ ni nonce se reutiliza.
 Es la brecha real frente a Signal, y la parte donde Krypta puede acabar **mejor**, porque no
 tiene un directorio central que proteger.
 
+### 2.0 Por qué el operador ve los pares, y cuál de estas acciones rinde más
+
+Las cuatro acciones de abajo atacan canales distintos del mismo problema. Conviene saber qué las
+une, para no pagar caro lo que se puede conseguir barato.
+
+**La raíz es que el PeerID es a la vez la dirección y la identidad.** libp2p autentica la
+identidad de largo plazo antes del primer byte, y en Krypta esa identidad *es* la clave pública
+de la que sale el secreto compartido — que es justamente lo que permite añadir a alguien pegando
+su PeerID, sin intercambio de claves. El precio es que no existe separación entre «quién se
+conecta» y «quién soy»: cualquier nodo con el que hables sabe quién eres, siempre, por
+construcción.
+
+Una sola palanca mueve tres de los cuatro canales: **que la identidad que se conecta sea
+desechable y la de verdad se autentique una capa más arriba**. Y cuesta menos de lo que parece,
+porque en el buzón ciego **la identidad autenticada del transporte ya no aporta ninguna
+propiedad de seguridad**: en v1 el nodo fijaba el `from`, y eso hacía al remitente no
+suplantable; en v2 esa garantía la da el cifrado extremo a extremo, no el nodo. Lo único que
+sostiene hoy el PeerID real en el depósito y en el wake es el **anti-abuso**. Ni más ni menos.
+
+| Canal | ¿Inherente? | Qué lo quitaría | Precio |
+|---|---|---|---|
+| **Buzón** | No | Identidad efímera al depositar | El ancla del anti-abuso ([DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) §5) |
+| **Wake** | No | Lo mismo al suscribirse: el nodo necesita saber **a qué conexión** escribir, no **de quién** es | El mismo — y el §5 hoy solo contempla el depósito, no el wake |
+| **Rendezvous** | No | El punto 1 de abajo | La IP sigue en el registro, así que hay que combinarlo con el punto 4 |
+| **Relay** | **Sí**, a un salto | Encaminamiento por capas estilo Tor | Otro proyecto: latencia, batería, complejidad |
+
+Del relay solo es inherente esto: para reenviar, alguien tiene que saber **a quién**. Que ese
+alguien sepa además **de quién** viene solo se rompe repartiendo el conocimiento entre varios
+saltos.
+
+**Lo que hace que hoy sea total no es el protocolo, es el despliegue.** En una DHT grande, el
+registro de cada pareja aterriza en el nodo más cercano a esa clave, y la clave rota cada día:
+ningún operador ve el grafo entero, ve fragmentos rotatorios que no puede ensamblar. En Krypta
+hay dos nodos y los dos son del mismo operador, así que caen siempre en los mismos. La propiedad que
+protegería el diseño distribuido existe; lo que falta es que la red lo esté.
+
+**Consecuencia para las prioridades:** la medida con más retorno por lo que cuesta no es
+criptográfica — es **§4.5, un segundo operador ajeno**. No toca el formato de red (congelado
+hasta la auditoría), no necesita revisión externa, y convierte «un solo operador ve el grafo
+de todos» en «nadie lo ve entero». Hoy figura como transparencia; en metadatos es la primera.
+
+**El suelo que ningún diseño quita**, y que hay que decir antes de prometer nada: el operador
+seguirá viendo una IP que habla Krypta, a qué horas y con qué tamaños. Contra eso solo hay
+tráfico de relleno y batching, que cuestan batería y no existen. Y el anonimato necesita
+compañía: con pocos usuarios y dos nodos, el conjunto en el que uno se esconde es diminuto.
+Signal tampoco tiene esta propiedad — su *sealed sender* oculta el remitente a un servidor que
+sabe perfectamente a qué cuenta entrega; lo compensan con escala y política, no haciéndolo
+imposible. La meta realista no es que el operador no pueda ver nada, sino **que no exista un
+operador en posición de verlo todo**.
+
+Las acciones concretas, en ese marco:
+
 1. **Descubrimiento ciego** (diseño primero, como se hizo con el buzón). Hoy los dos miembros
    de una pareja anuncian **la misma** clave de rendezvous y los móviles son clientes de la
    DHT, así que los nodos tienen el grafo diario. Camino a evaluar: anunciar y buscar con una
