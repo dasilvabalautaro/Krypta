@@ -1,5 +1,10 @@
 # Modelo de seguridad de Krypta
 
+**Nota del 18 de septiembre de 2026:** el §6.2 se amplía con lo que el **wake v2** le entrega al
+nodo además de la presencia (el conjunto entero de etiquetas del suscriptor, atado a su PeerID),
+que es la correlación en vivo del §6.1 en un solo paso. No cambia ningún mecanismo: es algo que
+el depósito ciego nunca ocultó y que no estaba escrito.
+
 **Última actualización:** 14 de septiembre de 2026 — **revisión del protocolo**. Se arreglaron dos
 fallos de implementación del ratchet (H-0: clave y nonce repetidos con operaciones simultáneas;
 H-1: mensajes perdidos para siempre tras volver a añadir un contacto) y se declararon dos límites de
@@ -271,6 +276,17 @@ el nodo guarda una etiqueta opaca y el sobre, sin `from` ni `to`. Ver
 El móvil mantiene abierto un stream `/krypta/wake/1.0.0`. El nodo, por tanto, **sabe en tiempo
 real qué PeerIDs están conectados**. El aviso en sí no lleva payload ni remitente, pero el
 patrón de conexión es un registro de presencia bastante fino.
+
+Con el depósito ciego hay que decir algo más, porque el wake v2 entrega más que presencia. Como
+el nodo ya no sabe de quién es cada buzón, el cliente se suscribe mandando sus **etiquetas**
+(`{"v":2,"labels":[…]}`) por un stream que libp2p autentica como cualquier otro: le llegan
+atados el PeerID del suscriptor y su **conjunto entero de etiquetas**. O sea que el nodo sabe,
+sin esperar a que nadie deposite, con cuántos contactos activos cuenta ese PeerID; y cada
+etiqueta que después aparezca en un depósito —donde ve el PeerID del depositante— le dice quién
+es cada uno. **Es la correlación en vivo del §6.1, pero en un paso.** La etiqueta es opaca para
+quien mire el disco después, no para quien mire las conexiones mientras ocurren. Ver
+[DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) §4.2: cerrarlo exige que quien se suscribe
+tampoco sea el PeerID real, o sea la fase 2 aplicada también al wake y no solo al depósito.
 
 ### 6.3 Relay
 

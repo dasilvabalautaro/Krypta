@@ -1945,6 +1945,18 @@ and `ui/HelpContent.kt` too.
 Still stale, left on purpose pending the author's call: `MANUAL.md` §3.2 says the identity lives
 in SharedPreferences, when it has been Keystore-wrapped (`IdentityStore`) since 8 Sep.
 
+**A metadata fact that was never written down, found explaining the above (same day).** The blind
+mailbox's live correlation (`DISENO-buzon-ciego.md` §4.2) was documented as a two-step join —
+node sees A deposit under label `L`, then sees B ask for `L`. **The wake v2 gives it in one
+step**: to subscribe, the client sends `{"v":2,"labels":[…]}` over a stream libp2p authenticates
+like any other, so the node gets the subscriber's PeerID **and its entire label set** together
+(`bridge.go` `StartWake`, `infra/node/wake.go` `handleV2`). It need not wait for any deposit: it
+already knows how many active contacts that PeerID has, and each label later seen in a deposit
+names one of them. Nothing changed in the code — this was always true and simply wasn't stated.
+Written into `DISENO-buzon-ciego.md` §2.3/§4.2 (and its point 3 on presence) and
+`security-model.md` §6.2. **Closing it needs phase 2 applied to the wake too, not just to the
+deposit**, which §5 does not currently contemplate.
+
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a
 prioritized action plan; update it (or supersede it with a newer one) as items close.

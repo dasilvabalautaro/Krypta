@@ -118,6 +118,10 @@ nodo    → {"ping":true} | {"wake":true}
 El aviso sigue sin llevar payload ni remitente. El nodo mantiene en memoria un índice
 etiqueta → conexión.
 
+Ojo con lo que esto le entrega al nodo mientras mira: la suscripción va por un stream
+autenticado, así que le llega el PeerID del suscriptor junto a **todas** sus etiquetas de una
+vez. Ver §4.2.
+
 ---
 
 ## 3. Qué gana
@@ -150,7 +154,18 @@ tope global, no hace falta reparto entre remitentes.
    observaciones, reconstruye la pareja **mientras el proceso está corriendo**. Lo que ya no
    puede es dejarlo escrito sin proponérselo: para conservarlo tiene que registrarlo
    activamente, que es un acto deliberado y no el estado por defecto.
-3. **La presencia**: el wake sigue delatando qué PeerID está conectado y cuándo.
+
+   **Y el wake v2 se la da en un paso, no en dos.** Para suscribirse, el cliente manda
+   `{"v":2,"labels":[…]}` (§2.3) por un stream que libp2p autentica igual que cualquier otro,
+   así que el nodo recibe atados el **PeerID de quien se suscribe** y su **conjunto entero de
+   etiquetas**. No hace falta esperar a ningún depósito: ahí ya está cuántos contactos tiene
+   ese PeerID, y cada etiqueta que después aparezca en un depósito dice quién es cada uno. Es
+   la misma correlación de este punto sin el paso de la retirada, y es lo que hay que tener en
+   cuenta al leer el §3: la etiqueta es opaca para quien mire el disco después, no para quien
+   mire las conexiones mientras ocurren. Cegarlo de verdad exige que quien se suscribe tampoco
+   sea el PeerID real, o sea la fase 2 (§5) aplicada **también** al wake, no solo al depósito.
+3. **La presencia**: el wake sigue delatando qué PeerID está conectado y cuándo — y, en v2,
+   con cuántas etiquetas, o sea con cuántos contactos activos.
 4. **Los tamaños y los tiempos**: sin relleno ni batching, un archivo troceado se sigue viendo
    como una ráfaga de depósitos de 48 KiB.
 
