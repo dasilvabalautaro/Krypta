@@ -402,7 +402,11 @@ desacoplados y testeables.
   **cae al buzón** (`signaling.sendOffline` → `SENT`, log "→ buzón"); solo si el buzón también
   falla queda `FAILED` (nunca crashea). `retry(contact, msgId)` reintenta un FALLIDO con el
   **mismo id** (por ahí deduplica el receptor): desde la v8 vuelve a cifrar el sobre guardado,
-  y una fila anterior —que aún guarda su ciphertext— se reenvía tal cual. **Borrado local (17 jul 2026)**:
+  y una fila anterior —que aún guarda su ciphertext— se reenvía tal cual. **Un archivo propio
+  no se reintenta así** (21 sep 2026): su fila es el descriptor local, así que `retry` (y
+  `retryFailed`, lanzado en el `scope` porque no cabe en el presupuesto del paso) lo reenvía
+  entero —meta + todos los trozos, mismo `fileId`— desde la copia local; sin copia, lanza un
+  aviso ("vuelve a adjuntarlo") en vez de mandar nada. **Borrado local (17 jul 2026)**:
   `clearConversation(contact)` vacía el chat **solo en este dispositivo** — borra los
   mensajes de Room y, para cada burbuja de archivo, pide `FileStore.deleteLocal(fileId,
   localPath)` (staging pendiente + ensamblado + copia propia, p. ej. la nota de voz en
@@ -444,8 +448,11 @@ desacoplados y testeables.
   un GIF fuera de pantalla deja de animarse. Si el archivo falta o no decodifica, cae a la
   burbuja de archivo. `notificationText` lo rotula **"🎞 GIF"**, no "📎 archivo.gif". **Archivos (v1, troceados)**: `sendFile(contact, name, mime, bytes)` parte el
   archivo en trozos de 48 KiB (`CHUNK_SIZE`, bajo el límite del buzón), envía una **meta** (`F`)
-  + cada **trozo** (`K`) con `sendRaw` (cifrado, directo → buzón, sin crear Message), y crea UNA
-  burbuja (descriptor). El receptor los pasa a `FileStore`, que al completar escribe el archivo
+  + cada **trozo** (`K`) (cifrado, directo → buzón, sin crear Message; cada pieza con **4
+  intentos** separados 2/5/15 s, `PIECE_RETRY_DELAYS_MS`, reenviando los mismos bytes), y crea UNA
+  burbuja (descriptor). **El emisor guarda siempre una copia cifrada** en `krypta_files/sent/`
+  (desde el 21 sep 2026; antes solo notas de voz y GIF), que es lo que hace posible reintentar.
+  Un `D` que llegue por la red se descarta. El receptor los pasa a `FileStore`, que al completar escribe el archivo
   y se persiste como Message DELIVERED (abrible con FileProvider). Límite v1: 8 MB (la cuota del
   buzón acota la entrega offline a ~5 MB); resolución/archivos grandes con staging = v2.
   **La fragilidad v1 quedó arreglada el 5 jul** (antes: trozos en memoria + buzón que borra lo

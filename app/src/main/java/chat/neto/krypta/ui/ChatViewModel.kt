@@ -501,7 +501,12 @@ class ChatViewModel @Inject constructor(
 
     /** Reintenta un mensaje FALLIDO (tocándolo en el chat). */
     fun retry(contact: Contact, messageId: String) {
-        viewModelScope.launch { runCatching { chat.retry(contact, messageId) } }
+        viewModelScope.launch {
+            // El único fallo que se lanza es un archivo sin copia local (enviado antes del
+            // 21 sep 2026): el mensaje dice qué hacer. El resto acaba en FAILED sin lanzar.
+            runCatching { chat.retry(contact, messageId) }
+                .onFailure { _error.value = it.message ?: "No se pudo reenviar" }
+        }
     }
 
     /** Acusa la lectura de los mensajes recibidos de [contact] (al abrir/ver el chat). */

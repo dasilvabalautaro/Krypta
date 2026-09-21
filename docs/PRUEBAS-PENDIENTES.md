@@ -9,7 +9,26 @@
 > `~/Desktop/krypta-arm64-debug.apk` (`./gradlew :app:assembleDebug -PslimAbi` + copia) y lo
 > comparte el autor. **Ambos móviles deben tener la misma versión** para cada prueba.
 >
-> Última actualización: **10 sep 2026 (tarde)** — **pruebas con dos móviles hechas**, ambos con
+> Última actualización: **21 sep 2026** — prueba con dos móviles del **19–20 sep** (el TECNO con
+> el build de `58b2286`; qué build llevaba el otro móvil no quedó registrado), revisada desde el
+> TECNO:
+>
+> - ✅ Texto en los dos sentidos, **dos fotos** recibidas y **marca de leído** en los dos mensajes
+>   propios que la colaboradora abrió.
+> - ❌ **Archivos: no llegó ninguno**, aunque los dos móviles lo daban por entregado. La
+>   colaboradora mandó varios PDF (81 KB, 551 KB y uno de 6,5 MB, dos veces); su envío falló, lo
+>   reintentó y pasó a «enviado», y en el TECNO aparecieron burbujas con nombre y tamaño que **no
+>   se abren**. En `files/krypta_files/` no había ningún archivo ensamblado: solo cuatro
+>   transferencias a medias en `staging/` (una de 125 trozos, otra de 29 y dos con solo la meta).
+>   **Causa, en el código desde el commit inicial**: reintentar un archivo reenviaba su fila, que
+>   es el **descriptor local** (`D`), no el archivo. Arreglado el 21 sep; ver §18. Por qué falló
+>   el primer envío no se sabe sin el Diagnóstico del otro móvil; lo más probable es que un solo
+>   trozo fallara por las dos vías (los 6,5 MB no caben en la cuota de 5 MiB del buzón si el
+>   destinatario no lo vacía a tiempo), y eso bastaba para tirar el archivo entero.
+> - Sin rastro de llamadas, notas de voz ni respuestas con cita: §16.3/5/7/11/12 y §17 siguen
+>   pendientes.
+>
+> Antes, el 10 sep 2026 (tarde) — **pruebas con dos móviles hechas**, ambos con
 > el build de ese día (nodos São Paulo + Dallas, `wss/443`, ratchet encendido):
 >
 > - ✅ **§16 ratchet, conversación normal**: intercambio real en los dos sentidos, sin pérdidas
@@ -738,7 +757,9 @@ Usar contactos desechables si se puede.
      tienen que llegar **todos y una sola vez**. Después, en dos ciclos seguidos de WAN, el
      Diagnóstico de B no debe volver a recoger los mismos sobres (si reaparecen es que no se
      están ack'eando).
-4. - [ ] **Archivo grande cruzando un cambio de época.** A envía un archivo de ~2–4 MB (o un
+4. - [ ] **Archivo grande cruzando un cambio de época.** ❌ **20 sep 2026: los archivos no
+     llegaron** (reintento defectuoso, ver §18); repetir con el APK del 21 sep en los dos.
+     A envía un archivo de ~2–4 MB (o un
      GIF) y B **responde con un mensaje mientras se está enviando**. El archivo debe llegar
      completo y abrirse. Es el caso que más partes toca a la vez: ráfaga de trozos, época
      girando a mitad y reensamblado en disco.
@@ -839,6 +860,40 @@ posterior **en el móvil que recibe** (la regla es solo del receptor).
      no suena, aparece la fila de llamada perdida y el Diagnóstico dice
      `📞 invite de … con el reloj 15 min adelantado: no timbra`. Con 2–3 minutos de adelanto **sí**
      tiene que sonar. Devolver A a la hora automática al terminar.
+
+---
+
+## 18. Envío de archivos tras el arreglo del reintento — **PENDIENTE**
+
+Arreglado el 21 sep 2026 tras la prueba del 20 sep (arriba). Cuatro cambios, todos en
+`ChatService`, sin cambio de formato:
+
+- el emisor **guarda siempre una copia cifrada** del archivo (`krypta_files/sent/`), no solo de
+  las notas de voz y los GIF; su burbuja pasa a decir «toca para abrir»;
+- **reintentar reenvía el archivo entero** (meta + todos los trozos, mismo id) desde esa copia,
+  tanto al tocar la burbuja como en la reconciliación de cada ciclo WAN. Sin copia (un archivo
+  enviado con un build anterior) sale el aviso «vuelve a adjuntarlo» y no se manda nada;
+- cada trozo tiene **4 intentos** (esperas de 2, 5 y 15 s) antes de dar el archivo por fallido;
+- el receptor **descarta** un descriptor que llegue por la red (lo que mandaba el reintento
+  viejo), en vez de pintar un archivo que no existe.
+
+Cubierto por 5 tests nuevos de `ChatServiceTest`. **Hace falta el APK del 21 sep en los dos
+móviles**: un build anterior en el emisor sigue mandando descriptores al reintentar.
+
+1. - [ ] **Archivo mediano con los dos en línea.** A manda un PDF de ~1–2 MB. B lo abre (tocar
+     la burbuja → visor). En A la burbuja propia también se abre.
+2. - [ ] **Archivo de 6–8 MB con los dos en línea**, el caso que falló. Debe llegar y abrirse. Si
+     A lo marca FALLIDO, tocarlo para reintentar: el Diagnóstico de A debe decir
+     `↻ reenviando <nombre>` y después `→ archivo enviado … (N trozos)`, y B debe acabar con el
+     archivo **abrible**. Una burbuja que no se abre en B es un fallo.
+3. - [ ] **Con B cerrado**, A manda uno de ~1 MB (cabe en el buzón). Al abrir B, llega y se abre.
+4. - [ ] **Reintento automático.** A en modo avión manda un archivo (queda FALLIDO), quita el modo
+     avión y **no toca nada**: en uno o dos ciclos WAN debe salir solo y llegar a B.
+5. - [ ] **Nada de burbujas vacías.** En B no debe aparecer ninguna burbuja de archivo sin «toca
+     para abrir» (salvo las viejas del 20 sep, que siguen ahí: se quitan vaciando el chat).
+6. - [ ] Tras la prueba, en B: `run-as chat.neto.krypta ls files/krypta_files/staging` no debe
+     guardar restos de estos archivos (los del 20 sep se barren solos a las 24 h cuando llegue
+     otro archivo).
 
 ---
 

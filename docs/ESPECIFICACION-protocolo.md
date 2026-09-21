@@ -92,7 +92,12 @@ el tipo y el segundo, un salto de línea.
 | `C` llamada | `C\n<tipo>\n<callId>\n<ts>[\n<mitad de clave en hex>]` | §8 |
 | `Y` cita | `Y\n<replyToId>\n<sobre interior>` | Envoltorio; no anida |
 | `V` capacidad | `V\n<versión>[\n<versión que tengo apuntada de ti>]` | §7. La segunda línea existe desde el 14 sep 2026 |
-| `D` descriptor | `D\n<tamaño>\n<mime>\n<ruta>\n<nombre>` | **Local**: nunca se envía |
+| `D` descriptor | `D\n<tamaño>\n<mime>\n<ruta>\n<nombre>` | **Local**: nunca se envía. Uno recibido se descarta (y se confirma) |
+
+Hasta el 21 sep 2026 el cliente **incumplía** la regla del `D`: reintentar un archivo fallido
+reenviaba su fila, que es el descriptor, y el receptor lo guardaba como una burbuja de archivo sin
+archivo. Desde entonces el emisor reintenta mandando `F` + todos los `K` con el mismo `fileId`, y el
+receptor descarta cualquier `D` que llegue. No cambia ningún formato.
 
 Un tipo `A`–`Z` que la versión no conoce decodifica como `Unsupported` y se descarta sin pintar
 nada. Unos bytes sin forma de sobre decodifican como `null`, y la capa superior los trata como texto

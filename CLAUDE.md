@@ -1986,6 +1986,30 @@ access and that backup should follow. If the registry spells the name differentl
 search-and-replace: the exact string `4000MSNM S.R.L.` was confirmed by the author, not read from
 a document.
 
+**Retrying a failed file resent a phantom (found 21 Sep 2026, fixed the same day).** The two-phone
+test of 19–20 Sep delivered text, photos and read receipts, but **no file**, while both phones showed
+the files as delivered. `ChatService.retry` (and, since 8 Sep, `retryFailed` every WAN cycle)
+retransmitted the message **row**, and for a file that row is the local `D` descriptor
+(name/size/path), not the file. Files picked with the file picker kept no copy, so there was nothing
+else to resend. The sender went to SENT; the receiver persisted the `D` as a file bubble with no file
+(not openable, no "toca para abrir"), and its `staging/` held the real, incomplete transfers.
+This had been in the code since the initial commit, and the spec already said `D` "nunca se envía".
+
+- **The sender now always keeps an encrypted copy** (`fileStore.saveSent`, `krypta_files/sent/`).
+- **Retry resends meta + every chunk** with the same `fileId` from that copy. With no copy it throws
+  "vuelve a adjuntarlo" and sends nothing. `retryFailed` launches file resends in `scope`, because
+  they don't fit the 30 s step budget, guarded by an in-flight set.
+- **Each piece gets 4 attempts** (2/5/15 s, `PIECE_RETRY_DELAYS_MS`) with the **same** ciphertext. One
+  failed chunk among hundreds used to fail the whole file.
+- **The receiver drops any incoming `D`.** Its path is sender-chosen and the UI would read it from
+  the local store.
+
+No wire-format change, so `revision-externa-1` stays valid. 5 new `ChatServiceTest` cases; JVM suite
+**296, 0 failures**. On the TECNO it was installed as an update, and the app launched "conectado" with
+its data intact. The two-phone retest is PRUEBAS-PENDIENTES §18, and **both phones need the 21 Sep
+APK**, because an older sender still sends descriptors. Test gotcha, seen again: a job launched into
+`backgroundScope` does not run under `advanceUntilIdle()` here; use `scopeInmediato()`.
+
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a
 prioritized action plan; update it (or supersede it with a newer one) as items close.

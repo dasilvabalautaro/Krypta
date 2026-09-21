@@ -79,9 +79,11 @@ class ChatServiceTest {
         override suspend fun openVideoStream(contact: Contact): chat.neto.krypta.core.CallStream =
             error("sin streams de vídeo en este fake")
         var failOnSend = false
+        /** Intentos de entrega que fallan por las dos vías (directo y buzón) antes de ir bien. */
+        var flakyAttempts = 0
         val sentAll = mutableListOf<ByteArray>()
         override suspend fun send(contact: Contact, ciphertext: ByteArray) {
-            if (failOnSend) error("failed to dial ${contact.peerId}: no addresses")
+            if (failOnSend || flakyAttempts > 0) error("failed to dial ${contact.peerId}: no addresses")
             sentCiphertext = ciphertext
             sentAll.add(ciphertext)
         }
@@ -90,6 +92,7 @@ class ChatServiceTest {
         /** Etiquetas con las que se depositó (vacía = camino antiguo por PeerID). */
         val depositLabels = mutableListOf<String>()
         override suspend fun sendOffline(contact: Contact, ciphertext: ByteArray, label: String) {
+            if (flakyAttempts > 0) { flakyAttempts--; error("buzón lleno") }
             if (failOnMailbox) error("connect buzón: sin ruta al nodo")
             mailboxDeposits.add(contact.peerId to ciphertext)
             depositLabels.add(label)
@@ -207,10 +210,15 @@ class ChatServiceTest {
             }
         }
         var assembled: ByteArray? = null
+        /** Simula que no se pudo guardar la copia del emisor (o una fila de antes de guardarla). */
+        var failSaveSent = false
         /** Borrados pedidos al vaciar un chat: (fileId, path de la copia local). */
         val deleted = mutableListOf<Pair<String, String?>>()
-        override suspend fun read(path: String): ByteArray? = null
-        override suspend fun saveSent(name: String, bytes: ByteArray): String? = null
+        /** Copias propias del emisor, por ruta. */
+        val saved = mutableMapOf<String, ByteArray>()
+        override suspend fun read(path: String): ByteArray? = saved[path]
+        override suspend fun saveSent(name: String, bytes: ByteArray): String? =
+            if (failSaveSent) null else "/fake/sent/$name".also { saved[it] = bytes }
         override suspend fun deleteLocal(fileId: String, path: String?) {
             deleted.add(fileId to path)
         }
@@ -475,6 +483,112 @@ class ChatServiceTest {
         val decoded = receiver.decodeMessage(contact, persisted)
         assertEquals("audio/mp4", (decoded.content as chat.neto.krypta.core.model.MessageContent.File).mime)
         assertEquals("id-citado", decoded.replyTo)
+    }
+
+    /**
+     * Regresión del 20 sep 2026 (dos móviles, PDF de 6,5 MB): reintentar un archivo FALLIDO
+     * reenviaba **la fila**, que es el descriptor local — al otro lado salía una burbuja con
+     * nombre y tamaño y sin archivo, y aquí quedaba como enviado. Tiene que reenviar la meta y
+     * todos los trozos (mismo id) desde la copia local, y el receptor reensamblar el archivo.
+     */
+    @Test
+    fun `reintentar un archivo fallido reenvia el archivo y no su descriptor`() = runTest {
+        val senderSig = FakeSignaling().apply { failOnSend = true; failOnMailbox = true }
+        val senderMessages = FakeMessages()
+        val sender = ChatService(senderSig, cipher, senderMessages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        val fileBytes = ByteArray(120 * 1024) { (it % 251).toByte() }
+
+        val failed = sender.sendFile(contact, "libro.pdf", "application/pdf", fileBytes)
+        assertEquals(MessageStatus.FAILED, failed.status)
+
+        senderSig.failOnSend = false
+        senderSig.sentAll.clear()
+        val retried = sender.retry(contact, failed.id)!!
+
+        assertEquals(MessageStatus.SENT, retried.status)
+        assertEquals(failed.id, retried.id)
+        assertEquals(4, senderSig.sentAll.size) // meta + 3 trozos, no un sobre suelto
+        senderSig.sentAll.forEach {
+            val env = MessageEnvelope.decode(cipher.decrypt(secret, it))
+            assertFalse("viajó el descriptor local", env is MessageEnvelope.Decoded.FileDescriptor)
+        }
+
+        val rxFileStore = FakeFileStore()
+        val rxMessages = FakeMessages()
+        val receiver = ChatService(FakeSignaling(), cipher, rxMessages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), rxFileStore, backgroundScope, testSessions(FakeKeyExchange()))
+        senderSig.sentAll.forEach { receiver.onReceived(contact.peerId, it) }
+        assertArrayEquals(fileBytes, rxFileStore.assembled)
+        assertEquals(failed.id, rxMessages.saved.single().id)
+    }
+
+    /** Un descriptor que llega por la red no pinta una burbuja de archivo inexistente. */
+    @Test
+    fun `un descriptor de archivo recibido por la red se descarta`() = runTest {
+        val rxMessages = FakeMessages()
+        val receiver = ChatService(FakeSignaling(), cipher, rxMessages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        val descriptor = MessageEnvelope.encodeFileDescriptor(
+            "libro.pdf", "application/pdf", 6_500_000, "/data/user/0/chat.neto.krypta/files/krypta_files/otro",
+        )
+
+        assertNull(receiver.onReceived(contact.peerId, cipher.encrypt(secret, descriptor)))
+        assertNull(receiver.onReceived(contact.peerId, cipher.encrypt(secret, MessageEnvelope.encodeReply("x", descriptor))))
+        assertTrue(rxMessages.saved.isEmpty())
+    }
+
+    /**
+     * Una pieza que falla un momento (dial caído, buzón lleno a mitad de ráfaga) se reintenta
+     * antes de dar el archivo por perdido: antes bastaba **un** fallo entre cientos de trozos.
+     */
+    @Test
+    fun `una pieza que falla un momento se reintenta y el archivo sale entero`() = runTest {
+        val senderSig = FakeSignaling().apply { flakyAttempts = 2 }
+        val sender = ChatService(senderSig, cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        val fileBytes = ByteArray(120 * 1024) { (it % 7).toByte() }
+
+        val sent = sender.sendFile(contact, "doc.bin", "application/octet-stream", fileBytes)
+
+        assertEquals(MessageStatus.SENT, sent.status)
+        assertEquals(4, senderSig.sentAll.size)
+        val rxFileStore = FakeFileStore()
+        val receiver = ChatService(FakeSignaling(), cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), rxFileStore, backgroundScope, testSessions(FakeKeyExchange()))
+        senderSig.sentAll.forEach { receiver.onReceived(contact.peerId, it) }
+        assertArrayEquals(fileBytes, rxFileStore.assembled)
+    }
+
+    /** Sin copia local no hay nada que reenviar: se dice, no se manda nada ni se finge. */
+    @Test
+    fun `reintentar un archivo sin copia local falla con un aviso y no envia nada`() = runTest {
+        val senderSig = FakeSignaling().apply { failOnSend = true; failOnMailbox = true }
+        val messages = FakeMessages()
+        val store = FakeFileStore().apply { failSaveSent = true }
+        val sender = ChatService(senderSig, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), store, backgroundScope, testSessions(FakeKeyExchange()))
+        val failed = sender.sendFile(contact, "viejo.pdf", "application/pdf", ByteArray(1024))
+
+        senderSig.failOnSend = false
+        senderSig.failOnMailbox = false
+        val result = runCatching { sender.retry(contact, failed.id) }
+
+        assertTrue(result.exceptionOrNull()?.message.orEmpty().contains("vuelve a adjuntarlo"))
+        assertTrue(senderSig.sentAll.isEmpty())
+        assertEquals(MessageStatus.FAILED, messages.saved.single().status)
+    }
+
+    /** La reconciliación de cada ciclo WAN también reenvía archivos, y los reenvía enteros. */
+    @Test
+    fun `retryFailed reenvia un archivo fallido desde su copia`() = runTest {
+        val senderSig = FakeSignaling().apply { failOnSend = true; failOnMailbox = true }
+        val messages = FakeMessages()
+        val sender = ChatService(senderSig, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange()))
+        val failed = sender.sendFile(contact, "doc.bin", "application/octet-stream", ByteArray(100 * 1024) { 1 })
+        assertEquals(MessageStatus.FAILED, failed.status)
+
+        senderSig.failOnSend = false
+        senderSig.sentAll.clear()
+        sender.retryFailed() // lanza el reenvío en el scope, que aquí corre en el acto
+
+        val diag = sender.log.value.joinToString("\n")
+        assertEquals(diag, MessageStatus.SENT, messages.saved.single().status)
+        assertEquals(diag, 4, senderSig.sentAll.size) // meta + 3 trozos
     }
 
     @Test

@@ -401,6 +401,15 @@ class ChatService @Inject constructor(
         for (message in failed) {
             val contact = contacts.findById(message.conversationId) ?: continue
             if (contact.blocked || contact.sharedSecret == null) continue
+            // Un archivo son muchos envíos y no cabe en el presupuesto del paso: va aparte, en
+            // el scope, y solo si tiene copia y no se está enviando ya.
+            val file = ownFileOf(contact, message)
+            if (file != null) {
+                if (message.id !in filesWithoutCopy && message.id !in filesInFlight) {
+                    scope.launch { runCatching { resendFile(contact, message, file.first, file.second) } }
+                }
+                continue
+            }
             messages.updateStatus(message.id, MessageStatus.PENDING)
             val result = transmit(contact, message.copy(status = MessageStatus.PENDING), wireBytes(contact, message))
             if (result.status == MessageStatus.SENT) sent++
@@ -824,9 +833,14 @@ class ChatService @Inject constructor(
     /**
      * Envía un **archivo** troceado a [contact]: anuncia la meta y manda cada trozo (≤ límite
      * del buzón) como mensajes cifrados por el camino normal (directo → buzón). Crea UNA
-     * burbuja visible (descriptor). Si algún trozo falla → FAILED (reintentar reenvía todo).
-     * [localPath] (si el emisor conserva copia, p. ej. una nota de voz) hace la burbuja
-     * propia abrible/reproducible; los archivos del picker van sin copia en v1.
+     * burbuja visible (descriptor). Si algún trozo falla pese a sus reintentos → FAILED.
+     *
+     * **El emisor conserva siempre una copia** (cifrada en reposo, en `krypta_files/sent/`):
+     * [localPath] si ya la trae (nota de voz, GIF) o una que se guarda aquí. Es lo que permite
+     * que reintentar ([retry], [retryFailed]) **reenvíe el archivo de verdad**. Hasta el 21 sep
+     * 2026 los archivos del selector no guardaban copia y reintentar reenviaba solo el
+     * descriptor local: al otro lado aparecía una burbuja con nombre y tamaño y **sin archivo**,
+     * y aquí quedaba como enviado (pasó en vivo con un PDF de 6,5 MB).
      */
     suspend fun sendFile(
         contact: Contact,
@@ -840,12 +854,14 @@ class ChatService @Inject constructor(
         // Precondición, no valor: quién cifra y con qué depende ya de [seal].
         requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
         val fileId = UUID.randomUUID().toString()
-        val total = (bytes.size + CHUNK_SIZE - 1) / CHUNK_SIZE
+        val ownCopy = localPath
+            ?: runCatching { fileStore.saveSent("$fileId-$name", bytes) }.getOrNull()
+        if (ownCopy == null) logLine("⚠ sin copia local de $name: si falla, habrá que volver a adjuntarlo")
         // La cita va en el descriptor local (burbuja propia) y en la meta que viaja: los
         // trozos no la llevan, y la burbuja del receptor no nace hasta tenerlos todos.
         val descriptor = MessageEnvelope.wrapReply(
             replyTo,
-            MessageEnvelope.encodeFileDescriptor(name, mime, bytes.size.toLong(), localPath),
+            MessageEnvelope.encodeFileDescriptor(name, mime, bytes.size.toLong(), ownCopy),
         )
         val message = Message(
             id = fileId,
@@ -856,8 +872,38 @@ class ChatService @Inject constructor(
             status = MessageStatus.PENDING,
         )
         messages.save(message)
+        filesInFlight.add(fileId)
+        try {
+            return transmitFile(contact, message, name, mime, bytes, replyTo)
+        } finally {
+            filesInFlight.remove(fileId)
+        }
+    }
+
+    /** Archivos que se están enviando ahora mismo: un reintento no debe solaparse con ellos. */
+    private val filesInFlight: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** Archivos fallidos sin copia local: reintentarlos solos en cada ciclo no sirve de nada. */
+    private val filesWithoutCopy: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
+     * Manda la meta y todos los trozos del archivo de [message] (su id **es** el `fileId`) y
+     * deja la fila en SENT o FAILED. Reenviar un archivo con el mismo id es seguro: el
+     * receptor guarda cada trozo por índice en su staging (idempotente), así que lo que ya
+     * tenía de un intento anterior se reescribe y lo que faltaba completa el archivo.
+     */
+    private suspend fun transmitFile(
+        contact: Contact,
+        message: Message,
+        name: String,
+        mime: String,
+        bytes: ByteArray,
+        replyTo: String?,
+    ): Message {
+        val fileId = message.id
+        val total = (bytes.size + CHUNK_SIZE - 1) / CHUNK_SIZE
         return try {
-            sendRaw(
+            sendPiece(
                 contact,
                 MessageEnvelope.wrapReply(
                     replyTo,
@@ -867,7 +913,7 @@ class ChatService @Inject constructor(
             for (i in 0 until total) {
                 val from = i * CHUNK_SIZE
                 val to = minOf(from + CHUNK_SIZE, bytes.size)
-                sendRaw(contact, MessageEnvelope.encodeFileChunk(fileId, i, bytes.copyOfRange(from, to)))
+                sendPiece(contact, MessageEnvelope.encodeFileChunk(fileId, i, bytes.copyOfRange(from, to)))
             }
             messages.updateStatus(fileId, MessageStatus.SENT)
             logLine("→ archivo enviado a ${short(contact.peerId)} ($total trozos)")
@@ -878,6 +924,71 @@ class ChatService @Inject constructor(
             messages.updateStatus(fileId, MessageStatus.FAILED)
             logLine("✗ archivo no enviado a ${short(contact.peerId)}: ${sendErrorReason(e)}")
             message.copy(status = MessageStatus.FAILED)
+        }
+    }
+
+    /**
+     * Entrega **una** pieza de un archivo (meta o trozo), con reintentos antes de rendirse.
+     * Un archivo son decenas o cientos de envíos seguidos y bastaba con que **uno** fallara
+     * por las dos vías —un dial que se cae un instante, el buzón del destinatario lleno a
+     * mitad de la ráfaga hasta que lo vacía— para que el archivo entero quedara FALLIDO.
+     *
+     * Se cifra **una vez** y se reenvían los mismos bytes: si un intento llegó aunque diera
+     * error, el receptor lo descarta como repetido (dedup del ratchet) en vez de gastar otra
+     * clave; y el trozo, por índice, es idempotente en su staging.
+     */
+    private suspend fun sendPiece(contact: Contact, envelope: ByteArray) {
+        requireNotBlocked(contact)
+        val wire = seal(contact, envelope)
+        var last: Exception? = null
+        for (attempt in 0..PIECE_RETRY_DELAYS_MS.size) {
+            if (attempt > 0) kotlinx.coroutines.delay(PIECE_RETRY_DELAYS_MS[attempt - 1])
+            try {
+                deliver(contact, wire)
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                last = e
+            }
+        }
+        throw requireNotNull(last)
+    }
+
+    /** El descriptor de un archivo **propio** persistido (y su cita), o null si no lo es. */
+    private fun ownFileOf(contact: Contact, message: Message): Pair<MessageEnvelope.Decoded.FileDescriptor, String?>? {
+        if (message.senderId != SELF) return null
+        val envelope = runCatching { MessageEnvelope.decode(envelopeOf(contact, message)) }.getOrNull()
+        val replyTo = (envelope as? MessageEnvelope.Decoded.Reply)?.replyTo
+        val inner = (envelope as? MessageEnvelope.Decoded.Reply)?.inner ?: envelope
+        return (inner as? MessageEnvelope.Decoded.FileDescriptor)?.let { it to replyTo }
+    }
+
+    /**
+     * Reenvía un archivo propio desde su copia local: meta + todos los trozos, mismo id.
+     * **Nunca** manda el descriptor: es la burbuja local, no el archivo. Sin copia (un envío
+     * de antes del 21 sep 2026) no hay nada que reenviar y se dice, en vez de fingir.
+     */
+    private suspend fun resendFile(
+        contact: Contact,
+        message: Message,
+        file: MessageEnvelope.Decoded.FileDescriptor,
+        replyTo: String?,
+    ): Message {
+        val bytes = file.path?.let { runCatching { fileStore.read(it) }.getOrNull() }
+        if (bytes == null) {
+            filesWithoutCopy.add(message.id)
+            messages.updateStatus(message.id, MessageStatus.FAILED)
+            logLine("✗ no se puede reenviar ${file.name}: no hay copia local")
+            throw IllegalStateException("No se guardó copia de «${file.name}»: vuelve a adjuntarlo")
+        }
+        if (!filesInFlight.add(message.id)) return message // ya se está enviando
+        try {
+            messages.updateStatus(message.id, MessageStatus.PENDING)
+            logLine("↻ reenviando ${file.name} a ${short(contact.peerId)}")
+            return transmitFile(contact, message.copy(status = MessageStatus.PENDING), file.name, file.mime, bytes, replyTo)
+        } finally {
+            filesInFlight.remove(message.id)
         }
     }
 
@@ -1003,6 +1114,8 @@ class ChatService @Inject constructor(
     suspend fun retry(contact: Contact, messageId: String): Message? {
         requireNotBlocked(contact)
         val message = messages.findById(messageId) ?: return null
+        // Un archivo no se reintenta reenviando su fila: la fila es el descriptor local.
+        ownFileOf(contact, message)?.let { (file, replyTo) -> return resendFile(contact, message, file, replyTo) }
         messages.updateStatus(messageId, MessageStatus.PENDING)
         logLine("↻ reintentando a ${short(contact.peerId)}")
         return transmit(contact, message.copy(status = MessageStatus.PENDING), wireBytes(contact, message))
@@ -1321,6 +1434,14 @@ class ChatService @Inject constructor(
             }
             is MessageEnvelope.Decoded.Call -> {
                 _callSignals.tryEmit(contact to decoded)
+                return null
+            }
+            // Un descriptor es la burbuja **local** de un archivo, nunca algo que viaje: solo lo
+            // mandaba el reintento defectuoso de antes del 21 sep 2026, y persistirlo pintaba un
+            // archivo que no existe. Además su ruta la elige quien envía, y la UI la usaría para
+            // leer del almacén propio. Se descarta (y se confirma, para que no vuelva).
+            is MessageEnvelope.Decoded.FileDescriptor -> {
+                logLine("⚠ descriptor de archivo de ${short(contact.peerId)} descartado: no trae el archivo")
                 return null
             }
             // Sobre de un tipo que esta versión no entiende: ignorar (no crear burbuja) es
@@ -1754,6 +1875,9 @@ class ChatService @Inject constructor(
         // Tamaño de trozo de archivo: deja aire bajo el límite del buzón (64 KiB) tras el
         // sobre + el cifrado (nonce 12 + tag 16 + cabecera).
         const val CHUNK_SIZE = 48 * 1024
+        // Esperas entre intentos de una pieza de archivo (4 intentos, ~22 s en total): lo que
+        // tarda un dial caído en volver o un destinatario en línea en vaciar su buzón lleno.
+        val PIECE_RETRY_DELAYS_MS = longArrayOf(2_000L, 5_000L, 15_000L)
     }
 }
 
