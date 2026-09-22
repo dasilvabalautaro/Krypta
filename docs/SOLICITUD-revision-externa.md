@@ -1,7 +1,7 @@
 # Solicitud de revisión externa
 
 **Estado:** preparada el 14 de septiembre de 2026. **Enviada el 22 sep 2026** por el formulario del
-OTF Security Lab; en estado **OTF Review**.
+OTF Security Lab, solicitud **#23596**; en estado **OTF Review**.
 
 **Qué se somete a revisión:** el commit con la etiqueta
 [`revision-externa-1`](https://github.com/dasilvabalautaro/Krypta/tree/revision-externa-1).
@@ -87,7 +87,7 @@ Quarkslab. Para un modelo formal, Cryspen.
   `mailbox.go` si el proveedor lo acepta como opcional (§5).
 - [x] **Después de enviar**: anotada la fecha y la vía en
   [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md) §5.1 (22 sep 2026, OTF Security
-  Lab, estado OTF Review). Falta el identificador de la solicitud.
+  Lab, solicitud #23596, estado OTF Review).
 
 ---
 
