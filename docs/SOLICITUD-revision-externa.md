@@ -316,6 +316,10 @@ la etiqueta. Comprobados el 22 sep 2026: todos responden 200.*
 > **Disclosure policy:** https://github.com/dasilvabalautaro/Krypta/blob/main/SECURITY.md. The same
 > contact is also published at https://krypta-sp.neto.chat/.well-known/security.txt
 >
+> **PGP key for sending findings** (fingerprint
+> `A2E4 6557 81A7 6D9C 6D32  F668 6775 D859 A5A1 23A8`):
+> https://github.com/dasilvabalautaro/Krypta/blob/main/pgp-key.asc
+>
 > **Privacy policy:**
 > https://github.com/dasilvabalautaro/Krypta/blob/main/docs/politica-privacidad.html
 
