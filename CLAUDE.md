@@ -1372,8 +1372,8 @@ since 10 Sep** (redeployed, same PeerID, probes green) and its `/var/log/syslog*
 `HUP` to rsyslog so it reopens the rewritten file. Its **journal was deliberately left to rotate**
 rather than vacuumed (that would also erase SSH/system logs), and with the 30-day retention set the same day
 the old lines age out around **10 Oct 2026**. The Mac and Windows nodes were already off by then
-(around 8 Sep); whether their `node.key`, mailbox dirs and the Mac's `~/krypta/node.log` were
-wiped is unconfirmed. The operational-trust roadmap this
+(around 8 Sep), and the author confirmed on 22 Sep that their `node.key`, mailbox dirs and the
+Mac's `~/krypta/node.log` were wiped. The operational-trust roadmap this
 came out of is in `security-model.md` §10.
 
 ## Module structure

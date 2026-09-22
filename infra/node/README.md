@@ -330,8 +330,9 @@ ser São Paulo + Dallas, sin el Mac ni el Windows. Tres consecuencias:
   parque estuviera actualizado y vaciar antes su buzón. Consecuencias: un móvil con la
   **versionCode 4** (1.3, subida a Play) solo conocía esos dos nodos, así que **se queda sin
   WAN** hasta que actualice; uno con la 5 o la 6 sigue funcionando por São Paulo, sin respaldo;
-  y lo que hubiera en sus buzones al apagarlos se perdió. Sus secciones de despliegue más abajo
-  quedan como referencia histórica.
+  y lo que hubiera en sus buzones al apagarlos se perdió. El autor confirmó (22 sep 2026) que en
+  las dos máquinas se borraron `node.key`, el directorio del buzón y, en el Mac,
+  `~/krypta/node.log`. Sus secciones de despliegue más abajo quedan como referencia histórica.
 - **La prueba de failover con dos móviles cambia**: ahora es apagar São Paulo y comprobar que la
   entrega sigue por Dallas (ver PRUEBAS-PENDIENTES).
 
