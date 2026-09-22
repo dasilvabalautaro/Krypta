@@ -318,7 +318,7 @@ vía Hilt. Detalle completo en [architecture.md](architecture.md).
 
 | Elemento | Mecanismo |
 |---|---|
-| Identidad de dispositivo | Par Ed25519 persistente (SharedPreferences); el `PeerID` es la clave pública |
+| Identidad de dispositivo | Par Ed25519 persistente, guardado cifrado con una clave AES del Android Keystore (`IdentityStore` + `KeystoreKeyWrapper`, desde el 8 sep 2026; antes estaba en claro en SharedPreferences y se migra sola); el `PeerID` es la clave pública |
 | Secreto compartido por par | X25519 ECDH entre tu clave privada y la pública embebida en el PeerID del contacto (`KeyExchange` / `Bridge.sharedSecretFor`) — **no requiere intercambio de claves manual**, solo conocer el PeerID |
 | Cifrado de payload | AES-256-GCM. Entre clientes actualizados, clave **por mensaje** de un doble trinquete por épocas (`Ratchet`, activo desde el 10 sep 2026); con un contacto que aún no lo anuncia, clave estática derivada por HKDF del secreto compartido (`MessageCipher`) |
 | Rendezvous (descubrimiento) | `HKDF(secreto_compartido, fecha)` → punto de encuentro diario en la DHT, no enumerable sin el secreto |
@@ -466,7 +466,8 @@ Ver el detalle exhaustivo, con qué está verificado en dispositivo real y qué 
 probar con dos teléfonos, en [PRUEBAS-PENDIENTES.md](PRUEBAS-PENDIENTES.md). En resumen,
 a fecha de este documento **falta**:
 
-- Segundo nodo de infraestructura desplegado (hoy solo hay uno).
+- Un segundo **operador** de nodos: ya hay dos VPS, pero los dos son de 4000MSNM S.R.L.
+- La revisión externa del protocolo (solicitada al OTF Security Lab el 22 sep 2026, #23596).
 - Verificación de DCUtR (upgrade a conexión directa) en datos móviles con NAT real (2 SIMs).
 - Adaptación de bitrate en vídeo, integración con Telecom (`ConnectionService`,
   tipo de FGS `phoneCall`), pulido de rotación/espejo en vídeo.
@@ -519,10 +520,10 @@ lo que falta preparar.
 
 | Requisito de Play | Estado en Krypta |
 |---|---|
-| Formato **Android App Bundle (.aab)**, no APK suelto | Falta configurar: hoy el proyecto genera APK (`assembleDebug`/`assembleRelease`); hace falta `./gradlew :app:bundleRelease` y firmar con un keystore real (App Signing) |
+| Formato **Android App Bundle (.aab)**, no APK suelto | ✅ `./gradlew :app:bundleRelease` genera el AAB firmado (~82 MB) |
 | **`targetSdk`** dentro de la ventana vigente de Google Play (a mitad de 2026, exige apuntar a una API reciente, revisar el mínimo exacto en la Play Console) | `targetSdk = 36` ✅, ya por encima de cualquier mínimo esperable |
 | Soporte de **64-bit** (`arm64-v8a`) | ✅ el AAR de libp2p compila para las 4 ABIs; hay flavor `-PslimAbi` solo-arm64 para pruebas, pero el *release* que se suba a Play debe incluir todas las ABIs relevantes (o usar `.aab` con entrega dinámica por ABI, que Play gestiona solo) |
-| **Firma de la app** (Play App Signing) | Pendiente: hoy el build de *release* firma con el **keystore de depuración** (`signingConfig = signingConfigs.getByName("debug")`) — **hay que generar un keystore de producción propio** antes de subir nada a Play; Play App Signing gestiona después la clave de distribución |
+| **Firma de la app** (Play App Signing) | ✅ El *release* firma con el **keystore de producción** (`~/keystores/krypta/krypta.jks`, vía `keystore.properties`, fuera de git); solo cae al de depuración si falta ese fichero. Play App Signing gestiona después la clave de distribución |
 | Tamaño del binario | El AAR de libp2p pesa ~65 MB (`libgojni.so` ~34 MB × 4 ABIs); con `.aab` Play sirve solo la ABI del dispositivo, mitigando el problema |
 
 ### 5.3 Permisos sensibles y su declaración
@@ -631,21 +632,26 @@ Conviene planificarlo con margen, ya que añade semanas al calendario de publica
 
 ### 5.10 Resumen de pendientes para publicar
 
-- [ ] Generar keystore de producción propio y configurar Play App Signing (hoy firma con
-      el keystore de depuración).
-- [ ] Migrar el build de release a **Android App Bundle** (`bundleRelease`).
-- [ ] Redactar y publicar la **política de privacidad** (URL pública).
+La lista al día, con fechas y detalles, está en [PLAY-STORE.md](PLAY-STORE.md); este resumen
+puede ir por detrás.
+
+- [x] Keystore de producción propio; el *release* firma con él.
+- [x] Build de release como **Android App Bundle** (`bundleRelease`).
+- [x] Redactar la **política de privacidad** ([politica-privacidad.html](politica-privacidad.html)).
+- [ ] Publicar la política en una **URL pública**.
 - [ ] Rellenar el formulario de **Data Safety**.
 - [ ] Rellenar la **declaración de Foreground Service** (`specialUse` + `microphone`).
 - [ ] Responder el cuestionario de **cumplimiento de exportación de cifrado**.
 - [ ] Completar el cuestionario de **clasificación de contenido (IARC)**.
-- [ ] Añadir alguna forma de **bloquear/reportar** un contacto (previsible pedido de Play
-      para apps de comunicación con contenido de usuario no moderado).
+- [x] **Bloquear** un contacto (6 sep 2026). No hay «reportar»: sin servidor ni cuentas, no
+      hay a quién mandar el reporte.
 - [ ] Preparar icono, *feature graphic*, capturas y descripciones de la ficha.
 - [ ] Verificar la cuenta de desarrollador y planificar el rodaje por pistas de *testing*.
-- [ ] Desplegar al menos un **segundo nodo de infraestructura** (recomendable antes de un
-      lanzamiento público, para no depender de un único punto de fallo operado por una
-      sola persona — hoy solo hay un nodo, ver [§3.10](#310-estado-y-pendientes)).
+- [x] **Segundo nodo de infraestructura**: dos VPS (São Paulo y Dallas) desde el 10 sep 2026,
+      así que la caída de uno no corta la entrega.
+- [ ] Un **segundo operador** independiente. Los dos nodos los opera 4000MSNM S.R.L., y eso
+      concentra los metadatos aunque haya dos máquinas
+      ([PLAN-privacidad-y-confianza.md](PLAN-privacidad-y-confianza.md) §4.5).
 
 ---
 

@@ -130,7 +130,7 @@ discards as accidental; haptic on start), short tap still gives the pinned recor
 with Cancelar/Enviar. Gesture gotcha found live: the mic's Box must **stay in composition
 while recording** — swapping the input row for a recording bar cancels its `pointerInput`
 and the release ("send") never fires; the input row now swaps its left side only. **Key exchange is X25519 ECDH from the libp2p identity**: each device has a
-*persistent* Ed25519 identity (stored in SharedPreferences); the shared secret with a
+*persistent* Ed25519 identity (stored Keystore-wrapped since 8 Sep, see below); the shared secret with a
 contact is derived from your private key + the public key embedded in their PeerID
 (`KeyExchange` / `Bridge.sharedSecretFor`), so onboarding needs only the PeerID — no
 passphrase. The app **auto-starts the libp2p host on launch** and enables **mDNS LAN
@@ -1946,8 +1946,9 @@ Different work updates them — a protocol change forces `security-model.md` and
 else. When what the node sees changes, check `docs/politica-privacidad.html`, `docs/MANUAL.md`
 and `ui/HelpContent.kt` too.
 
-Still stale, left on purpose pending the author's call: `MANUAL.md` §3.2 says the identity lives
-in SharedPreferences, when it has been Keystore-wrapped (`IdentityStore`) since 8 Sep.
+`MANUAL.md` §3.2 said the identity lives in SharedPreferences; fixed 22 Sep 2026 (Keystore-wrapped
+since 8 Sep), together with its §3.10/§5 Play checklists, which still listed the production
+keystore, the AAB, blocking and the second node as missing. `PLAY-STORE.md` is the source of truth.
 
 **A metadata fact that was never written down, found explaining the above (same day).** The blind
 mailbox's live correlation (`DISENO-buzon-ciego.md` §4.2) was documented as a two-step join —
