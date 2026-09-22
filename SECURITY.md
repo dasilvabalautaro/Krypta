@@ -11,8 +11,8 @@ seguridad, gracias por avisar: esta página dice cómo hacerlo y qué puedes esp
 Escribe a **[info@4000msnm.com](mailto:info@4000msnm.com)** con el asunto `[seguridad]`.
 
 - **En el primer correo, describe el área y el impacto, no la explotación completa.** No hay
-  todavía una clave PGP publicada; si el detalle pone en riesgo a usuarios, pide en ese primer
-  correo un canal cifrado y se acuerda uno.
+  Para mandar el detalle cifrado, usa la clave PGP [`pgp-key.asc`](pgp-key.asc), huella
+  `A2E4 6557 81A7 6D9C 6D32  F668 6775 D859 A5A1 23A8`. Comprueba la huella antes de usarla.
 - Incluye, si puedes: versión de la app (o commit), dispositivo y versión de Android, pasos para
   reproducirlo, qué consigue un atacante y qué necesita para conseguirlo.
 - No hace falta que tengas una prueba de concepto terminada: un indicio bien explicado vale.
@@ -89,8 +89,9 @@ Krypta is an end-to-end encrypted, server-less messenger built and operated by *
 a small team.
 
 **Report** to **[info@4000msnm.com](mailto:info@4000msnm.com)** with `[security]` in the
-subject. In the first email, describe the area and impact rather than the full exploit; there is
-no PGP key published yet, so ask for an encrypted channel if the details put users at risk.
+subject. In the first email, describe the area and impact rather than the full exploit. To send
+the details encrypted, use the PGP key [`pgp-key.asc`](pgp-key.asc), fingerprint
+`A2E4 6557 81A7 6D9C 6D32  F668 6775 D859 A5A1 23A8`; check the fingerprint before using it.
 Spanish or English are both fine.
 
 **What to expect:** acknowledgement within **7 days** (resend if you hear nothing), an honest

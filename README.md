@@ -123,7 +123,8 @@ Casi toda está en español.
 ## Seguridad
 
 Para avisar de un fallo de seguridad, lee [SECURITY.md](SECURITY.md) y escribe a
-**info@4000msnm.com**. Por favor, no hagas pruebas de carga ni de denegación de servicio contra
+**info@4000msnm.com**. Para el detalle, cifra con la clave PGP [`pgp-key.asc`](pgp-key.asc)
+(huella `A2E4 6557 81A7 6D9C 6D32  F668 6775 D859 A5A1 23A8`). Por favor, no hagas pruebas de carga ni de denegación de servicio contra
 los nodos públicos: levanta el tuyo.
 
 ## Licencia
@@ -163,7 +164,8 @@ debug APK, with sha256) are in the release
 The AAR build is reproducible from commit `8d02875` on: the same commit gives the same bytes, and
 the commit is embedded in the library.
 Security reports: [SECURITY.md](SECURITY.md),
-info@4000msnm.com.
+info@4000msnm.com; encrypt details with [`pgp-key.asc`](pgp-key.asc)
+(fingerprint `A2E4 6557 81A7 6D9C 6D32  F668 6775 D859 A5A1 23A8`).
 
 Licensed under either of MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache-2.0
 ([LICENSE-APACHE](LICENSE-APACHE)) at your option.

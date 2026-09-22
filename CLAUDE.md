@@ -1642,7 +1642,10 @@ before reading anything). Low severity — the blob lives inside SQLCipher and `
 but an eyeball review had passed that line. Go readers were already bounded before allocating.
 
 **Security contact (12 Sep 2026):** [SECURITY.md](SECURITY.md) (Spanish + English) —
-`info@4000msnm.com`, the same address as the privacy policy; ack within 7 days, coordinated
+`info@4000msnm.com` (PGP key since 22 Sep 2026: [pgp-key.asc](pgp-key.asc), fingerprint
+`A2E4 6557 81A7 6D9C 6D32  F668 6775 D859 A5A1 23A8`, Ed25519 + cv25519 subkey, expires 21 Sep 2028 — renew
+before then; private key + revocation cert in `~/keystores/krypta/krypta-security-pgp-*`; also in
+`security.txt` as `Encryption:`), the same address as the privacy policy; ack within 7 days, coordinated
 disclosure at 90 days, no bounty, no load testing against the public nodes. The public copy is
 `security.txt` (RFC 9116), source `infra/node/security.txt`, served at
 `https://krypta-{sp,dal}.neto.chat/.well-known/security.txt` by Caddy (`deploy-caddy.sh` now copies it

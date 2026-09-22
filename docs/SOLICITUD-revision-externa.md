@@ -42,7 +42,8 @@ Lo que se ha comprobado el 14 sep 2026 en la
   [apply.opentech.fund/security-lab](https://apply.opentech.fund/security-lab/). Hay además un
   contacto: **security_lab@opentech.fund**.
 
-**Lo que no se ha podido comprobar**: los campos concretos del formulario y los plazos de
+**Lo que no se ha podido comprobar del todo**: los campos concretos del formulario (los que ya
+se han visto, con su número, están en §3.4) y los plazos de
 respuesta. Las páginas del formulario y de opentech.fund devuelven 403 a una lectura automática. Por
 eso el §3 da las respuestas **agrupadas por los temas que suelen preguntar estos formularios**:
 se copian en el campo que corresponda y, si un campo tiene límite de caracteres, se usa la versión
@@ -73,10 +74,12 @@ Quarkslab. Para un modelo formal, Cryspen.
   [`revision-externa-1`](https://github.com/dasilvabalautaro/Krypta/releases/tag/revision-externa-1),
   marcada como *prerelease*, con los dos ficheros y `SHA256SUMS.txt`. Los sha256 que calcula GitHub
   para cada fichero coinciden con los de §5.
-- [ ] **Canal cifrado para recibir los hallazgos.** [SECURITY.md](../SECURITY.md) dice que no hay
-  clave PGP publicada, y un auditor la va a pedir para mandar lo encontrado antes de que sea
-  público. Hay que generar una (o acordar otro canal cifrado) y publicar su huella en SECURITY.md
-  **antes** de enviar la solicitud.
+- [x] **Canal cifrado para recibir los hallazgos** (22 sep 2026): clave PGP de
+  `info@4000msnm.com` (Ed25519 + subclave cv25519, caduca el 21 sep 2028), huella
+  `A2E4 6557 81A7 6D9C 6D32  F668 6775 D859 A5A1 23A8`. La pública está en [`pgp-key.asc`](../pgp-key.asc) y la huella en
+  [SECURITY.md](../SECURITY.md) y en `security.txt` (campo `Encryption`). La privada y el
+  certificado de revocación están en `~/keystores/krypta/krypta-security-pgp-*`. Falta una copia
+  fuera de la Mac, y renovar la caducidad antes de sep 2028.
 - [ ] **Disponibilidad**: cuántas horas por semana hay para responder dudas durante la revisión.
   La zona horaria es la de Bolivia (UTC−4).
 - [ ] **Alcance del nodo**: se recomienda **no** incluir `infra/node` en la primera ronda, salvo
@@ -126,9 +129,11 @@ Quarkslab. Para un modelo formal, Cryspen.
 > account to block. It does not depend on Google services, so it works on de-Googled phones. Anyone
 > can run their own infrastructure node and use it instead of, or alongside, the default ones. It
 > also offers a WebSocket-over-443 path for networks that only allow HTTPS. It is developed in
-> Bolivia with a Spanish-language interface. We are explicit about its limits: the operator of an
-> infrastructure node sees metadata (who is online, who talks to whom through the relay), and this
-> is documented in the project's threat model.
+> Bolivia with a Spanish-language interface. We are explicit about its limits: the infrastructure
+> nodes see metadata, and this is documented in the project's threat model. They see users' IP
+> addresses and who is online. They also learn which pairs of users talk to each other, even when a
+> conversation goes directly between phones: both ends publish the same rendezvous key on the DHT.
+> Today both default nodes have the same operator.
 
 **Usuarios y fase**
 
@@ -138,8 +143,8 @@ Quarkslab. Para un modelo formal, Cryspen.
 
 **Equipo**
 
-> One developer, who also operates the two default infrastructure nodes (VPS in São Paulo and
-> Dallas).
+> Krypta is developed by 4000MSNM S.R.L. (Bolivia), with one developer writing the code. The
+> company also operates the two default infrastructure nodes (VPS in São Paulo and Dallas).
 
 **Qué hay que revisar**
 
@@ -223,6 +228,97 @@ respuesta.*
 > [nombre]
 > Krypta — info@4000msnm.com
 
+### 3.4 Preguntas numeradas del formulario
+
+*Las que ya se han visto en el formulario, con su número. Se añaden aquí a medida que aparecen.*
+
+**13. What problems are you hoping to solve with this engagement - for users, your organization,
+or the internet freedom community?**
+
+> **The problem for users.** Most secure messengers tie a person to a phone number, and in many
+> countries, Bolivia included, a SIM card is registered to a national ID. They also depend on a
+> central server that can be blocked, seized or compelled, and often on Google Play Services.
+> Krypta removes all three. There are no accounts and no phone numbers: identity is a key pair
+> generated on the device. There is no central server and no user directory to hand over. Offline
+> delivery uses an encrypted mailbox under opaque labels, and it works on de-Googled phones and on
+> networks that only allow HTTPS. Anyone can run their own infrastructure node.
+>
+> This design removes the server that other messengers rely on, and that has a cost. Without a
+> server to distribute prekeys, Krypta cannot use the Signal protocol as it is. Its session
+> cryptography is custom: an epoch-based double ratchet with in-band capability negotiation,
+> negotiated call keys and mailbox labels derived from a shared secret. It has not been
+> independently reviewed. For the people Krypta is meant for (journalists, activists and anyone
+> who cannot safely link their communications to their legal identity), flawed cryptography is
+> worse than none. They change what they say and whom they talk to because they believe they are
+> protected. Our own internal review on 14 Sep 2026 showed the risk is real. In a protocol that
+> already had property-based tests and fuzzing, it found a race that reused the same AES-GCM key
+> and nonce, and a bug that silently made a contact's messages undecryptable forever. Both are
+> fixed. We do not know what a careful reading by someone else would find, and that is the problem
+> this engagement solves. We want the protocol verified before Krypta reaches more people, not
+> after.
+>
+> **The problem for our organization.** Krypta is developed by 4000MSNM S.R.L., a small company in
+> Bolivia, with a single developer writing the code, and it cannot pay for a cryptographic audit.
+> We have frozen the wire format while the review is pending, and further protocol work
+> (post-quantum hybridisation and identity rotation) is designed but on hold until then. We will
+> not build on a foundation nobody else has checked. A public report would tell us what to fix and
+> let users judge our claims against independent evidence rather than our own word.
+>
+> **The problem for the internet freedom community.** Serverless, account-less messengers are an
+> important design space, and every project in it faces the same question: how to get forward
+> secrecy and recover from lost state without a prekey server. We have written a normative
+> specification with numbered security properties, declared weaknesses and open questions. A
+> published review of it would be useful to other projects facing the same constraints, whatever
+> it finds. It would also support a tool built in and for Latin America, with a Spanish-language
+> interface.
+>
+> We are explicit about the limits. The review would not solve metadata exposure: infrastructure
+> nodes can learn who talks to whom, and our threat model documents this. It would establish
+> whether the cryptography protecting message content does what we claim.
+
+**16. Please provide links to any helpful documentation or repositories**
+
+*Los documentos enlazan a `main` (tienen las correcciones posteriores a la etiqueta); el código, a
+la etiqueta. Comprobados el 22 sep 2026: todos responden 200.*
+
+> **Repository** (public, MIT OR Apache-2.0): https://github.com/dasilvabalautaro/Krypta
+>
+> **Commit to review:** tag `revision-externa-1`. The tag never moves.
+> https://github.com/dasilvabalautaro/Krypta/tree/revision-externa-1
+>
+> **Binaries built from that tag** (AAR and arm64 debug APK, with `SHA256SUMS.txt`):
+> https://github.com/dasilvabalautaro/Krypta/releases/tag/revision-externa-1
+>
+> **Protocol and security documentation.** The links point to `main`, which has the latest
+> corrections, including properties and weaknesses added after the tag. The documents are in
+> Spanish, and we can translate any section on request.
+>
+> - Normative protocol specification (bytes, derivations, numbered properties P1–P15, declared
+>   weaknesses W-1–W-14, questions for the reviewer):
+>   https://github.com/dasilvabalautaro/Krypta/blob/main/docs/ESPECIFICACION-protocolo.md
+> - Threat model (what is protected, what the infrastructure nodes learn, what Krypta does not
+>   protect): https://github.com/dasilvabalautaro/Krypta/blob/main/docs/security-model.md
+> - Internal protocol review (findings, each reproduced by a test before its fix):
+>   https://github.com/dasilvabalautaro/Krypta/blob/main/docs/REVISION-protocolo-2026-09-14.md
+> - Ratchet design rationale:
+>   https://github.com/dasilvabalautaro/Krypta/blob/main/docs/DISENO-ratchet.md
+> - Blind mailbox design (metadata at the store-and-forward node):
+>   https://github.com/dasilvabalautaro/Krypta/blob/main/docs/DISENO-buzon-ciego.md
+> - Post-quantum design (measured, on hold until the review):
+>   https://github.com/dasilvabalautaro/Krypta/blob/main/docs/DISENO-postcuantico.md
+> - Identity rotation design (on hold until the review):
+>   https://github.com/dasilvabalautaro/Krypta/blob/main/docs/DISENO-rotacion-identidad.md
+> - Architecture overview:
+>   https://github.com/dasilvabalautaro/Krypta/blob/main/docs/architecture.md
+> - Privacy and trust roadmap:
+>   https://github.com/dasilvabalautaro/Krypta/blob/main/docs/PLAN-privacidad-y-confianza.md
+>
+> **Disclosure policy:** https://github.com/dasilvabalautaro/Krypta/blob/main/SECURITY.md. The same
+> contact is also published at https://krypta-sp.neto.chat/.well-known/security.txt
+>
+> **Privacy policy:**
+> https://github.com/dasilvabalautaro/Krypta/blob/main/docs/politica-privacidad.html
+
 ---
 
 ## 4. Para pedir presupuesto a una empresa
@@ -252,7 +348,7 @@ respuesta.*
 > reproduction steps, a retest of fixes, and permission to publish the report after fixes (or 90
 > days).
 >
-> Useful context: this is a one-person project with a limited budget, so please indicate the
+> Useful context: this is a single-developer project of a small company with a limited budget, so please indicate the
 > estimated effort (person-days) for each option and your earliest start date.
 >
 > Thank you,
