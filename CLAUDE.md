@@ -1779,7 +1779,8 @@ review sought") is **reverted**: no more protocol changes (lineage, post-quantum
 the review. Installed on the TECNO: it launches, lists conversations with decrypted previews and
 shows "conectado". The contact write path (new SQL) and the announcement exchange were not
 exercised on-device; they need the second phone (PRUEBAS §16.11). The author confirmed the
-on-device verification the same day. **The external review is being requested by the author**
+on-device verification the same day. **The external review was requested on 22 Sep 2026** through the OTF
+Security Lab form (status "OTF Review"; request id still to be recorded in REVISION §5.1),
 with the texts in [docs/SOLICITUD-revision-externa.md](docs/SOLICITUD-revision-externa.md), against
 the commit tagged `revision-externa-1`. That tag never moves. While the review is pending, don't
 change the wire format (REVISION §5.4); if it has to change before the review starts, tag

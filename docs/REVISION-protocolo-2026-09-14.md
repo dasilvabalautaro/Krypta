@@ -474,7 +474,7 @@ la revisión.
 | Binarios de la etiqueta | ✅ AAR y APK de depuración arm64 compilados **desde un clon limpio** de la etiqueta y **publicados en su release de GitHub** el 14 sep 2026, con sha256 (SOLICITUD §5) que coinciden con los que calcula GitHub. Fueron los del móvil del autor hasta que se instaló un build del commit `8d02875`. **Esos binarios no son reproducibles**, y se vio después que salieron del NDK 25.2, no del 26.1. Hacerlos destapó que `build-aar.sh` fallaba en un clon limpio (arreglado en `26bd405`). **Desde `8d02875` el AAR es reproducible** (plan §4.3) |
 | Textos de la solicitud (OTF, correo de seguimiento, presupuesto y alcance técnico) | ✅ [SOLICITUD-revision-externa.md](SOLICITUD-revision-externa.md). **La tramita el autor** |
 | Canal cifrado para recibir los hallazgos | ✅ Clave PGP publicada el 22 sep 2026 ([`pgp-key.asc`](../pgp-key.asc), huella en [SECURITY.md](../SECURITY.md)) |
-| Solicitud enviada (fecha, vía, identificador) | ⬜ |
+| Solicitud enviada (fecha, vía, identificador) | ✅ 22 sep 2026, formulario del OTF Security Lab ([apply.opentech.fund/security-lab](https://apply.opentech.fund/security-lab/)). Estado: **OTF Review**. Identificador: ⬜ anotarlo |
 
 ### 5.2 Qué pedir, en este orden
 
