@@ -349,11 +349,12 @@ protocolo ≥ 2; para el resto, con PeerID de origen y destino. Detalle completo
     30 s + `WithAllowLimitedConn` al abrir el stream + `EnableRelayService(WithInfiniteLimits())`
     para no capar la conexión a 128 KiB/2 min).
   - **DCUtR** (hole-punching) intenta después upgradear esa conexión relevada a directa.
-- **Transporte sobre WebSocket seguro (`wss`) vía Cloudflare Tunnel**, porque el nodo de
-  infra no tiene IP pública: `/dns4/krypta.neto.chat/tcp/443/wss/p2p/<PeerID>`. El bucle
-  WAN de la app es *auto-sanador* (reconecta cada 30–180 s, adaptativo según si el stream
-  de aviso está vivo) porque Cloudflare Free recicla los WebSockets a los ~100 s de
-  inactividad / ~10 min en total.
+- **Transporte directo a los nodos** (VPS con IP pública): `/ip4/…/tcp/4001` (y QUIC en
+  `udp/4001`), con una vía de respaldo **`wss` sobre 443** a través de Caddy
+  (`/dns4/krypta-{sp,dal}.neto.chat/tcp/443/wss/p2p/<PeerID>`) para redes que solo dejan
+  salir por el 443. El bucle WAN de la app es *auto-sanador* (reconecta cada 30–180 s,
+  adaptativo según si el stream de aviso está vivo). Hasta septiembre de 2026 los nodos eran
+  domésticos, tras Cloudflare Tunnel, que recicla los WebSockets; de ahí viene ese diseño.
 - **Multi-nodo**: la lista de bootstrap admite varios nodos; el buzón hace *fallback* al
   depositar y **drena todos** los nodos alcanzables al leer (una entrega puede haber
   caído en cualquiera).
@@ -438,9 +439,10 @@ Fase 8, sin cambios de protocolo (todo ocurre en el dispositivo):
 
 - `infra/node`: bootstrap DHT + Circuit Relay v2 + buzón + wake, en Go, pinneado a
   **go-libp2p v0.38 + Go 1.22** para poder compilar contra macOS Catalina (interopera con
-  los teléfonos en v0.48). Sin IP pública propia: expuesto vía **Cloudflare Tunnel**
-  (`wss` sobre 443, `cloudflared` mapea `krypta.neto.chat → localhost:8081`). Corre bajo
-  `launchd` (`KeepAlive`); deploy documentado en [infra/node/README.md](../infra/node/README.md).
+  los teléfonos en v0.48). Corre en **dos VPS** (São Paulo y Dallas) bajo `systemd`
+  (`Restart=always`), con Caddy delante para el `wss` sobre 443; deploy documentado en
+  [infra/node/README.md](../infra/node/README.md). Los dos nodos domésticos anteriores (Mac
+  Catalina y PC Windows, tras Cloudflare Tunnel) se retiraron hacia el 8 sep 2026.
 - El puente nativo Android (`native-bridge/libp2p`, paquete Go `bridge`) se compila a AAR
   vía gomobile (`native-bridge/libp2p/build-aar.sh`), con restricciones de tipos
   gomobile-friendly (sin mapas/slices de structs, sin canales cruzando el binding — se

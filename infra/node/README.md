@@ -207,9 +207,8 @@ cat ~/krypta/node.log     # ver el PeerID
 > podía hacerle reservar memoria sin fin; ahora se acota a 1 MiB (`maxInboundMessage`). El
 > despliegue **conservó el PeerID** (`node.key` intacta, del 7 ago) y el buzón. Revalidado en
 > caliente: buzón, wake, ciclo completo y latencia **p50 = 104 ms / p95 = 114 ms**.
-> ⚠️ **Los dos nodos domésticos (Mac Catalina y PC Windows) siguen con el binario anterior**,
-> sin ese tope: hay que redesplegarlos a mano en sus máquinas (`deploy-catalina.sh` y copiar
-> el `.exe` nuevo, ver más abajo).
+> Los dos nodos domésticos (Mac Catalina y PC Windows) nunca recibieron este binario: se
+> retiraron hacia el **8 sep 2026** (ver «Nodo de respaldo»).
 >
 > Copia de seguridad de la identidad **hecha (8 ago)**: `node.key` está respaldada en
 > `~/keystores/krypta/krypta-node-saopaulo.key` en la Mac del autor (`600`, fuera del repo).
@@ -326,10 +325,13 @@ ser São Paulo + Dallas, sin el Mac ni el Windows. Tres consecuencias:
 - **Solo llega a quien actualice.** Los móviles con una versión anterior siguen con la lista
   vieja (São Paulo + Mac + Windows), y los que guardaron una lista propia en Ajustes la
   conservan aunque actualicen: esos tienen que editarla a mano.
-- **No apagues el Mac ni el Windows todavía.** Mientras quede algún móvil con la lista vieja,
-  puede depositar en ellos cuando São Paulo no responda, y apagarlos con sobres pendientes los
-  perdería. Retíralos cuando el parque esté actualizado, y antes comprueba que su buzón está
-  vacío.
+- **El Mac y el Windows ya están apagados**: el autor los retiró hacia el **8 sep 2026**
+  (fecha aproximada), antes de lo que este documento recomendaba, que era esperar a que el
+  parque estuviera actualizado y vaciar antes su buzón. Consecuencias: un móvil con la
+  **versionCode 4** (1.3, subida a Play) solo conocía esos dos nodos, así que **se queda sin
+  WAN** hasta que actualice; uno con la 5 o la 6 sigue funcionando por São Paulo, sin respaldo;
+  y lo que hubiera en sus buzones al apagarlos se perdió. Sus secciones de despliegue más abajo
+  quedan como referencia histórica.
 - **La prueba de failover con dos móviles cambia**: ahora es apagar São Paulo y comprobar que la
   entrega sigue por Dallas (ver PRUEBAS-PENDIENTES).
 

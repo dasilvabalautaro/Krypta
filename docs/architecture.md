@@ -757,8 +757,15 @@ versiones. Binario en `infra/node/dist/krypta-node-catalina`; build (con `GOTOOL
 y despliegue **sin Docker** (launchd + puertos / **Cloudflare Tunnel**) en
 [infra/node/README.md](../infra/node/README.md).
 
-**Transportes y exposición.** El nodo escucha TCP (4001) + QUIC + **WebSocket**
-(`/ip4/0.0.0.0/tcp/8081/ws`, flag `-wsport`). Como el host **no tiene IP pública** y se expone
+**Transportes y exposición.** Hoy los nodos son **dos VPS con IP pública** (São Paulo y
+Dallas): los móviles marcan `/ip4/…/tcp/4001` directo (y QUIC en `udp/4001`), y el `wss` sobre
+443 sigue como vía de respaldo, ahora con **Caddy** en el propio VPS
+(`/dns4/krypta-{sp,dal}.neto.chat/tcp/443/wss/p2p/<PeerID>`) en vez de Cloudflare Tunnel. Los
+nodos domésticos se retiraron hacia el 8 sep 2026. Lo que sigue describe cómo era con ellos, y
+explica por qué existe la vía `wss`:
+
+El nodo escucha TCP (4001) + QUIC + **WebSocket**
+(`/ip4/0.0.0.0/tcp/8081/ws`, flag `-wsport`). Como el host doméstico **no tenía IP pública** y se exponía
 por **Cloudflare Tunnel** (que solo transporta HTTP/HTTPS/**WebSocket sobre 443**, ni TCP crudo
 ni UDP/QUIC), la vía WAN es **`wss`**: cloudflared mapea `krypta.neto.chat → http://localhost:8081`
 y el edge da el TLS. Los móviles marcan `/dns4/krypta.neto.chat/tcp/443/wss/p2p/<PeerID>` (su

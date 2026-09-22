@@ -179,8 +179,11 @@ had already arrived in its first 4 minutes) and `ufw` (22, 4001/tcp+udp, 443). P
 136 ms TCP / 130 ms QUIC; `node.key` backed up to `~/keystores/krypta/krypta-node-dallas.key`.
 **It replaced the two home nodes in `DEFAULT_BOOTSTRAP` the same day**, which is now São
 Paulo + Dallas only (`check-nodes.sh` reads the constant, so it follows automatically). This only
-reaches phones on a newer build, and a phone with a saved bootstrap pref keeps its own list — so
-the Mac and Windows nodes must **stay up** (and be drained) until older clients are gone. The
+reaches phones on a newer build, and a phone with a saved bootstrap pref keeps its own list. The
+docs said the Mac and Windows nodes must stay up until older clients were gone, but **the author
+had already switched them off around 8 Sep 2026** (approximate; learned 22 Sep): a phone on Play
+versionCode 4 knew only those two, so it has **no WAN** until it updates, and anything left in
+their mailboxes was lost. The
 two-phone failover test is now "stop São Paulo, deliver via Dallas" (PRUEBAS-PENDIENTES).
 **Removing the home nodes also removed the only `wss/443` path** (they were the Cloudflare-tunnel
 ones), stranding users on networks that only allow 443. Fixed the same day **without a tunnel**:
@@ -797,9 +800,8 @@ a full mailbox round trip on the VPS); and on the TECNO the diagnostics show `DH
 `relay: OK` / `rendezvous: anunciando` / `wake activo`, i.e. both bounded readers work against
 production. **The VPS node was redeployed on 6 Sep 2026** (`deploy-vps.sh`, after 29 days of
 uptime) so its half of the fix is live: same PeerID (`node.key` untouched), listening again on
-`tcp/4001` + `udp/4001` + `ws/8081`, probes green and latency p50 = 104 ms from La Paz. **The two
-home nodes (Mac/Windows) still run the older binary** — their `io.ReadAll` is unbounded until
-someone runs `deploy-catalina.sh` / copies the new `.exe` on those machines.
+`tcp/4001` + `udp/4001` + `ws/8081`, probes green and latency p50 = 104 ms from La Paz. The two
+home nodes (Mac/Windows) never got it: they were switched off around 8 Sep 2026.
 **Block a contact (6 Sep 2026)**: the last code-level item Play's user-generated-content
 policy asked for (block *or* report; there is no server to receive a report, since Krypta is
 E2EE and account-less, so blocking is the measure that can actually be enforced on the
@@ -1369,8 +1371,9 @@ capture. **Rule: a node log line never carries PeerIDs, IPs or mailbox labels.**
 since 10 Sep** (redeployed, same PeerID, probes green) and its `/var/log/syslog*` purged, with a
 `HUP` to rsyslog so it reopens the rewritten file. Its **journal was deliberately left to rotate**
 rather than vacuumed (that would also erase SSH/system logs), and with the 30-day retention set the same day
-the old lines age out around **10 Oct 2026**. The Mac and Windows nodes still run the old binary,
-and the Mac's `~/krypta/node.log` (never rotated) is unpurged. The operational-trust roadmap this
+the old lines age out around **10 Oct 2026**. The Mac and Windows nodes were already off by then
+(around 8 Sep); whether their `node.key`, mailbox dirs and the Mac's `~/krypta/node.log` were
+wiped is unconfirmed. The operational-trust roadmap this
 came out of is in `security-model.md` §10.
 
 ## Module structure

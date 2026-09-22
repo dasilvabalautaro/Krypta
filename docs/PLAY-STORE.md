@@ -50,8 +50,12 @@ tiene que ser creciente).
 
 > **10 sep 2026**: `DEFAULT_BOOTSTRAP` pasa a São Paulo + **Dallas** (VPS de InterServer) y
 > saca a los dos nodos domésticos. Solo llega a los usuarios con la **siguiente versión que se
-> suba**; hasta entonces, quien tenga una de Play sigue con la lista vieja, así que el Mac y el
-> Windows no se pueden apagar todavía.
+> suba**; hasta entonces, quien tenga una de Play sigue con la lista vieja.
+>
+> **Los dos nodos domésticos se apagaron hacia el 8 sep 2026** (fecha aproximada del autor).
+> Quien tenga la **4** instalada desde Play **no tiene WAN** (solo conocía esos dos nodos); la 5 y
+> la 6 siguen por São Paulo, sin respaldo. Es un motivo más para subir pronto una versión con
+> São Paulo + Dallas.
 
 > ⚠️ **Resolver antes de generar la siguiente**: la fila 6 dice "generado", pero el punto de
 > `USE_FULL_SCREEN_INTENT` (más abajo) dice que **Play lo reclamó *al subir la 1.5***. Ambas
