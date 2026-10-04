@@ -9,7 +9,23 @@
 > `~/Desktop/krypta-arm64-debug.apk` (`./gradlew :app:assembleDebug -PslimAbi` + copia) y lo
 > comparte el autor. **Ambos móviles deben tener la misma versión** para cada prueba.
 >
-> Última actualización: **21 sep 2026** — prueba con dos móviles del **19–20 sep** (el TECNO con
+> Última actualización: **4 oct 2026** — prueba con dos móviles del **3 oct** (11:12–11:14),
+> revisada desde el TECNO (build del 21 sep, `versionCode` 6; la colaboradora había actualizado el
+> 23 sep). **Los archivos ya llegan** (§18):
+>
+> - ✅ Un PDF de **6,5 MB** recibido **completo**, el mismo tamaño que falló el 20 sep, y una foto de
+>   3,8 MB enviada como archivo. Los dos están ensamblados en `krypta_files/<id>/`, empiezan por
+>   `KFV1` (cifrados en reposo), y su burbuja dice «toca para abrir».
+> - ✅ Un PNG de 1,2 MB **enviado** desde el TECNO: su copia cifrada está en `sent/` y su burbuja
+>   también se abre.
+> - ✅ `staging/` **vacío**: ni restos de estos envíos ni las cuatro transferencias a medias del
+>   20 sep, que se barrieron solas.
+> - ✅ Una foto inline (`I`) y texto en los dos sentidos.
+> - Sin rastro de: llamadas, notas de voz, respuestas con cita, envío con B cerrado ni reintento
+>   automático. El Diagnóstico solo guarda las últimas líneas y ya no mostraba las de la prueba, así
+>   que **no consta si algún envío necesitó reintento**.
+>
+> Antes, el **21 sep 2026** — prueba con dos móviles del **19–20 sep** (el TECNO con
 > el build de `58b2286`; qué build llevaba el otro móvil no quedó registrado), revisada desde el
 > TECNO:
 >
@@ -550,6 +566,17 @@ de esta sección con la app cerrada. La decisión de abajo **no se revierte toda
 cambia es que deja de ser un hallazgo bloqueante y pasa a "prueba de no regresión antes de
 publicar" (punto 4 de la lista de abajo).
 
+### ❌ Vuelve a pasar: noche del 3 al 4 oct 2026 (build del 21 sep)
+
+El Diagnóstico del TECNO registra `rendezvous: anunciando…` a las 00:00:14 y la siguiente línea a
+las **08:07:18**: **8 horas sin un solo ciclo WAN**, con el proceso vivo (13 días de uptime), el
+FGS en primer plano, el bucket en **EXEMPTED (5)** y el móvil por USB. El latido tampoco lo
+rescató: `dumpsys alarm` da **43 disparos** de `HeartbeatReceiver` en esos 13 días, cuando cada
+~2 min serían unos 9 000. Es el mismo cuadro que arriba (HiOS congela el proceso y suprime la
+alarma), así que **la muestra buena del 10 sep no se sostiene** como arreglo. No se pierde nada,
+porque el buzón guarda 7 días, pero lo que llegó de noche esperó a que se abriera la app. No se
+repitió la medición de CPU.
+
 ### DECISIÓN (2 sep 2026): se deja como está, a la espera de más móviles
 El autor decide **no adoptar push por ahora** y tratar el caso del TECNO como
 **posiblemente particular**, hasta tener más muestras. Razonable con lo que hay: dos móviles,
@@ -863,7 +890,7 @@ posterior **en el móvil que recibe** (la regla es solo del receptor).
 
 ---
 
-## 18. Envío de archivos tras el arreglo del reintento — **PENDIENTE**
+## 18. Envío de archivos tras el arreglo del reintento — **PARCIAL: con los dos en línea ✅ (3 oct 2026)**
 
 Arreglado el 21 sep 2026 tras la prueba del 20 sep (arriba). Cuatro cambios, todos en
 `ChatService`, sin cambio de formato:
@@ -880,18 +907,24 @@ Arreglado el 21 sep 2026 tras la prueba del 20 sep (arriba). Cuatro cambios, tod
 Cubierto por 5 tests nuevos de `ChatServiceTest`. **Hace falta el APK del 21 sep en los dos
 móviles**: un build anterior en el emisor sigue mandando descriptores al reintentar.
 
-1. - [ ] **Archivo mediano con los dos en línea.** A manda un PDF de ~1–2 MB. B lo abre (tocar
+1. - [x] **Archivo mediano con los dos en línea.** A manda un PDF de ~1–2 MB. B lo abre (tocar
      la burbuja → visor). En A la burbuja propia también se abre.
-2. - [ ] **Archivo de 6–8 MB con los dos en línea**, el caso que falló. Debe llegar y abrirse. Si
+     ✅ **3 oct 2026** a medias, visto desde un solo lado: el TECNO mandó un PNG de 1,2 MB, su copia
+     cifrada quedó en `sent/` y su burbuja dice «toca para abrir». Que el otro móvil lo abriera no
+     se pudo comprobar desde el TECNO.
+2. - [x] **Archivo de 6–8 MB con los dos en línea**, el caso que falló. ✅ **3 oct 2026**: un PDF
+     de 6,5 MB y una foto de 3,8 MB, de la colaboradora al TECNO, ensamblados enteros (6 843 193 B
+     de texto plano + 32 de `KFV1`) y abribles. No consta si hizo falta reintentar. Debe llegar y abrirse. Si
      A lo marca FALLIDO, tocarlo para reintentar: el Diagnóstico de A debe decir
      `↻ reenviando <nombre>` y después `→ archivo enviado … (N trozos)`, y B debe acabar con el
      archivo **abrible**. Una burbuja que no se abre en B es un fallo.
 3. - [ ] **Con B cerrado**, A manda uno de ~1 MB (cabe en el buzón). Al abrir B, llega y se abre.
 4. - [ ] **Reintento automático.** A en modo avión manda un archivo (queda FALLIDO), quita el modo
      avión y **no toca nada**: en uno o dos ciclos WAN debe salir solo y llegar a B.
-5. - [ ] **Nada de burbujas vacías.** En B no debe aparecer ninguna burbuja de archivo sin «toca
+5. - [x] **Nada de burbujas vacías.** ✅ **3 oct 2026**: las tres burbujas nuevas dicen «toca para
+     abrir»; solo las del 20 sep siguen sin abrirse, como estaba previsto. En B no debe aparecer ninguna burbuja de archivo sin «toca
      para abrir» (salvo las viejas del 20 sep, que siguen ahí: se quitan vaciando el chat).
-6. - [ ] Tras la prueba, en B: `run-as chat.neto.krypta ls files/krypta_files/staging` no debe
+6. - [x] ✅ **3 oct 2026**: `staging/` vacío en el TECNO, también sin los restos del 20 sep. Tras la prueba, en B: `run-as chat.neto.krypta ls files/krypta_files/staging` no debe
      guardar restos de estos archivos (los del 20 sep se barren solos a las 24 h cuando llegue
      otro archivo).
 
