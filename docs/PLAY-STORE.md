@@ -42,7 +42,8 @@ tiene que ser creciente).
 | 3           | 1.2         | 23 jul 2026  | generado (¿subido?)                           |
 | 4           | 1.3         | 31 jul 2026  | **subido a Play**                             |
 | 5           | 1.4         | 7 ago 2026   | generado — añade el nodo primario de São Paulo |
-| 6           | 1.5         | 13 ago 2026  | generado — fiabilidad de avisos, GIF animado, FLAG_SECURE |
+| 6           | 1.5         | 13 ago 2026  | **subido a Play** (confirmado por el autor el 4 oct) — fiabilidad de avisos, GIF animado, FLAG_SECURE |
+| 7           | 1.6         | 4 oct 2026   | generado, firmado con la clave de producción — ratchet, SQLCipher, nodos São Paulo + Dallas, filtro de conexiones, bloqueo, responder citando, reintento de archivos |
 
 > La 4 se subió **antes** de que el VPS de São Paulo entrara en `DEFAULT_BOOTSTRAP`, así que
 > esa versión solo conoce los dos nodos domésticos. De ahí la 5: es lo que lleva el nodo
@@ -57,13 +58,26 @@ tiene que ser creciente).
 > la 6 siguen por São Paulo, sin respaldo. Es un motivo más para subir pronto una versión con
 > São Paulo + Dallas.
 
-> ⚠️ **Resolver antes de generar la siguiente**: la fila 6 dice "generado", pero el punto de
-> `USE_FULL_SCREEN_INTENT` (más abajo) dice que **Play lo reclamó *al subir la 1.5***. Ambas
-> cosas no pueden ser ciertas. Si la 6 llegó a Play, la próxima subida tiene que ser
-> **versionCode 7**. Además, el AAB de la 6 que hay ahora en `app/build/outputs/` se regeneró
-> el **2 sep** y **ya no coincide** con el binario del 13 ago (entremedio entró el
-> `FLAG_SECURE` solo en el chat, y el arreglo de la vibración): no subas ese archivo creyendo
-> que es el de agosto.
+> ✅ **Resuelto el 4 oct 2026**: la 6 sí llegó a Play (lo confirma el autor), así que la
+> siguiente es la **7**. El AAB de la 7 es `app/build/outputs/bundle/release/app-release.aab`
+> (93 MB, del commit que sube la versión). Se comprobó antes de entregarlo:
+>
+> - firmado con `krypta.jks` (el SHA-256 del certificado coincide con el del keystore);
+> - `versionCode 7` / `1.6` en el manifiesto;
+> - las 12 `.so` (`libgojni`, `libsqlcipher` y `libandroidx.graphics.path`, en las 4 ABIs) a
+>   `0x4000`, y los símbolos nativos en `BUNDLE-METADATA`;
+> - el AAR nativo construido desde `58b2286`, sin cambios en Go desde entonces;
+> - **sin permisos nuevos** respecto a la 1.5, así que no hay nada nuevo que declarar en Console;
+> - **la actualización 1.5 → 1.6** en un emulador desechable (Android 14), con las dos versiones
+>   *release* firmadas con la clave real y la 1.5 compilada desde `5b0ab51` con su propio AAR. La
+>   1.5 quedó con un contacto y dos mensajes, y tras actualizar se arrancó **dos veces**: el
+>   segundo arranque es donde murió el 9 sep. El paso encadena las migraciones v4→v9, el cifrado
+>   con SQLCipher, el envoltorio de la identidad en el Keystore y la conversión del historial.
+>   Los dos mensajes de la 1.5 se leían, la lista de nodos pasó sola a São Paulo + Dallas, y con
+>   red la app quedó en «conectado» (DHT, relay y wake).
+>
+> Es la versión que lleva **Dallas** a quien tenga la 5 o la 6, y la primera que llega a quien
+> se quedó en la 4 sin WAN.
 
 ## Listo
 
