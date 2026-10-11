@@ -2065,7 +2065,13 @@ is fixed when it is drawn — if it could change, each side would pick a differe
 checks proved the new tests bite (an AND→OR swap was *not* caught, correctly: it is still
 symmetric). **Not yet tested between two phones** (PRUEBAS-PENDIENTES §19). Gotcha found doing it:
 **macOS has no `timeout`**, so `timeout N cmd` fails instantly and leaves stale results that look
-like a real run.
+like a real run. **Formal models exist since the same day** ([docs/formal/](docs/formal/README.md)):
+Tamarin 1.12.0 compiled from source with stack (no macOS x86_64 binary; ~4 GB in `~/.stack`, ~1 h),
+Maude 3.5.1 behind a `MAUDE_LIB` wrapper in `~/.local/bin` (a plain symlink can't find
+`prelude.maude`). **M1 finds W-15 by itself in v3 and verifies v4; M2 finds H-4** — the check that
+they model what we think. `docs/formal/verificar.sh` asserts all 16 lemma outcomes (<1 min). Trap
+worth remembering: a reveal rule that re-produces its own state fact makes Tamarin chain reveals
+forever, so even trivial lemmas never terminate.
 
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a

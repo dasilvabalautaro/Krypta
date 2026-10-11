@@ -117,6 +117,7 @@ Casi toda está en español.
 | [ESPECIFICACION-protocolo.en.md](docs/ESPECIFICACION-protocolo.en.md) | La misma especificación en inglés, para quien la revise |
 | [REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md) | Revisión interna del protocolo, sus hallazgos y el plan de revisión externa y análisis formal |
 | [AUDITORIA-interna-2026-10-11.md](docs/AUDITORIA-interna-2026-10-11.md) | Auditoría interna del diseño criptográfico: hallazgos, respuesta y plan de ajustes |
+| [formal/](docs/formal/README.md) | Modelos en Tamarin del ratchet y del linaje, y cómo correrlos |
 | [SOLICITUD-revision-externa.md](docs/SOLICITUD-revision-externa.md) | Qué se pide en la revisión externa, y los textos para pedirla |
 | [architecture.md](docs/architecture.md) | Arquitectura actual |
 | [TECNOLOGIA-propia.md](docs/TECNOLOGIA-propia.md) | Qué toma Krypta de terceros y qué construye por su cuenta |

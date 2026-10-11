@@ -1,0 +1,107 @@
+theory KryptaM2
+begin
+
+/*
+ * Modelo M2: la regla del linaje (docs/REVISION-protocolo-2026-09-14.md §4; especificación §5.7).
+ *
+ * Qué modela: solo lo que decide el linaje. Cada sobre de época 0 lleva su linaje dentro del
+ * cifrado autenticado (en Krypta va en la cabecera, que es el AAD), y quien recibe adopta un linaje
+ * **estrictamente mayor** que el suyo; uno menor o igual lo abre sin adoptarlo (`openOld`). Un
+ * linaje nuevo de quien perdió el estado es siempre mayor que los suyos anteriores (el reloj; el
+ * caso del reloj atrasado es W-6 y aquí se supone que no pasa).
+ *
+ * Qué no modela: las épocas ≥ 1 ni las cadenas (eso es M1). Para el linaje no hacen falta: lo que
+ * se adopta es la época 0 de otro linaje.
+ *
+ * Lo que tiene que salir, y es la prueba de que el modelo modela lo que creemos:
+ *   - recuperacion_honrada: VERDADERO. Sin nadie con S, cuando A pierde el estado y escribe, B
+ *     adopta su linaje nuevo.
+ *   - recuperacion_con_S: FALSO. Con S, un sobre con un linaje forjado muy alto se adopta y el
+ *     linaje nuevo de A ya no gana nunca: es H-4 / W-4, encontrado por el modelo sin decírselo.
+ *
+ * Abstracciones: S es un valor fresco compartido; el linaje es un natural; el atacante puede
+ * fabricar cualquier natural (son términos públicos), que es lo que hace el linaje forjado.
+ */
+
+builtins: hashing, symmetric-encryption, natural-numbers
+
+rule Pareja:
+    [ Fr(~s) ]
+  --[ Pareja($A, $B, ~s), Diferentes($A, $B) ]->
+    [ !Compartido($A, $B, ~s), LinajeA($A, $B, %1), LinajeB($A, $B, %1) ]
+
+rule Revelar_S:
+    [ !Compartido(A, B, s) ]
+  --[ RevelaS(A, B) ]->
+    [ Out(s) ]
+
+/* A pierde el estado y arranca una sesión con un linaje mayor que los suyos (el reloj avanza). */
+rule A_pierde_estado:
+    [ LinajeA(A, B, %l) ]
+  --[ NuevaSesionA(A, B, %l %+ %1) ]->
+    [ LinajeA(A, B, %l %+ %1) ]
+
+/* A escribe en la época 0 de su linaje vigente. La clave depende del linaje, como RK(L, 0). */
+rule A_escribe:
+    let k = h(<'e0', s, %l>) in
+    [ !Compartido(A, B, s), LinajeA(A, B, %l), Fr(~m) ]
+  --[ EscribeA(A, B, %l, ~m) ]->
+    [ Out(senc(<%l, ~m>, k)), LinajeA(A, B, %l) ]
+
+/* B recibe un sobre de época 0 con un linaje mayor que el suyo: lo adopta. */
+rule B_adopta:
+    let k = h(<'e0', s, %lm>) in
+    [ !Compartido(A, B, s), LinajeB(A, B, %lb), In(senc(<%lm, m>, k)) ]
+  --[ Mayor(%lb, %lm), Adopta(A, B, %lm), Recibe(A, B, %lm, m) ]->
+    [ LinajeB(A, B, %lm) ]
+
+/* Con un linaje menor o igual, lo abre sin adoptarlo (`openOld`). */
+rule B_abre_sin_adoptar:
+    let k = h(<'e0', s, %lm>) in
+    [ !Compartido(A, B, s), LinajeB(A, B, %lb), In(senc(<%lm, m>, k)) ]
+  --[ NoMayor(%lb, %lm), Recibe(A, B, %lm, m), EnLinaje(A, B, %lb) ]->
+    [ LinajeB(A, B, %lb) ]
+
+restriction diferentes:
+  "All A B #i. Diferentes(A, B) @ i ==> not (A = B)"
+
+restriction mayor:
+  "All x y #i. Mayor(x, y) @ i ==> x << y"
+
+restriction no_mayor:
+  "All x y #i. NoMayor(x, y) @ i ==> (y << x) | (x = y)"
+
+/* Que el modelo no esté vacío: A pierde el estado, escribe, y B adopta su linaje. */
+lemma ejecutable:
+  exists-trace
+  "Ex A B l m #i #j #k. NuevaSesionA(A, B, l) @ i & EscribeA(A, B, l, m) @ j & Adopta(A, B, l) @ k
+     & not (Ex X Y #r. RevelaS(X, Y) @ r)"
+
+/*
+ * La misma promesa sin la excepción de S. Tiene que ser FALSA: un único sobre forjado con un linaje
+ * alto deja a B en la sesión del atacante, y ningún linaje nuevo de A la supera (H-4 / W-4). Se pide
+ * que B acabe en un linaje **de A**, no en uno mayor cualquiera.
+ */
+lemma recuperacion_con_S:
+  "All A B l m #i #j #j2. NuevaSesionA(A, B, l) @ i & EscribeA(A, B, l, m) @ j & Recibe(A, B, l, m) @ j2
+     ==> (Ex #k. Adopta(A, B, l) @ k)
+       | (Ex l2 #k #n. Adopta(A, B, l2) @ k & NuevaSesionA(A, B, l2) @ n & l << l2)"
+
+/*
+ * Auxiliar: B solo está en un linaje si es el inicial o si lo adoptó antes. Es lo que la prueba de
+ * abajo necesita para cerrar el caso en que B abre sin adoptar, y Tamarin lo prueba por inducción.
+ */
+lemma linaje_de_B_adoptado [use_induction, reuse]:
+  "All A B l #i. EnLinaje(A, B, l) @ i ==> (l = %1) | (Ex #k. Adopta(A, B, l) @ k & #k < #i)"
+
+/*
+ * Lo que la regla del linaje promete (§5.7, P8): cuando A pierde el estado y escribe desde su
+ * sesión nueva, y B lo recibe, B pasa a esa sesión. Sin nadie con S, se cumple.
+ */
+lemma recuperacion_honrada:
+  "All A B l m #i #j #j2. NuevaSesionA(A, B, l) @ i & EscribeA(A, B, l, m) @ j & Recibe(A, B, l, m) @ j2
+     ==> (Ex #k. Adopta(A, B, l) @ k)
+       | (Ex l2 #k. Adopta(A, B, l2) @ k & l << l2)
+       | (Ex X Y #r. RevelaS(X, Y) @ r)"
+
+end

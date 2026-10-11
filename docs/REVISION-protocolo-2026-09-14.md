@@ -450,9 +450,17 @@ herramienta habitual para analizar ratchets.
 cada paso como atómico, y la carrera estaba entre pasos. Eso es trabajo de la auditoría de código y
 de los tests de concurrencia, que ya existen.
 
-**Estado:** plan escrito; **nada modelado**. Tamarin no está instalado en la Mac de desarrollo.
-Queda por decidir si lo hace el autor (la curva de aprendizaje es de semanas) o se encarga junto con
-la revisión.
+**Estado (11 oct 2026): M1 y M2 hechos**, en [formal/](formal/README.md), con Tamarin 1.12.0
+compilado en la Mac. Los dos encuentran solos lo que ya se sabía, que es la prueba de que modelan lo
+que creemos:
+
+- **M1 encuentra W-15** (A-01 de la [auditoría interna](AUDITORIA-interna-2026-10-11.md)) con las
+  derivaciones v3, y lo da por cerrado con las v4.
+- **M2 encuentra H-4.**
+
+M1 está acotado a la época 1 y dos mensajes. L3 (recuperación frente a un atacante pasivo), M3 y M4
+siguen sin hacer. `formal/verificar.sh` comprueba los 16 resultados. Los modelos los hizo el
+proyecto con IA: no son un análisis independiente.
 
 ---
 
@@ -544,7 +552,7 @@ comprobable y no en otra afirmación.
 4. 🟡 Solicitud de revisión. **OTF enviada el 22 sep 2026 y rechazada** (conocido el 11 oct 2026).
    NLnet descartado por su política de IA. Vía elegida: revisión pagada acotada, con presupuestos
    antes del 30 nov 2026 (§5.3 y SOLICITUD-revision-externa §1.2).
-5. ⬜ Modelo formal M1 y M2: decidir quién lo hace.
+5. ✅ Modelo formal M1 y M2 (11 oct 2026, [formal/](formal/README.md)): encuentran W-15 y H-4.
 6. ⬜ Revisión, informe publicado y correcciones.
 7. ⬜ Solo después: rediseño de H-4 y H-5, post-cuántico y rotación.
 

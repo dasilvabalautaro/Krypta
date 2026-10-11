@@ -1,0 +1,191 @@
+theory KryptaM1
+begin
+
+/*
+ * Modelo M1 del ratchet por épocas de Krypta (docs/REVISION-protocolo-2026-09-14.md §4).
+ *
+ * Qué modela: el secreto compartido estático S, la época 0 derivada de S, el paso a la época 1 por
+ * Diffie-Hellman de las dos propuestas efímeras, y la cadena simétrica de envío de esa época.
+ * Qué no modela: el linaje (eso es M2), las pérdidas, el desorden, las épocas siguientes ni la
+ * concurrencia (H-0 no se ve en un modelo simbólico: cada regla es atómica).
+ *
+ * Variantes (preprocesador de Tamarin):
+ *   sin -DV4  → derivaciones v3: la cadena sale de la raíz de la época, CK = h(chain, RK, d).
+ *   con -DV4  → derivaciones v4: raíz y cadenas como salidas independientes del KDF de raíz.
+ *
+ * Lo que tiene que salir, y es la prueba de que el modelo modela lo que creemos:
+ *   - fs_epoca_vigente: FALSO en v3 (encuentra W-15 / A-01 de la auditoría interna del
+ *     11 oct 2026) y VERDADERO en v4.
+ *   - secreto, acuerdo y ejecutabilidad: verdaderos en las dos.
+ *
+ * Abstracciones, dichas en voz alta:
+ *   - S se modela como un valor fresco compartido por la pareja, no como X25519 de dos
+ *     identidades. Revelar S es el adversario A4 de la especificación (§1).
+ *   - HKDF/HMAC son funciones hash con etiquetas distintas: salidas independientes por
+ *     construcción. Es exactamente la propiedad que distingue v3 de v4.
+ *   - AES-GCM es cifrado simétrico autenticado (senc): sin la clave no se fabrica un sobre válido.
+ *     La cabecera (las propuestas) va dentro del cifrado, que es lo que da el AAD.
+ *   - Roles fijos: A escribe en el sentido '0', B en el '1'; en la época 1 solo escribe A. Basta
+ *     para W-15; el caso simétrico es el mismo con los nombres cambiados.
+ */
+
+builtins: diffie-hellman, hashing, symmetric-encryption
+
+/* La única diferencia entre v3 y v4: de dónde sale la cadena de la época. */
+#ifdef V4
+macros: raiz(dh, rk0) = h(<'root4', dh, rk0>), cadenaA(dh, rk0) = h(<'chain4', dh, rk0, '0'>)
+#else
+macros: raiz(dh, rk0) = h(<'root', dh, rk0>), cadenaA(dh, rk0) = h(<'chain', h(<'root', dh, rk0>), '0'>)
+#endif
+
+/* ---- Pareja y secreto compartido -------------------------------------------------------- */
+
+rule Pareja:
+    [ Fr(~s) ]
+  --[ Pareja($A, $B, ~s), Diferentes($A, $B) ]->
+    [ !Compartido($A, $B, ~s) ]
+
+/* A4: quien obtiene una de las dos identidades tiene S, para siempre. */
+rule Revelar_S:
+    [ !Compartido(A, B, s) ]
+  --[ RevelaS(A, B) ]->
+    [ Out(s) ]
+
+/* ---- Época 0: cada uno manda su propuesta efímera bajo una clave derivada de S ----------- */
+
+rule A_propone:
+    let k0 = h(<'e0', s, '0'>) in
+    [ !Compartido(A, B, s), Fr(~x) ]
+  --[ Propone(A, B, 'g'^~x) ]->
+    [ Out(senc(<'prop', 'g'^~x>, k0)), EsperaB(A, B, s, ~x) ]
+
+rule B_propone_y_entra:
+    let k0a = h(<'e0', s, '0'>)
+        k0b = h(<'e0', s, '1'>)
+        dh  = X^~y
+        rk0 = h(<'rk0', s>)
+        rk1 = raiz(dh, rk0)
+        ckA = cadenaA(dh, rk0)
+    in
+    [ !Compartido(A, B, s), In(senc(<'prop', X>, k0a)), Fr(~y) ]
+  --[ Propone(B, A, 'g'^~y), EntraB(A, B, dh) ]->
+    [ Out(senc(<'prop', 'g'^~y>, k0b)), RecibeB0(A, B, rk1, ckA) ]
+
+rule A_entra:
+    let k0b = h(<'e0', s, '1'>)
+        dh  = Y^~x
+        rk0 = h(<'rk0', s>)
+        rk1 = raiz(dh, rk0)
+        ckA = cadenaA(dh, rk0)
+    in
+    [ EsperaB(A, B, s, ~x), In(senc(<'prop', Y>, k0b)) ]
+  --[ EntraA(A, B, Y, dh) ]->
+    // La privada ~x se consume aquí y no pasa al estado: eso es el secreto hacia adelante.
+    [ EnvioA0(A, B, rk1, ckA) ]
+
+/* ---- Época 1: cadena de envío de A, acotada a dos mensajes ----------------------------
+ *
+ * Un bucle sobre la cadena hace que la búsqueda de Tamarin no termine. Dos mensajes bastan para
+ * lo que se pregunta: el primero ya se envió, el estado guarda la cadena avanzada, ¿se puede
+ * reabrir el primero? La cadena es CK_0 → CK_1 = h(ck, CK_0) → CK_2, con mk_N = h(mk, CK_N).
+ */
+
+rule A_envia_0:
+    [ EnvioA0(A, B, rk, ck0), Fr(~m) ]
+  --[ Envia(A, B, ~m) ]->
+    [ Out(senc(~m, h(<'mk', ck0>))), EnvioA1(A, B, rk, h(<'ck', ck0>)) ]
+
+rule A_envia_1:
+    [ EnvioA1(A, B, rk, ck1), Fr(~m) ]
+  --[ Envia(A, B, ~m) ]->
+    [ Out(senc(~m, h(<'mk', ck1>))), EnvioA2(A, B, rk, h(<'ck', ck1>)) ]
+
+rule B_recibe_0:
+    [ RecibeB0(A, B, rk, ck0), In(senc(m, h(<'mk', ck0>))) ]
+  --[ Recibe(A, B, m) ]->
+    [ RecibeB1(A, B, rk, h(<'ck', ck0>)) ]
+
+rule B_recibe_1:
+    [ RecibeB1(A, B, rk, ck1), In(senc(m, h(<'mk', ck1>))) ]
+  --[ Recibe(A, B, m) ]->
+    [ ]
+
+/*
+ * A5: quien se lleva el estado de A en un instante. Es lo que hay en `RatchetState`: la raíz de
+ * la época y la cadena de envío **ya avanzada**. Ni la privada consumida ni las claves gastadas.
+ */
+rule Revelar_estado_A1:
+    [ EnvioA1(A, B, rk, ck) ]
+  --[ RevelaEstado(A) ]->
+    // Pasa a una variante que sigue pudiendo enviar pero no se revela otra vez: si volviera a
+    // producir EnvioA1, Tamarin encadenaría revelaciones sin fin y la prueba no terminaría.
+    // Revelar una copia persistente tampoco vale: dejaría revelar un estado ya sobrescrito.
+    [ Out(<rk, ck>), EnvioA1Revelado(A, B, rk, ck) ]
+
+rule A_envia_1_tras_revelar:
+    [ EnvioA1Revelado(A, B, rk, ck1), Fr(~m) ]
+  --[ Envia(A, B, ~m) ]->
+    [ Out(senc(~m, h(<'mk', ck1>))), EnvioA2(A, B, rk, h(<'ck', ck1>)) ]
+
+rule Revelar_estado_A2:
+    [ EnvioA2(A, B, rk, ck) ]
+  --[ RevelaEstado(A) ]->
+    [ Out(<rk, ck>) ]
+
+/* ---- Restricciones ------------------------------------------------------------------------ */
+
+restriction diferentes:
+  "All A B #i. Diferentes(A, B) @ i ==> not (A = B)"
+
+/* ---- Lemas -------------------------------------------------------------------------------- */
+
+/* Que el modelo no esté vacío: hay una traza en la que B recibe lo que A envía. */
+lemma ejecutable:
+  exists-trace
+  "Ex A B m #i #j. Envia(A, B, m) @ i & Recibe(A, B, m) @ j & #i < #j
+     & not (Ex X Y #r. RevelaS(X, Y) @ r)
+     & not (Ex X #r. RevelaEstado(X) @ r)"
+
+/* L1. Secreto: sin comprometer S ni el estado, el atacante no aprende ningún mensaje. */
+lemma secreto:
+  "All A B m #i. Envia(A, B, m) @ i ==>
+     not (Ex #k. K(m) @ k)
+     | (Ex X Y #r. RevelaS(X, Y) @ r)
+     | (Ex X #r. RevelaEstado(X) @ r)"
+
+/*
+ * Auxiliares, en dos pasos, para que Tamarin cierre el caso v4 de abajo sin perderse en las formas
+ * que podría tener un exponente llegado de la red:
+ *   1. la propuesta con la que A entra en la época es una propuesta honrada de B, salvo que S se
+ *      revelara antes (sin S no se fabrica un sobre de época 0);
+ *   2. con eso, el DH de la época no lo aprende nadie.
+ */
+lemma propuesta_autentica [reuse]:
+  "All A B Y dh #i. EntraA(A, B, Y, dh) @ i ==>
+       (Ex #j. Propone(B, A, Y) @ j & #j < #i)
+     | (Ex X Z #r. RevelaS(X, Z) @ r & #r < #i)"
+
+lemma secreto_dh [reuse]:
+  "All A B Y dh #i #k. EntraA(A, B, Y, dh) @ i & K(dh) @ k ==> (Ex X Z #r. RevelaS(X, Z) @ r & #r < #i)"
+
+/*
+ * L2 restringido a la época vigente (W-15). Un mensaje que A **ya envió** sigue secreto aunque
+ * después se revelen S y el estado de A. Las excepciones son las legítimas: S revelado antes de
+ * que A entrara en la época (entonces el atacante pudo suplantar la propuesta de B y estar en
+ * medio), o el estado revelado antes de enviar el mensaje.
+ *
+ * En v3 tiene que ser FALSO: de la raíz guardada se rederiva la cadena desde el principio.
+ */
+lemma fs_epoca_vigente:
+  "All A B m #i #k. Envia(A, B, m) @ i & K(m) @ k ==>
+       (Ex X Y #r. RevelaS(X, Y) @ r & #r < #i)
+     | (Ex X #r. RevelaEstado(X) @ r & #r < #i)"
+
+/* L4 (no inyectivo): lo que B acepta en la época 1 lo envió A, si nadie reveló S. */
+lemma acuerdo:
+  "All A B m #j. Recibe(A, B, m) @ j ==>
+       (Ex #i. Envia(A, B, m) @ i & #i < #j)
+     | (Ex X Y #r. RevelaS(X, Y) @ r)
+     | (Ex X #r. RevelaEstado(X) @ r)"
+
+end
