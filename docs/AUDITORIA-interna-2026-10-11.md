@@ -349,3 +349,21 @@ especificación §5.10).
   igual. El «y» es la opción conservadora, no una necesidad de coherencia.
 - La etiqueta `protocolo-v3` marca el último commit con el formato anterior.
 
+**Fase 3, lo hecho (11 oct 2026):**
+
+- **Modelos M1, M2 y M2b** en [formal/](formal/README.md). M1 encuentra A-01 en v3 y lo da por cerrado
+  en v4; M2 encuentra H-4.
+- **Rediseño del linaje** ([DISENO-ratchet.md](DISENO-ratchet.md) §1.13): tope (A-03), relevo
+  (A-06, y A-03 sin vuelta atrás), solo con contactos v4, y aviso en el chat.
+
+**Fase 3, lo que queda, y por qué no se ha hecho todavía:**
+
+- **Dejar de aceptar v1 de quien ya habla v2 (W-5, parte de A-04).** El propio informe advierte de
+  que solo esto compra poco, porque quedan la época 0 y el linaje nuevo. Además, el anuncio `V` por la
+  clave estática es lo que recupera H-1: cerrarlo sin rehacer esa ruta reabriría la pérdida
+  permanente que se arregló el 14 sep. Se hará junto con la autenticación, si se aborda.
+- **KCI (A-04).** Sigue sin prometerse. Cerrarlo exige firmar los sobres con una credencial que no
+  se derive de la identidad robada, y cuesta la negación.
+- **Confirmar el anuncio y la política «exigir protección moderna» (A-07).** Hoy el usuario ve el
+  modo efectivo, que era la mitigación barata. Lo demás cambia el protocolo de anuncio y la interfaz.
+
