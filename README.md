@@ -5,9 +5,10 @@ número de teléfono**. Los móviles se encuentran y hablan entre sí sobre
 [libp2p](https://libp2p.io) (DHT, Circuit Relay v2 y hole punching), con un buzón cifrado para
 cuando el otro está desconectado.
 
-> **Estado: beta, sin publicar en tiendas.** Lo desarrolla y opera **4000MSNM S.R.L.**, un solo
+> **Estado: beta, en la última fase de verificación de Google Play antes de salir a producción.** Lo desarrolla y opera **4000MSNM S.R.L.**, un solo
 > operador. La criptografía de sesión (un doble ratchet por épocas) es propia y **no ha tenido
-> revisión externa**; la revisión está **en trámite**. Mientras tanto, el protocolo está
+> revisión externa**: la solicitud al OTF Security Lab fue rechazada (oct 2026) y se busca por otra
+> vía. Mientras tanto, el protocolo está
 > [especificado](docs/ESPECIFICACION-protocolo.md) para poder revisarse, y una
 > [revisión interna](docs/REVISION-protocolo-2026-09-14.md) del 14 sep 2026 encontró y arregló
 > dos fallos graves. Antes de confiarle nada sensible, lee
@@ -86,7 +87,7 @@ native-bridge/libp2p/build-aar.sh
 
 Usa `:app:assembleDebug`: el `assembleDebug` agregado sin módulo no funciona con AGP 9.
 
-Los binarios exactos de la versión que se somete a revisión externa (el AAR y el APK de
+Los binarios exactos de la versión preparada para la revisión externa (el AAR y el APK de
 depuración arm64, con su sha256) están en la release
 [`revision-externa-1`](https://github.com/dasilvabalautaro/Krypta/releases/tag/revision-externa-1).
 Son de depuración, y los de esa etiqueta no son reproducibles; los avisos están en la propia
@@ -112,6 +113,7 @@ Casi toda está en español.
 | [REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md) | Revisión interna del protocolo, sus hallazgos y el plan de revisión externa y análisis formal |
 | [SOLICITUD-revision-externa.md](docs/SOLICITUD-revision-externa.md) | Qué se pide en la revisión externa, y los textos para pedirla |
 | [architecture.md](docs/architecture.md) | Arquitectura actual |
+| [TECNOLOGIA-propia.md](docs/TECNOLOGIA-propia.md) | Qué toma Krypta de terceros y qué construye por su cuenta |
 | [DISENO-ratchet.md](docs/DISENO-ratchet.md) | Doble ratchet por épocas y relleno por tramos |
 | [DISENO-buzon-ciego.md](docs/DISENO-buzon-ciego.md) | Depósito ciego en el buzón |
 | [DISENO-postcuantico.md](docs/DISENO-postcuantico.md) | Híbrido post-cuántico (ML-KEM-768), medido y sin implementar |
@@ -146,9 +148,10 @@ phone number**. Phones find and talk to each other over libp2p (DHT, Circuit Rel
 punching), with an encrypted store-and-forward mailbox for offline delivery and a
 Google-free wake channel.
 
-**Status: beta, not published.** Built and operated by **4000MSNM S.R.L.**, a single operator.
+**Status: beta, in Google Play's final verification before production release.** Built and operated by **4000MSNM S.R.L.**, a single operator.
 The session protocol (an epoch-based double ratchet) is custom and **has not been externally
-reviewed yet**; a review is being requested. In the meantime, the protocol has a normative
+reviewed yet**: a first request (OTF Security Lab) was declined in October 2026, and other routes
+are being pursued. In the meantime, the protocol has a normative
 specification
 ([docs/ESPECIFICACION-protocolo.md](docs/ESPECIFICACION-protocolo.md), Spanish), with numbered
 properties and declared weaknesses. An internal review on 14 Sep 2026
@@ -158,7 +161,7 @@ but do see metadata; see [docs/security-model.md](docs/security-model.md) (Spani
 unsoftened threat model.
 
 Build: run `native-bridge/libp2p/build-aar.sh` (Go 1.26 + gomobile + NDK 26.1), then
-`./gradlew :app:assembleDebug`. The binaries of the version under external review (AAR and arm64
+`./gradlew :app:assembleDebug`. The binaries of the version prepared for external review (AAR and arm64
 debug APK, with sha256) are in the release
 [`revision-externa-1`](https://github.com/dasilvabalautaro/Krypta/releases/tag/revision-externa-1).
 The AAR build is reproducible from commit `8d02875` on: the same commit gives the same bytes, and

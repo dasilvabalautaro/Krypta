@@ -45,6 +45,9 @@ tiene que ser creciente).
 | 6           | 1.5         | 13 ago 2026  | **subido a Play** (confirmado por el autor el 4 oct) — fiabilidad de avisos, GIF animado, FLAG_SECURE |
 | 7           | 1.6         | 4 oct 2026   | **subido a Play** (aceptado el 4 oct) — ratchet, SQLCipher, nodos São Paulo + Dallas, filtro de conexiones, bloqueo, responder citando, reintento de archivos |
 
+> **11 oct 2026:** según el autor, Play está en la **última fase de verificación antes de salir a
+> producción**.
+
 > La 4 se subió **antes** de que el VPS de São Paulo entrara en `DEFAULT_BOOTSTRAP`, así que
 > esa versión solo conoce los dos nodos domésticos. De ahí la 5: es lo que lleva el nodo
 > primario a los usuarios nuevos.

@@ -1783,11 +1783,23 @@ the review. Installed on the TECNO: it launches, lists conversations with decryp
 shows "conectado". The contact write path (new SQL) and the announcement exchange were not
 exercised on-device; they need the second phone (PRUEBAS §16.11). The author confirmed the
 on-device verification the same day. **The external review was requested on 22 Sep 2026** through the OTF
-Security Lab form (request **#23596**, status "OTF Review"),
+Security Lab form (request **#23596**),
 with the texts in [docs/SOLICITUD-revision-externa.md](docs/SOLICITUD-revision-externa.md), against
-the commit tagged `revision-externa-1`. That tag never moves. While the review is pending, don't
-change the wire format (REVISION §5.4); if it has to change before the review starts, tag
-`revision-externa-2` and say so.
+the commit tagged `revision-externa-1`. That tag never moves. **OTF dismissed it** (known 11 Oct
+2026): not on technical grounds, but for lacking a substantive user base, community buy-in and a
+clear focus on users in repressive contexts. Re-applying unchanged would fail the same way. **Next
+route: NLnet's Restack fund** (EU/Horizon Europe, €5k–50k, security audits offered as practical
+help, deadline **3 Nov 2026 12:00 CET**); draft proposal with the form's fields and character
+limits in `docs/SOLICITUD-nlnet.md`, which is **deliberately not versioned** (it will carry the rate
+and budget, and the repo is public; it is in `.git/info/exclude`, so a fresh clone won't have it). Bolivia is on Horizon Europe's
+low/middle-income eligible list, which matters for Restack's "European dimension" rule. The form
+asks whether generative AI was used and wants the prompts, so a proposal drafted here must be
+declared. Fallback: a narrowed paid review (SOLICITUD §1.2). The wire-format freeze (REVISION §5.4)
+still holds, and since 11 Oct 2026 **it has an end**: it lasts until NLnet decides on the 3 Nov 2026
+proposal. Approved → it holds until the report. Declined, or not submitted by the deadline → it is
+lifted: tag `revision-externa-2` on the last commit with the current format, then fix H-4 (Tamarin
+M2 first), and say plainly that the change shipped without external review. Play status (11 Oct
+2026): in its final verification before production.
 
 **Binaries for the review (14 Sep 2026).**
 

@@ -474,7 +474,8 @@ la revisión.
 | Binarios de la etiqueta | ✅ AAR y APK de depuración arm64 compilados **desde un clon limpio** de la etiqueta y **publicados en su release de GitHub** el 14 sep 2026, con sha256 (SOLICITUD §5) que coinciden con los que calcula GitHub. Fueron los del móvil del autor hasta que se instaló un build del commit `8d02875`. **Esos binarios no son reproducibles**, y se vio después que salieron del NDK 25.2, no del 26.1. Hacerlos destapó que `build-aar.sh` fallaba en un clon limpio (arreglado en `26bd405`). **Desde `8d02875` el AAR es reproducible** (plan §4.3) |
 | Textos de la solicitud (OTF, correo de seguimiento, presupuesto y alcance técnico) | ✅ [SOLICITUD-revision-externa.md](SOLICITUD-revision-externa.md). **La tramita el autor** |
 | Canal cifrado para recibir los hallazgos | ✅ Clave PGP publicada el 22 sep 2026 ([`pgp-key.asc`](../pgp-key.asc), huella en [SECURITY.md](../SECURITY.md)) |
-| Solicitud enviada (fecha, vía, identificador) | ✅ 22 sep 2026, formulario del OTF Security Lab ([apply.opentech.fund/security-lab](https://apply.opentech.fund/security-lab/)). Estado: **OTF Review**. Identificador: **#23596** («Krypta (#23596)») |
+| Solicitud enviada (fecha, vía, identificador) | ✅ 22 sep 2026, formulario del OTF Security Lab ([apply.opentech.fund/security-lab](https://apply.opentech.fund/security-lab/)). Identificador: **#23596** («Krypta (#23596)»). **Resultado: «Dismissed»**, conocido el 11 oct 2026 (motivos en SOLICITUD §1.1) |
+| Segunda vía | 🟡 NLnet, fondo Restack, cierre el 3 nov 2026. Borrador preparado (no se versiona: lleva tarifa y presupuesto) |
 
 ### 5.2 Qué pedir, en este orden
 
@@ -494,8 +495,13 @@ la revisión.
 ### 5.3 Vías
 
 - **Security Lab del Open Technology Fund.** Audita gratis proyectos abiertos de libertad en
-  internet. El requisito de código abierto ya se cumple; hay que confirmar la elegibilidad y los
-  plazos, que pueden ser de meses.
+  internet. **Solicitado el 22 sep 2026 y rechazado** («Dismissed», conocido el 11 oct 2026): pide
+  base de usuarios, respaldo de la comunidad y foco en usuarios de entornos represivos, que Krypta
+  hoy no puede demostrar.
+- **NLnet, fondo Restack** (Comisión Europea, Horizon Europe). Becas de 5 000 a 50 000 € con
+  auditoría de seguridad como ayuda práctica. No pide base de usuarios; pide «dimensión europea», y
+  Bolivia está en la lista de países de renta baja y media elegibles de Horizon Europe. Cierre el
+  3 nov 2026.
 - **Una revisión pagada acotada** a los puntos 1 y 2, con una empresa de criptografía aplicada.
 
 En los dos casos hay que pedir un **informe publicable**: es lo que convierte la revisión en algo
@@ -508,6 +514,13 @@ comprobable y no en otra afirmación.
   cambio.
 - **No se empieza** el post-cuántico, las fases 4 y 5 de la rotación, ni ningún cambio a la regla
   del linaje (H-4) hasta tener el informe.
+- **Caducidad de la congelación (decidida el 11 oct 2026).** Se pensó con una revisión del OTF en
+  curso; rechazada esa, quedaba sin fecha de fin y bloqueaba H-4, H-5 y W-6 de forma indefinida.
+  Ahora dura **hasta que NLnet resuelva la propuesta de la convocatoria del 3 nov 2026**. Si la
+  aprueba, sigue hasta tener el informe, como estaba. Si la rechaza, o si la propuesta no llega a
+  enviarse antes del cierre, la congelación se levanta: se etiqueta `revision-externa-2` sobre el
+  último commit con el formato actual y después se arregla H-4, empezando por el modelo M2
+  (§4). Sin revisión externa, ese cambio también se publica sin ella, y así se dice.
 
 ---
 
@@ -518,9 +531,9 @@ comprobable y no en otra afirmación.
    revisión de diseño independiente (§9): W-6 fijado en un test, W-14 declarado y KCI no prometido.
 2. ⬜ Este build en los dos móviles, y §16 entero, incluidos los puntos nuevos 11 y 12.
 3. ⬜ La comparación con SPQR en DISENO-postcuantico.
-4. 🟡 Solicitud al OTF, o presupuesto de una revisión acotada. **Textos listos y commit etiquetado
-   (`revision-externa-1`) el 14 sep 2026**, en [SOLICITUD-revision-externa.md](SOLICITUD-revision-externa.md).
-   La tramita el autor. Antes de enviar conviene publicar una clave PGP en SECURITY.md.
+4. 🟡 Solicitud de revisión. **OTF enviada el 22 sep 2026 y rechazada** (conocido el 11 oct 2026).
+   Siguiente: NLnet Restack, antes del 3 nov 2026; de
+   respaldo, una revisión pagada acotada (SOLICITUD-revision-externa §1.2).
 5. ⬜ Modelo formal M1 y M2: decidir quién lo hace.
 6. ⬜ Revisión, informe publicado y correcciones.
 7. ⬜ Solo después: rediseño de H-4 y H-5, post-cuántico y rotación.

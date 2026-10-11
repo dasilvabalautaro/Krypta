@@ -469,7 +469,8 @@ probar con dos teléfonos, en [PRUEBAS-PENDIENTES.md](PRUEBAS-PENDIENTES.md). En
 a fecha de este documento **falta**:
 
 - Un segundo **operador** de nodos: ya hay dos VPS, pero los dos son de 4000MSNM S.R.L.
-- La revisión externa del protocolo (solicitada al OTF Security Lab el 22 sep 2026, #23596).
+- La revisión externa del protocolo. La solicitud al OTF Security Lab (22 sep 2026, #23596) fue
+  rechazada; se busca por NLnet o de pago.
 - Verificación de DCUtR (upgrade a conexión directa) en datos móviles con NAT real (2 SIMs).
 - Adaptación de bitrate en vídeo, integración con Telecom (`ConnectionService`,
   tipo de FGS `phoneCall`), pulido de rotación/espejo en vídeo.

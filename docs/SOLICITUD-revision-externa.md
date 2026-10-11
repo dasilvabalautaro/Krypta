@@ -1,7 +1,8 @@
 # Solicitud de revisión externa
 
 **Estado:** preparada el 14 de septiembre de 2026. **Enviada el 22 sep 2026** por el formulario del
-OTF Security Lab, solicitud **#23596**; en estado **OTF Review**.
+OTF Security Lab, solicitud **#23596**. **Resultado: «Dismissed»** (respuesta conocida el 11 oct
+2026; ver §1.1). La siguiente vía es NLnet (§1.3).
 
 **Qué se somete a revisión:** el commit con la etiqueta
 [`revision-externa-1`](https://github.com/dasilvabalautaro/Krypta/tree/revision-externa-1).
@@ -28,7 +29,20 @@ código del camino criptográfico** (Kotlin y Go), con un **informe que se pueda
 
 ## 1. Vías
 
-### 1.1 OTF Security Lab (primera opción)
+### 1.1 OTF Security Lab (primera opción, rechazada)
+
+> **Resultado (conocido el 11 oct 2026): «Dismissed».** La carta no discute la calidad técnica.
+> Dice que la solicitud no argumentó lo bastante que el trabajo sirve a personas en entornos
+> represivos y autoritarios, y que el Security Lab prioriza proyectos con **base de usuarios
+> sustancial**, **compromiso con el código abierto demostrado** y **respaldo de la comunidad y de
+> usuarios objetivo**. Invita a volver a presentarse si cambia el enfoque.
+>
+> Lectura: con lo que Krypta tiene hoy (beta, un puñado de testers, sin organizaciones aliadas) una
+> segunda solicitud acabaría igual. Tampoco sostendría el argumento de evasión de censura: los dos
+> nodos por defecto son de un solo operador, con IP y dominio fijos, y se bloquean con facilidad. Lo
+> que haría falta para volver no es un texto mejor sino pruebas: usuarios reales en contextos de
+> riesgo, cartas de apoyo de organizaciones de derechos digitales, más de un operador de nodos y
+> resistencia real al bloqueo. Lo que sigue de este apartado es lo comprobado antes de enviar.
 
 Lo que se ha comprobado el 14 sep 2026 en la
 [guía oficial del Security Lab](https://docs.opentech.fund/otf-application-guidebook/our-labs/security-lab):
@@ -56,12 +70,24 @@ informe es público, así que no toca ni datos ni infraestructura de Krypta.
 
 ### 1.2 Revisión pagada (alternativa o complemento)
 
+> **Tras el rechazo del OTF (oct 2026)** esta vía pasa a ser la de respaldo si NLnet tampoco sale.
+> Pagada por 4000MSNM, conviene acotarla al alcance A más el núcleo del B (`Ratchet`,
+> `RatchetSessions`, `Padding`, `MessageEnvelope`).
+
 El texto del §4 sirve para pedir presupuesto. Conviene pedir **dos cifras por separado**: solo el
 alcance A (diseño) y A + B (diseño y código).
 
 Algunas empresas con práctica de revisión criptográfica, **sin contacto previo**: NCC Group
 (Cryptography Services), Trail of Bits, Cure53, Radically Open Security, Least Authority y
 Quarkslab. Para un modelo formal, Cryspen.
+
+### 1.3 NLnet (Restack), siguiente vía
+
+Fondo de la Comisión Europea gestionado por NLnet, con becas de 5 000 a 50 000 € y **auditoría de
+seguridad como ayuda práctica** además del dinero. Cierra el **3 nov 2026 a las 12:00 CET**. Hay un
+borrador de la propuesta con los campos del formulario y sus límites; no se versiona porque lleva
+tarifa y presupuesto. Los textos de este documento (§3 y §5) siguen sirviendo
+como material adjunto.
 
 ---
 
@@ -87,7 +113,7 @@ Quarkslab. Para un modelo formal, Cryspen.
   `mailbox.go` si el proveedor lo acepta como opcional (§5).
 - [x] **Después de enviar**: anotada la fecha y la vía en
   [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md) §5.1 (22 sep 2026, OTF Security
-  Lab, solicitud #23596, estado OTF Review).
+  Lab, solicitud #23596). Resultado anotado allí también: «Dismissed», conocido el 11 oct 2026.
 
 ---
 
