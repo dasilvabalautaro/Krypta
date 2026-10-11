@@ -475,6 +475,66 @@ el AAD:
   0, que sigue sin PFS. Una sesión creada antes de saber que el otro es v4 deja su época 0 sin atar
   hasta el primer avance.
 
+### 1.13 Rediseño del linaje: propuesta (11 oct 2026, sin implementar)
+
+**El problema**, ya confirmado por el modelo M2 ([formal/](formal/README.md)):
+
+- **H-4 / W-4.** Quien tenga `S` manda un sobre de época 0 con un linaje forjado muy alto, el
+  receptor lo adopta y queda en la sesión del atacante **para siempre**: ningún linaje honrado lo
+  supera. Con `Long.MAX_VALUE`, literalmente nunca (A-03, fijado en `RatchetCompromisoTest`).
+- **W-6.** Quien pierde el estado con el reloj atrasado crea un linaje menor, el otro no lo adopta y
+  un sentido queda roto sin arreglo automático.
+
+**El suelo.** Con autenticación a nivel de `S` (W-3), quien tenga `S` puede suplantar a cualquiera
+de los dos **mientras siga activo**; eso solo lo arreglaría una firma con credenciales que no se
+deriven de la identidad robada, y está fuera de alcance. Lo que sí se puede arreglar es que **un
+solo sobre baste para siempre**, y el W-6.
+
+**Candidatas descartadas.**
+
+| Candidata | Por qué no |
+|---|---|
+| Solo acotar el linaje a «ahora + margen» | Evita el `Long.MAX_VALUE`, pero sigue sin vuelta atrás: nadie vuelve a crear un linaje |
+| Exigir prueba de época ≥ 1 para adoptar | Tras perder el estado no hay nada que probar: rompe P8 |
+| Que el usuario confirme cada adopción | Rompe la recuperación automática y le pide decidir algo que no puede comprobar |
+| Linaje como contador persistente | No sobrevive a una reinstalación, que es justo el caso |
+| Firmar la recuperación con la identidad | No protege de quien robó la identidad: tiene la firma. Solo serviría para KCI (W-3) |
+
+**Propuesta: tope, relevo y aviso.**
+
+1. **Tope (R1).** Un linaje mayor se adopta solo si `L ≤ ahora + 10 min`, con el reloj de quien
+   recibe. Por encima del tope se trata como uno menor: su época 0 se abre (`openOld`) pero no se
+   adopta. Cierra el `Long.MAX_VALUE` y acota cuánto puede adelantarse un linaje forjado.
+2. **Relevo (R2).** Cuando llega de un contacto un sobre con pinta de v2 que no abre, y su cabecera
+   reclama un linaje **mayor** que el nuestro en una época ≥ 1 (la época 0 se habría abierto), se
+   crea una sesión nueva con `L' = máx(ahora, L_cabecera + 1)`, si cabe en el tope, y se le manda
+   el `V` por ella. Es el reengache de hoy, pero con sesión nueva, y con su mismo límite de una vez
+   cada 5 minutos por contacto.
+   - **W-6 queda cubierta**: el que restauró con el reloj atrasado recibe sobres del linaje vigente
+     que no abre y crea uno por encima. El otro lo adopta, porque cabe en su tope (el linaje vigente
+     lo creó él en el pasado).
+   - **H-4 pasa de «sin vuelta atrás» a «solo mientras el atacante siga activo»**. El extremo
+     legítimo recibe sobres del linaje forjado que no abre, crea uno por encima y el otro lo adopta,
+     con propuestas honradas. Si el atacante puso el linaje justo en el tope, la espera es como
+     mucho de 10 minutos. Para mantener el secuestro tiene que volver a intervenir cada vez.
+3. **Aviso (R3).** Al adoptar un linaje nuevo en una sesión que ya había salido de la época 0, el
+   chat muestra una fila de sistema: «La sesión con X se ha reiniciado. Si no ha reinstalado ni
+   restaurado Krypta, verifica su identidad». Es lo que hace Signal cuando cambia el número de
+   seguridad, y vuelve visible tanto el secuestro como los relevos forzados.
+
+**El coste, dicho claro.** El disparador de R2 **no está autenticado**: es un sobre que no abre.
+Un nodo malicioso (A1) puede dejar basura con un linaje alto en la cabecera, bajo la etiqueta del
+buzón ciego (la ve) o mintiendo en el `from`. Con eso fuerza un relevo cada 5 minutos: la pareja
+vuelve a la época 0, sin secreto hacia adelante hasta la siguiente respuesta, y el linaje sube hasta
+el tope. **No lee nada**: la época 0 solo se abre con `S`. Lo acotan el tope, el límite de ritmo y
+el aviso de R3, que haría visible el abuso. Hoy, ese mismo sobre basura ya dispara un reengache;
+lo que se añade es que también reinicia la sesión.
+
+**Antes de implementarlo**: un modelo M2b con R1 y R2, en el que la recuperación honrada siga
+verificándose, se encuentre una traza de recuperación tras un linaje forjado (hoy no existe) y R1
+impida adoptar por encima del tope. Después, `RatchetPropertyTest` con relojes desfasados y
+linajes forjados.
+
 ## 2. Por qué no el doble ratchet tal cual
 
 Merece la pena dejar escrito el callejón, porque el diseño de arriba es una desviación y las
