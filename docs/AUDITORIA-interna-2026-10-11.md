@@ -305,7 +305,7 @@ Lo que la hace seria no es el nombre, sino que **cualquiera pueda comprobarla**.
 | Fase | Estado |
 |---|---|
 | 0 · Documentación | ✅ 11 oct 2026 (`ef949cf`): P3, P4, P5, P7, P9, P11 y P12 reescritas; W-15 y W-16; `RatchetCompromisoTest` |
-| 1 · Endurecer sin cambiar el formato | 🟡 Puntos 1–4 hechos el 11 oct 2026 (abajo); falta el 5 (`secure_delete`) |
+| 1 · Endurecer sin cambiar el formato | ✅ 11 oct 2026 (`f0fa581` y el siguiente); detalle abajo. Etiqueta `protocolo-v3` en `f0fa581` |
 | 2 · Protocolo v4 | ⬜ |
 | 3 · Linaje, recuperación y autenticación | ⬜ Diseño y modelo formal primero |
 
@@ -326,4 +326,8 @@ Lo que la hace seria no es el nombre, sino que **cualquiera pueda comprobarla**.
    va la clave fija o el ratchet (`ChatService.protectionOf`).
 4. **Tests que fijan límites (A-03, A-08):** linaje forjado a `Long.MAX_VALUE` y emisor con el reloj
    una semana adelantado.
+5. **`secure_delete` en cada conexión** (`DataModule.SecureDeleteCallback`), no solo en la migración
+   a v6. Coste medido en el TECNO: 300 transacciones de 8 KB, 195 ms sin él y 236 ms con él. Límite:
+   las tramas viejas del WAL siguen ahí hasta que el WAL se reutiliza. Verificado instalando sobre la
+   base real: arranca en v10, la conversación se lee y el estado es «conectado».
 

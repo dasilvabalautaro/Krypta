@@ -2,6 +2,8 @@ package chat.neto.krypta.data.di
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.sqlite.db.SupportSQLiteDatabase
 import chat.neto.krypta.core.RatchetStore
 import chat.neto.krypta.core.TransactionRunner
 import chat.neto.krypta.core.repository.ContactRepository
@@ -61,7 +63,25 @@ object DatabaseModule {
             .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
             // Red de seguridad solo para la v1 antigua (sin migración definida); v2+ migra.
             .fallbackToDestructiveMigrationFrom(dropAllTables = true, 1)
+            .addCallback(SecureDeleteCallback)
             .build()
+    }
+
+    /**
+     * `secure_delete` en **cada** conexión (11 oct 2026). Es un pragma por conexión, y hasta ahora
+     * solo se activaba dentro de `MIGRATION_5_6`: el estado del ratchet, que se reescribe con cada
+     * mensaje, dejaba sus versiones viejas en páginas libres de la base (cifradas por SQLCipher, pero
+     * con la clave en el mismo móvil). Lo encontró responder a la auditoría interna del 11 oct 2026.
+     * Coste medido en el TECNO: 300 transacciones de 8 KB, 195 ms sin él y 236 ms con él.
+     *
+     * Límite: sobrescribe lo borrado en el fichero de la base. Las tramas viejas del WAL siguen ahí
+     * hasta que el WAL se reutiliza, así que es «no queda en páginas libres», no borrado garantizado.
+     * El pragma devuelve una fila, así que va por `query` (con `execSQL` falla, lección de la v6).
+     */
+    private object SecureDeleteCallback : RoomDatabase.Callback() {
+        override fun onOpen(db: SupportSQLiteDatabase) {
+            runCatching { db.query("PRAGMA secure_delete = ON").use { it.moveToFirst() } }
+        }
     }
 
     /** Adaptador de `SharedPreferences` al puerto que usa [DatabaseKey]. */

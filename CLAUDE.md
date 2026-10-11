@@ -2047,7 +2047,8 @@ but P3 didn't say what failing it means). Both reproduced from the spec, not fro
 `RatchetCompromisoTest` — they **pin the weakness**, so they must flip when fixed. Also: P3, P4,
 P5, P7, P9 (first negotiation is opportunistic), P11 and P12 rescoped in both spec languages; call
 key halves aren't length-checked and fall back to the static key silently (A-09); and
-`PRAGMA secure_delete` is only set inside `MIGRATION_5_6`, not on normal connections. Plan: phase 0
+`PRAGMA secure_delete` was only set inside `MIGRATION_5_6`; since phase 1 it is set on every
+connection (`DataModule.SecureDeleteCallback`; +21 % per write measured on the TECNO). Plan: phase 0
 docs, phase 1 hardening with no wire change, phase 2 **protocol v4** (root KDF with three
 independent outputs + epoch-0 chain bound to the sender's proposal), phase 3 lineage/auth redesign
 after a Tamarin model. The wire-format freeze is lifted (no review will be contracted); the last v3
