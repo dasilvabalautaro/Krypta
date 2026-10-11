@@ -119,6 +119,7 @@ import chat.neto.krypta.AppLock
 import chat.neto.krypta.ScreenSecurity
 import chat.neto.krypta.core.model.Contact
 import chat.neto.krypta.core.model.MessageStatus
+import chat.neto.krypta.p2p.ChatService
 import chat.neto.krypta.p2p.WanStatus
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -923,6 +924,7 @@ private fun ChatScreen(
             contact = contact,
             myPeerId = myPeerId,
             safetyNumber = viewModel.safetyNumber(contact),
+            protection = viewModel.protection(contact),
             onDismiss = { showVerify = false },
             onScan = {
                 scanLauncher.launch(
@@ -1003,6 +1005,7 @@ private fun VerifyIdentityDialog(
     contact: Contact,
     myPeerId: String,
     safetyNumber: String,
+    protection: ChatService.Protection,
     onDismiss: () -> Unit,
     onScan: () -> Unit,
     onSetVerified: (Boolean) -> Unit,
@@ -1048,6 +1051,7 @@ private fun VerifyIdentityDialog(
                         modifier = Modifier.padding(vertical = 16.dp),
                     )
                 }
+                ProtectionLine(contact.displayName, protection)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = { showQr = !showQr }) {
                         Text(if (showQr) "Ver número" else "Usar QR")
@@ -1068,6 +1072,33 @@ private fun VerifyIdentityDialog(
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cerrar") } },
+    )
+}
+
+/**
+ * Qué protección lleva hoy lo que se le envía a este contacto. Existe porque la primera
+ * negociación de versión es oportunista: si los anuncios iniciales no llegan, la pareja sigue con
+ * la clave fija sin que nada falle, y esto es lo que lo deja ver (A-07 de la auditoría interna del
+ * 11 oct 2026).
+ */
+@Composable
+private fun ProtectionLine(name: String, protection: ChatService.Protection) {
+    val (texto, color) = when (protection) {
+        ChatService.Protection.STATIC ->
+            "Clave fija: la app de $name todavía no ha anunciado la versión nueva. Quien obtenga " +
+                "una de las dos identidades podría descifrar lo que haya grabado de la red." to
+                MaterialTheme.colorScheme.error
+        ChatService.Protection.RATCHET ->
+            "Clave que cambia (ratchet por épocas)." to MaterialTheme.colorScheme.onSurfaceVariant
+        ChatService.Protection.RATCHET_PADDED ->
+            "Clave que cambia (ratchet por épocas) y tamaño relleno." to
+                MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Text(
+        "Protección con $name: $texto",
+        style = MaterialTheme.typography.bodySmall,
+        color = color,
+        modifier = Modifier.padding(top = 4.dp),
     )
 }
 

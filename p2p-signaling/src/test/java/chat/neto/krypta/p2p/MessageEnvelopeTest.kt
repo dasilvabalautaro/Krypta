@@ -191,4 +191,18 @@ class MessageEnvelopeTest {
         assertEquals(3, basura.protocol)
         assertNull(basura.knows)
     }
+
+    /** Una mitad de clave de llamada que no mide 32 bytes invalida la señal (A-09, 11 oct 2026). */
+    @Test
+    fun `una mitad de clave de llamada de otro tamaño invalida la señal`() {
+        val corta = MessageEnvelope.encodeCall("invite", "c1", 1L, ByteArray(16) { 7 })
+        assertEquals(MessageEnvelope.Decoded.Unsupported, MessageEnvelope.decode(corta))
+        val basura = "C\ninvite\nc1\n1\nzz".toByteArray()
+        assertEquals(MessageEnvelope.Decoded.Unsupported, MessageEnvelope.decode(basura))
+
+        val buena = MessageEnvelope.decode(MessageEnvelope.encodeCall("invite", "c1", 1L, ByteArray(32) { 7 }))
+        assertEquals(32, (buena as MessageEnvelope.Decoded.Call).key!!.size)
+        val sinMitad = MessageEnvelope.decode(MessageEnvelope.encodeCall("invite", "c1", 1L))
+        assertNull((sinMitad as MessageEnvelope.Decoded.Call).key)
+    }
 }

@@ -14,6 +14,7 @@ import chat.neto.krypta.data.MIGRATION_5_6
 import chat.neto.krypta.data.MIGRATION_6_7
 import chat.neto.krypta.data.MIGRATION_7_8
 import chat.neto.krypta.data.MIGRATION_8_9
+import chat.neto.krypta.data.MIGRATION_9_10
 import chat.neto.krypta.data.crypto.DatabaseEncryption
 import chat.neto.krypta.data.crypto.DatabaseKey
 import chat.neto.krypta.data.crypto.KeyPrefs
@@ -57,7 +58,7 @@ object DatabaseModule {
         return Room.databaseBuilder(context, KryptaDatabase::class.java, "krypta.db")
             .openHelperFactory(SqlCipher.openHelperFactory(passphrase))
             // Migraciones reales: preservan contactos + mensajes al subir de versión.
-            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
             // Red de seguridad solo para la v1 antigua (sin migración definida); v2+ migra.
             .fallbackToDestructiveMigrationFrom(dropAllTables = true, 1)
             .build()

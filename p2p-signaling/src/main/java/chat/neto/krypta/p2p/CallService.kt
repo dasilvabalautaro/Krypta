@@ -94,6 +94,14 @@ class CallService @Inject constructor(
     /** Mitad del otro extremo, si la mandó. Null = contacto antiguo, sin negociación. */
     private var remoteHalf: ByteArray? = null
 
+    /**
+     * ¿Salió nuestra mitad en el invite? Solo entonces puede negociarse la clave al llegar el
+     * accept. Sin esto, un llamante que tuviera al otro apuntado como antiguo (no le manda su
+     * mitad) y recibiera la del contestador derivaba una clave con una mitad que el otro nunca
+     * vio: cada extremo con una clave distinta y la llamada muda (11 oct 2026).
+     */
+    private var sentHalf = false
+
     private val random = java.security.SecureRandom()
     private var stream: CallStream? = null
     private var txFrames: Channel<ByteArray>? = null
@@ -147,6 +155,8 @@ class CallService @Inject constructor(
             callKey = deriveCallKey(secret, callId)
             localHalf = ByteArray(HALF_BYTES).also(random::nextBytes)
             remoteHalf = null
+            // La misma condición con la que `ChatService.sendCallSignal` decide si la mitad viaja.
+            sentHalf = negotiates(contact)
             _state.value = CallState(CallPhase.CALLING, contact, callId, outgoing = true)
             armTimeout(RING_TIMEOUT_MS) { onOutgoingTimeout() }
             true
@@ -166,7 +176,13 @@ class CallService @Inject constructor(
             armTimeout(CONNECT_TIMEOUT_MS) { endCall("no se pudo conectar", sendHangup = true) }
             s
         }
-        runCatching { chat.sendCallSignal(st.contact!!, KIND_ACCEPT, st.callId, localHalf) }
+        // Nuestra mitad va si el invite traía la suya, tenga apuntado lo que tenga de él: que la
+        // mandara demuestra que negocia. Antes se decidía por la versión apuntada, y si este lado
+        // aún lo tenía como antiguo calculaba la clave negociada pero no mandaba su mitad, y el
+        // llamante se quedaba con la estática (11 oct 2026).
+        runCatching {
+            chat.sendCallSignal(st.contact!!, KIND_ACCEPT, st.callId, localHalf, peerNegotiates = remoteHalf != null)
+        }
             .onFailure { endCall("sin conexión", sendHangup = false) }
     }
 
@@ -204,21 +220,32 @@ class CallService @Inject constructor(
         when (sig.kind) {
             KIND_INVITE -> onInvite(contact, sig)
             KIND_ACCEPT -> {
+                var sinMitad = false
                 val proceed = mutex.withLock {
                     val s = _state.value
                     (s.phase == CallPhase.CALLING && s.callId == sig.callId && s.contact?.id == contact.id)
                         .also {
-                            if (it) {
+                            if (it && sentHalf) {
                                 // La otra mitad llega aquí, **antes** de abrir el stream: el
                                 // primer byte de medios ya va con la clave negociada.
                                 remoteHalf = sig.key
-                                negotiatedKey(
+                                val negociada = negotiatedKey(
                                     contact.sharedSecret, s.callId,
                                     caller = localHalf, callee = sig.key,
-                                )?.let { negociada -> callKey = negociada }
-                                _state.value = s.copy(phase = CallPhase.CONNECTING)
+                                )
+                                // Mandamos la nuestra y no vuelve la suya: no se cae a la clave
+                                // estática en silencio (auditoría interna del 11 oct 2026, A-09).
+                                // Un contestador honrado que la recibe siempre devuelve la suya.
+                                if (negociada == null) sinMitad = true else callKey = negociada
                             }
+                            // Si no mandamos mitad, la clave es la estática aunque llegue una.
+                            if (it && !sinMitad) _state.value = s.copy(phase = CallPhase.CONNECTING)
                         }
+                }
+                if (sinMitad) {
+                    chat.diagnose("📞 ${contact.displayName} aceptó sin mitad de clave: llamada cortada")
+                    endCall("no se pudo negociar la clave", sendHangup = true)
+                    return
                 }
                 if (proceed) connectAsCaller()
             }
@@ -273,6 +300,16 @@ class CallService @Inject constructor(
             runCatching { chat.recordMissedCall(contact, sig.callId) }
             return
         }
+        // Consta que negocia y el invite no trae su mitad. Antes caía a la clave estática en
+        // silencio (A-09 de la auditoría interna del 11 oct 2026); ahora no timbra y queda como
+        // perdida. El caso honrado es que el otro nos tenga apuntados como antiguos, así que se le
+        // repite el anuncio para que la próxima llamada sí negocie.
+        if (sig.key == null && negotiates(contact)) {
+            chat.diagnose("📞 invite de ${contact.displayName} sin mitad de clave: no timbra")
+            runCatching { chat.recordMissedCall(contact, sig.callId) }
+            chat.reannounceForCall(contact)
+            return
+        }
         val busy = mutex.withLock {
             if (!idle()) {
                 _state.value.callId != sig.callId // otra llamada distinta → ocupado
@@ -281,8 +318,11 @@ class CallService @Inject constructor(
                 localHalf = ByteArray(HALF_BYTES).also(random::nextBytes)
                 // Si el otro negoció, la clave sale ya de las dos mitades: quien contesta las
                 // tiene ambas desde este momento (la suya la acaba de sortear).
-                callKey = negotiatedKey(secret, sig.callId, caller = sig.key, callee = localHalf)
-                    ?: deriveCallKey(secret, sig.callId)
+                callKey = if (sig.key != null) {
+                    negotiatedKey(secret, sig.callId, caller = sig.key, callee = localHalf)
+                } else {
+                    deriveCallKey(secret, sig.callId)
+                }
                 _state.value = CallState(CallPhase.RINGING, contact, sig.callId, outgoing = false)
                 armTimeout(RING_TIMEOUT_MS) { onRingingTimeout() }
                 chat.diagnose("📞 llamada entrante de ${contact.displayName}")
@@ -538,7 +578,12 @@ class CallService @Inject constructor(
         callKey = null
         localHalf = null
         remoteHalf = null
+        sentHalf = false
     }
+
+    /** ¿Ese contacto entiende la negociación de clave? Misma regla que `sendCallSignal`. */
+    private fun negotiates(contact: Contact): Boolean =
+        contact.peerProtocol >= ChatService.RATCHET_MIN_PROTOCOL
 
     private suspend fun onOutgoingTimeout() {
         if (_state.value.phase == CallPhase.CALLING) endCall("sin respuesta", sendHangup = true)
@@ -623,6 +668,7 @@ class CallService @Inject constructor(
         callee: ByteArray?,
     ): ByteArray? {
         if (sharedSecret == null || caller == null || callee == null) return null
+        if (caller.size != HALF_BYTES || callee.size != HALF_BYTES) return null
         return Hkdf.derive(
             ikm = caller + callee,
             salt = sharedSecret,

@@ -304,7 +304,26 @@ Lo que la hace seria no es el nombre, sino que **cualquiera pueda comprobarla**.
 
 | Fase | Estado |
 |---|---|
-| 0 · Documentación | 🟡 En curso (11 oct 2026) |
-| 1 · Endurecer sin cambiar el formato | ⬜ |
+| 0 · Documentación | ✅ 11 oct 2026 (`ef949cf`): P3, P4, P5, P7, P9, P11 y P12 reescritas; W-15 y W-16; `RatchetCompromisoTest` |
+| 1 · Endurecer sin cambiar el formato | 🟡 Puntos 1–4 hechos el 11 oct 2026 (abajo); falta el 5 (`secure_delete`) |
 | 2 · Protocolo v4 | ⬜ |
 | 3 · Linaje, recuperación y autenticación | ⬜ Diseño y modelo formal primero |
+
+**Fase 1, lo hecho (11 oct 2026):**
+
+1. **Llamadas (A-09).** Una mitad de clave que no mida 32 bytes invalida la señal (`Unsupported`),
+   y con un contacto que negocia ya no se cae a la clave estática en silencio. Al hacerlo salieron
+   **dos fallos latentes más**, de la misma familia: si un extremo tenía apuntado al otro como v2 y
+   el otro aún no, las dos puntas acababan con claves distintas y la llamada salía muda. El
+   llamante usaba una mitad que no pidió, y el contestador calculaba la clave negociada sin
+   devolver la suya. Ahora el llamante solo negocia si mandó su mitad, y el contestador devuelve la
+   suya si recibió la del otro. Cinco tests nuevos (`CallServiceTest`, `MessageEnvelopeTest`) que
+   **fallan contra el código anterior**.
+2. **Huellas de la época 0 sin poda (A-05).** Columna `pinned` en `ratchet_seen`, base **v10**
+   (`MIGRATION_9_10`). Probado en la JVM (`RatchetSeenPruneSqlTest`, `RatchetSessionsTest`) y la
+   migración en el TECNO (`MigrationTest`, 6 de 6).
+3. **Modo de protección visible (A-07).** El diálogo «Verificar identidad» dice si con ese contacto
+   va la clave fija o el ratchet (`ChatService.protectionOf`).
+4. **Tests que fijan límites (A-03, A-08):** linaje forjado a `Long.MAX_VALUE` y emisor con el reloj
+   una semana adelantado.
+

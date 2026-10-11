@@ -701,6 +701,24 @@ class ChatServiceTest {
         assertEquals(theirs, mine)
     }
 
+    /**
+     * El modo de protección que se le enseña al usuario sigue las mismas reglas que el envío
+     * (A-07 de la auditoría interna del 11 oct 2026): sin versión anunciada, clave fija.
+     */
+    @Test
+    fun `el modo de proteccion visible sigue a la version del contacto`() = runTest {
+        val chat = ChatService(FakeSignaling(), cipher, FakeMessages(), FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+
+        assertEquals(ChatService.Protection.STATIC, chat.protectionOf(contact.copy(peerProtocol = 0)))
+        assertEquals(ChatService.Protection.RATCHET, chat.protectionOf(contact.copy(peerProtocol = 2)))
+        assertEquals(ChatService.Protection.RATCHET_PADDED, chat.protectionOf(contact.copy(peerProtocol = 3)))
+        assertEquals(
+            "sin secreto compartido no hay ratchet",
+            ChatService.Protection.STATIC,
+            chat.protectionOf(contact.copy(peerProtocol = 3, sharedSecret = null)),
+        )
+    }
+
     /** Verificar persiste el flag; re-añadir el mismo PeerID conserva la verificación. */
     @Test
     fun `verifying persists and re-adding same peerId keeps it`() = runTest {

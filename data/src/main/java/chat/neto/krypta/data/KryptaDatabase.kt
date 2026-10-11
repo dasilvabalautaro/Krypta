@@ -18,7 +18,7 @@ import chat.neto.krypta.data.entity.RatchetSessionEntity
         RatchetSessionEntity::class,
         RatchetSeenEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

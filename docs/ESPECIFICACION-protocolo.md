@@ -93,7 +93,7 @@ el tipo y el segundo, un salto de línea.
 | `R` leído | `R\n<id1>\n<id2>…` | Solo marca mensajes **propios** de **esa** conversación |
 | `F` meta de archivo | `F\n<fileId>\n<trozos>\n<tamaño>\n<mime>\n<nombre>` | |
 | `K` trozo de archivo | `K\n<fileId>\n<índice>\n<bytes>` | 48 KiB |
-| `C` llamada | `C\n<tipo>\n<callId>\n<ts>[\n<mitad de clave en hex>]` | §8 |
+| `C` llamada | `C\n<tipo>\n<callId>\n<ts>[\n<mitad de clave en hex>]` | §8. Una mitad que no sea de exactamente 32 bytes invalida la señal (`Unsupported`) |
 | `Y` cita | `Y\n<replyToId>\n<sobre interior>` | Envoltorio; no anida |
 | `V` capacidad | `V\n<versión>[\n<versión que tengo apuntada de ti>]` | §7. La segunda línea existe desde el 14 sep 2026 |
 | `D` descriptor | `D\n<tamaño>\n<mime>\n<ruta>\n<nombre>` | **Local**: nunca se envía. Uno recibido se descarta (y se confirma) |
@@ -286,8 +286,9 @@ receive(C, wire, persistir):
   Si el proceso muere entre medias, el buzón reentrega y el sobre sigue siendo legible.
 - **Deduplicación**: huella SHA-256 del sobre de red. Se conserva si tiene menos de **8 días**
   (margen sobre los 7 de TTL del buzón) **o** está entre las **500** más recientes de la
-  conversación; se poda una de cada 64 inserciones. Es una **pieza de seguridad**: es lo único que
-  impide reproducir un sobre de la época 0 (W-2).
+  conversación; se poda una de cada 64 inserciones. **Las huellas de sobres de la época 0 no se
+  podan nunca** (columna `pinned`, base v10, desde el 11 oct 2026). Es una **pieza de seguridad**:
+  es lo único que impide reproducir un sobre de la época 0 (W-2).
 - **Estado ilegible** → sesión nueva en la época 0 con `L` = ahora (la conversación se reengancha
   sola). **Borrar el contacto** olvida la sesión; **vaciar el chat** no.
 
@@ -410,7 +411,17 @@ usuario, pero sí delata por su tamaño que es un anuncio.
   ```
 
   El contestador sortea su mitad **al recibir el invite**, así que el primer byte de medios ya va
-  con la clave negociada.
+  con la clave negociada. **Sin caída silenciosa a la clave estática** (desde el 11 oct 2026; A-09
+  de la auditoría interna):
+
+  - el llamante manda su mitad si tiene apuntado al otro como ≥ 2, y solo entonces negocia: si el
+    `accept` vuelve sin mitad, corta la llamada; si él no la mandó, usa la estática aunque llegue
+    una;
+  - el contestador negocia si el `invite` trae mitad, y entonces devuelve la suya **aunque tenga
+    apuntado al llamante como antiguo** (que la mandara ya lo demuestra);
+  - un `invite` **sin** mitad de alguien apuntado como ≥ 2 no timbra: queda como llamada perdida y
+    se le repite el anuncio `V` por v1, porque el caso honrado es que el otro nos tenga apuntados
+    como antiguos.
 - **Medios**: streams libp2p `/krypta/call/1.0.0` (audio, marco `uint16`) y `/krypta/video/1.0.0`
   (vídeo, marco `uint32`, 1 MiB). Cada frame va como `AesGcmMessageCipher.encrypt(K_call, frame)`,
   es decir `n ‖ AEAD(HKDF(K_call, ∅, "krypta-msg-key-v1", 32), n, frame, ∅)` con `n` aleatorio. El

@@ -30,8 +30,8 @@ class RoomRatchetStore @Inject constructor(
     /** Inserciones desde la última poda, por conversación (ver [PRUNE_EVERY]). */
     private val sincePrune = mutableMapOf<String, Int>()
 
-    override suspend fun markSeen(conversationId: String, digest: String, at: Long) {
-        dao.insertSeen(RatchetSeenEntity(conversationId, digest, at))
+    override suspend fun markSeen(conversationId: String, digest: String, at: Long, permanent: Boolean) {
+        dao.insertSeen(RatchetSeenEntity(conversationId, digest, at, pinned = permanent))
         // Podar en CADA mensaje recibido es demasiado caro: el DELETE lleva un
         // `ORDER BY seenAt DESC LIMIT 500` dentro, y se paga por mensaje. Una ráfaga de 600
         // (un archivo troceado) **mató el proceso** en el TECNO el 11 sep 2026 — o sea que

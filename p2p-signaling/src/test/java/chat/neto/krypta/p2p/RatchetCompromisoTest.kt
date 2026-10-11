@@ -106,4 +106,22 @@ class RatchetCompromisoTest {
             updateAAD(wire.copyOfRange(0, Ratchet.HEADER_BYTES))
         }.doFinal(wire.copyOfRange(Ratchet.HEADER_BYTES, wire.size))
     }
+
+    /**
+     * El caso extremo de W-4 (A-03 de la auditoría interna): un linaje forjado a `Long.MAX_VALUE`
+     * se adopta, y como la regla es «estrictamente mayor», **ningún** linaje posterior —ni el reloj
+     * de nadie— puede superarlo. Exige `S`. Fija la debilidad hasta el rediseño del linaje.
+     */
+    @Test
+    fun `un linaje forjado al maximo se adopta y ningun reloj lo supera`() {
+        var b = ratchet.initial(secret, bob, alice, 1_000L)
+        val mallory = ratchet.initial(secret, alice, bob, lineage = Long.MAX_VALUE)
+        val forjado = ratchet.encrypt(mallory, "hola".toByteArray())
+        b = ratchet.decrypt(b, secret, forjado.ciphertext).state
+        assertEquals(Long.MAX_VALUE, b.lineage)
+
+        val alicia = ratchet.initial(secret, alice, bob, lineage = System.currentTimeMillis())
+        b = ratchet.decrypt(b, secret, ratchet.encrypt(alicia, "soy yo".toByteArray()).ciphertext).state
+        assertEquals("el linaje legítimo no se adopta: es menor", Long.MAX_VALUE, b.lineage)
+    }
 }

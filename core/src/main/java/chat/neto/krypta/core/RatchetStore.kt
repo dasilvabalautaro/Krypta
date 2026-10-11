@@ -26,8 +26,12 @@ interface RatchetStore {
     /** ¿Se procesó ya este ciphertext? Se consulta **antes** de descifrar. */
     suspend fun seen(conversationId: String, digest: String): Boolean
 
-    /** Apunta la huella como procesada, podando las más viejas de esa conversación. */
-    suspend fun markSeen(conversationId: String, digest: String, at: Long)
+    /**
+     * Apunta la huella como procesada, podando las más viejas de esa conversación. Con
+     * [permanent] no se poda nunca: es lo que se usa para los sobres de la época 0, que se
+     * rederiva del secreto compartido y sin esto se podría reproducir pasada la ventana.
+     */
+    suspend fun markSeen(conversationId: String, digest: String, at: Long, permanent: Boolean = false)
 }
 
 /**

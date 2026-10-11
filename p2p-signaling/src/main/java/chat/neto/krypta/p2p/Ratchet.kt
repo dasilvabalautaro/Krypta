@@ -420,6 +420,9 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
         fun looksLikeRatchet(bytes: ByteArray): Boolean =
             bytes.size > HEADER_BYTES && bytes[0] == WIRE_VERSION
 
+        /** ¿Es un sobre de la época 0 (de cualquier linaje)? Lo lee de la cabecera. */
+        fun isEpochZero(wire: ByteArray): Boolean = Header.decode(wire)?.epoch == 0
+
         /** Versión del sobre de transporte: 1 era `nonce(12) ‖ ct+tag` sin cabecera. */
         const val WIRE_VERSION: Byte = 0x02
 

@@ -211,4 +211,24 @@ class RatchetSessionsTest {
         assertTrue(b.store.sessions.isEmpty() && b.store.seen.isEmpty())
     }
 
+    /**
+     * Las huellas de la época 0 quedan marcadas como permanentes y las de épocas posteriores no
+     * (A-05 de la auditoría interna del 11 oct 2026). La poda que las respeta la prueba
+     * `RatchetSeenPruneSqlTest` en `:data`.
+     */
+    @Test
+    fun `las huellas de la epoca 0 son permanentes y las demas no`() = runTest {
+        val (a, b) = endpoints()
+        val primero = a.sessions.send(a.contact, "en la época 0".toByteArray()) { it }
+        b.sessions.receive(b.contact, primero) { }
+        val vuelta = b.sessions.send(b.contact, "ya en la 1".toByteArray()) { it }
+        a.sessions.receive(a.contact, vuelta) { }
+        val tercero = a.sessions.send(a.contact, "más allá".toByteArray()) { it }
+        b.sessions.receive(b.contact, tercero) { }
+
+        assertTrue(Ratchet.isEpochZero(primero))
+        assertTrue(!Ratchet.isEpochZero(tercero))
+        assertEquals("solo la del primer mensaje", 1, b.store.permanent.size)
+        assertEquals(2, b.store.seen.size)
+    }
 }

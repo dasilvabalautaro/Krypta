@@ -200,9 +200,16 @@ class CallServiceTest {
      * Construye A y B cruzados (cada uno tiene al otro como contacto). [protocolo] es la
      * versión que cada uno ha anunciado: 0 = contacto anterior a la negociación de clave.
      */
-    private fun buildPair(scope: CoroutineScope, protocolo: Int = 0): Pair<Party, Party> {
-        val contactB = Contact("b", "Bea", "12D3KooWBBB", ByteArray(0), secret, peerProtocol = protocolo)
-        val contactA = Contact("a", "Ana", "12D3KooWAAA", ByteArray(0), secret, peerProtocol = protocolo)
+    private fun buildPair(
+        scope: CoroutineScope,
+        protocolo: Int = 0,
+        deB: Int = protocolo,
+        deA: Int = protocolo,
+    ): Pair<Party, Party> {
+        // [deB] es lo que A tiene apuntado de B, y [deA] lo que B tiene de A: pueden no coincidir
+        // mientras uno de los dos anuncios no ha llegado.
+        val contactB = Contact("b", "Bea", "12D3KooWBBB", ByteArray(0), secret, peerProtocol = deB)
+        val contactA = Contact("a", "Ana", "12D3KooWAAA", ByteArray(0), secret, peerProtocol = deA)
         val a = Party("12D3KooWAAA", contactB, scope)
         val b = Party("12D3KooWBBB", contactA, scope)
         a.signaling.other = b.signaling
@@ -641,5 +648,96 @@ class CallServiceTest {
 
         assertEquals(CallPhase.RINGING, b.calls.state.value.phase)
         assertEquals("un busy por llamada, no por entrega", antes + 1, b.signaling.rawSent.size)
+    }
+
+    // --- Negociación estricta de la clave (auditoría interna del 11 oct 2026, A-09) ----------
+
+    /**
+     * Quien consta que negocia y manda un invite sin mitad no hace sonar el teléfono: antes caía a
+     * la clave estática en silencio. Queda como llamada perdida y se le repite el anuncio, porque
+     * el caso honrado es que nos tenga apuntados como antiguos.
+     */
+    @Test
+    fun `un invite sin mitad de quien negocia no suena y repite el anuncio`() = runTest {
+        val (_, b) = buildPair(backgroundScope, protocolo = ChatService.PROTOCOL_VERSION)
+        runCurrent()
+        val sinMitad = cipher.encrypt(
+            secret, MessageEnvelope.encodeCall("invite", "call-sin-mitad", System.currentTimeMillis()),
+        )
+        val antes = b.signaling.rawSent.size
+        b.chat.onReceived("12D3KooWAAA", sinMitad)
+        runCurrent()
+
+        assertEquals(CallPhase.IDLE, b.calls.state.value.phase)
+        assertEquals("queda como perdida", 1, b.messages.saved.size)
+        assertEquals("se le repite el anuncio", antes + 1, b.signaling.rawSent.size)
+    }
+
+    /** El llamante mandó su mitad y el accept vuelve sin la suya: se corta, no se degrada. */
+    @Test
+    fun `un accept sin mitad tras mandar la nuestra corta la llamada`() = runTest {
+        val (a, _) = buildPair(backgroundScope, protocolo = ChatService.PROTOCOL_VERSION)
+        runCurrent()
+        a.calls.startCall(a.contact)
+        runCurrent()
+        // B no contesta: el accept se fabrica sin mitad, como lo mandaría un extremo que no negocia.
+        val enCurso = a.calls.state.value.callId
+        val acceptSinMitad = cipher.encrypt(
+            secret, MessageEnvelope.encodeCall("accept", enCurso, System.currentTimeMillis()),
+        )
+        a.chat.onReceived("12D3KooWBBB", acceptSinMitad)
+        runCurrent()
+
+        assertEquals(CallPhase.ENDED, a.calls.state.value.phase)
+        assertEquals("no se pudo negociar la clave", a.calls.state.value.endReason)
+    }
+
+    /**
+     * A tiene a B como moderno y le manda su mitad; B aún tiene a A como antiguo. Antes B calculaba
+     * la clave negociada pero no devolvía su mitad (la decidía por la versión apuntada), A se
+     * quedaba con la estática y la llamada salía muda. Ahora la mitad que llegó en el invite basta.
+     */
+    @Test
+    fun `si solo el llamante sabe que el otro negocia la llamada se oye igual`() = runTest {
+        val (a, b) = buildPair(backgroundScope, deB = ChatService.PROTOCOL_VERSION, deA = 0)
+        runCurrent()
+
+        a.calls.startCall(a.contact)
+        runCurrent()
+        b.calls.accept()
+        runCurrent()
+        assertEquals(CallPhase.ACTIVE, a.calls.state.value.phase)
+
+        val frame = "se oye".toByteArray()
+        a.audio.capture!!.invoke(frame)
+        runCurrent()
+        assertArrayEquals(frame, b.audio.played.single())
+        val claveVieja = Hkdf.derive(
+            secret, CallService.CALL_KEY_SALT,
+            a.calls.state.value.callId.toByteArray(Charsets.UTF_8), 32,
+        )
+        assertNull(
+            "y con clave negociada, no con la estática",
+            runCatching { cipher.decrypt(claveVieja, b.signaling.callWire.last()) }.getOrNull(),
+        )
+    }
+
+    /**
+     * Al revés: A tiene a B como antiguo (no le manda mitad) y B tiene a A como moderno. No suena:
+     * es la inconsistencia que antes acababa en dos claves distintas. B le repite su anuncio para
+     * que la próxima vez A negocie.
+     */
+    @Test
+    fun `si solo el contestador sabe que el otro negocia no suena y se le repite el anuncio`() = runTest {
+        val (a, b) = buildPair(backgroundScope, deB = 0, deA = ChatService.PROTOCOL_VERSION)
+        runCurrent()
+
+        val antes = b.signaling.rawSent.size
+        a.calls.startCall(a.contact)
+        runCurrent()
+
+        assertEquals(CallPhase.IDLE, b.calls.state.value.phase)
+        assertEquals(1, b.messages.saved.size)
+        assertEquals("B le repite su anuncio a A", antes + 1, b.signaling.rawSent.size)
     }
 }

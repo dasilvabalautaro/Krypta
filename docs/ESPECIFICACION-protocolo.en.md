@@ -96,7 +96,7 @@ byte is the type and the second a newline.
 | `R` read | `R\n<id1>\n<id2>…` | Only marks the recipient's **own** messages in **that** conversation |
 | `F` file meta | `F\n<fileId>\n<chunks>\n<size>\n<mime>\n<name>` | |
 | `K` file chunk | `K\n<fileId>\n<index>\n<bytes>` | 48 KiB |
-| `C` call | `C\n<type>\n<callId>\n<ts>[\n<key half in hex>]` | §8 |
+| `C` call | `C\n<type>\n<callId>\n<ts>[\n<key half in hex>]` | §8. A half that is not exactly 32 bytes invalidates the signal (`Unsupported`) |
 | `Y` quote | `Y\n<replyToId>\n<inner envelope>` | Wrapper; does not nest |
 | `V` capability | `V\n<version>[\n<the version I have recorded for you>]` | §7. The second line exists since 14 Sep 2026 |
 | `D` descriptor | `D\n<size>\n<mime>\n<path>\n<name>` | **Local**: never sent. One received is dropped (and acknowledged) |
@@ -288,8 +288,9 @@ receive(C, wire, persist):
   If the process dies in between, the mailbox redelivers and the envelope is still readable.
 - **Deduplication**: SHA-256 fingerprint of the wire envelope. Kept if younger than **8 days**
   (margin over the mailbox's 7-day TTL) **or** among the conversation's **500** most recent; pruned
-  once every 64 inserts. It is a **security component**: it is the only thing preventing the replay
-  of an epoch-0 envelope (W-2).
+  once every 64 inserts. **Fingerprints of epoch-0 envelopes are never pruned** (`pinned` column,
+  database v10, since 11 Oct 2026). It is a **security component**: it is the only thing preventing
+  the replay of an epoch-0 envelope (W-2).
 - **Unreadable state** → new session in epoch 0 with `L` = now (the conversation rehooks by
   itself). **Deleting the contact** forgets the session; **clearing the chat** does not.
 
@@ -414,7 +415,17 @@ content, but its size does reveal that it is an announcement.
   ```
 
   The callee draws its half **when the invite arrives**, so the first media byte already uses the
-  negotiated key.
+  negotiated key. **No silent fallback to the static key** (since 11 Oct 2026; A-09 of the internal
+  audit):
+
+  - the caller sends its half if it has the other side recorded as ≥ 2, and only then negotiates:
+    if the `accept` comes back without a half, it ends the call; if it did not send one, it uses the
+    static key even if a half arrives;
+  - the callee negotiates if the `invite` carries a half, and then returns its own **even if it has
+    the caller recorded as legacy** (sending one already proves it);
+  - an `invite` **without** a half from someone recorded as ≥ 2 does not ring: it becomes a missed
+    call and our `V` announcement is repeated over v1, because the honest case is that the other
+    side has us recorded as legacy.
 - **Media**: libp2p streams `/krypta/call/1.0.0` (audio, `uint16` framing) and `/krypta/video/1.0.0`
   (video, `uint32` framing, 1 MiB). Each frame is `AesGcmMessageCipher.encrypt(K_call, frame)`, i.e.
   `n ‖ AEAD(HKDF(K_call, ∅, "krypta-msg-key-v1", 32), n, frame, ∅)` with a random `n`. The first frame

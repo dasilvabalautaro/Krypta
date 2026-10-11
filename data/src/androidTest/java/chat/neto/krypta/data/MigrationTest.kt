@@ -220,6 +220,26 @@ class MigrationTest {
         }
     }
 
+    /**
+     * v9→v10 añade `pinned` a las huellas del ratchet. Aditiva: las que ya había siguen ahí y
+     * arrancan en 0, o sea que siguen la poda de siempre.
+     */
+    @Test
+    fun migracion9a10MarcaLasHuellasDeLaEpocaCero() {
+        helper.createDatabase(DB, 9).use { db ->
+            db.execSQL("INSERT INTO ratchet_seen (conversationId, digest, seenAt) VALUES ('c', 'd1', 5)")
+        }
+
+        val db = helper.runMigrationsAndValidate(DB, 10, true, MIGRATION_9_10)
+
+        db.query("SELECT digest, seenAt, pinned FROM ratchet_seen").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("d1", c.getString(0))
+            assertEquals(5, c.getLong(1))
+            assertEquals("una huella de antes no se sabe de qué época era", 0, c.getInt(2))
+        }
+    }
+
     private companion object {
         const val DB = "krypta-migration-test.db"
     }

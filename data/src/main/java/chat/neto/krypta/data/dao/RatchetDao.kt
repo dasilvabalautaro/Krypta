@@ -46,7 +46,7 @@ interface RatchetDao {
          */
         const val PRUNE_SEEN_SQL =
             "DELETE FROM ratchet_seen WHERE conversationId = :conversationId AND seenAt < :cutoff " +
-                "AND digest NOT IN " +
+                "AND pinned = 0 AND digest NOT IN " +
                 "(SELECT digest FROM ratchet_seen WHERE conversationId = :conversationId " +
                 "ORDER BY seenAt DESC LIMIT :keep)"
     }

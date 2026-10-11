@@ -43,7 +43,8 @@ class RatchetSeenPruneSqlTest {
         db.createStatement().use { st ->
             st.executeUpdate(
                 "CREATE TABLE ratchet_seen (conversationId TEXT NOT NULL, digest TEXT NOT NULL, " +
-                    "seenAt INTEGER NOT NULL, PRIMARY KEY (conversationId, digest))",
+                    "seenAt INTEGER NOT NULL, pinned INTEGER NOT NULL DEFAULT 0, " +
+                    "PRIMARY KEY (conversationId, digest))",
             )
             st.executeUpdate("CREATE INDEX idx_seen ON ratchet_seen (conversationId, seenAt)")
         }
@@ -52,9 +53,9 @@ class RatchetSeenPruneSqlTest {
     @After
     fun cerrar() = db.close()
 
-    private fun marcar(digest: String, at: Long) {
-        db.prepareStatement("INSERT OR REPLACE INTO ratchet_seen VALUES (?, ?, ?)").use { st ->
-            st.setString(1, conv); st.setString(2, digest); st.setLong(3, at)
+    private fun marcar(digest: String, at: Long, permanente: Boolean = false) {
+        db.prepareStatement("INSERT OR REPLACE INTO ratchet_seen VALUES (?, ?, ?, ?)").use { st ->
+            st.setString(1, conv); st.setString(2, digest); st.setLong(3, at); st.setInt(4, if (permanente) 1 else 0)
             st.executeUpdate()
         }
     }
@@ -146,5 +147,23 @@ class RatchetSeenPruneSqlTest {
             "con 11 filas no sobra nada por cantidad, así que ni lo viejo se toca",
             existe("muy-vieja"),
         )
+    }
+
+    /**
+     * Una huella de la época 0 no se poda nunca, aunque sea vieja y sobre por cantidad: esa época
+     * se rederiva del secreto compartido y la huella es lo único que impide reproducirla (base v10,
+     * A-05 de la auditoría interna del 11 oct 2026).
+     */
+    @Test
+    fun `una huella de la epoca 0 sobrevive a la poda aunque sea vieja y sobre`() {
+        val ahora = System.currentTimeMillis()
+        marcar("epoca-0-vieja", ahora - 90 * day, permanente = true)
+        marcar("normal-vieja", ahora - 90 * day)
+        repeat(500) { i -> marcar("reciente-$i", ahora - i * 1000L) }
+
+        podar(ahora - retention)
+
+        assertTrue("la de la época 0 se queda", existe("epoca-0-vieja"))
+        assertFalse("la normal, igual de vieja, se va", existe("normal-vieja"))
     }
 }

@@ -635,6 +635,9 @@ class ChatViewModel @Inject constructor(
     /** Número de seguridad anti-MITM con [contact] (idéntico en ambos móviles). */
     fun safetyNumber(contact: Contact): String = chat.safetyNumber(contact)
 
+    /** Protección efectiva de lo que se le envía a [contact] (clave fija o ratchet). */
+    fun protection(contact: Contact): ChatService.Protection = chat.protectionOf(contact)
+
     /** Marca/desmarca [contact] como verificado tras cotejar el número de seguridad. */
     fun setVerified(contact: Contact, verified: Boolean) {
         viewModelScope.launch { runCatching { chat.setVerified(contact, verified) } }

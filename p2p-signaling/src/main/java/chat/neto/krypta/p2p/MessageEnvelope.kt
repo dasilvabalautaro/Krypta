@@ -37,6 +37,9 @@ object MessageEnvelope {
 
     private const val NL = '\n'.code.toByte()
 
+    /** Tamaño exacto de una mitad de clave de llamada (ver `CallService.HALF_BYTES`). */
+    const val CALL_KEY_HALF_BYTES = 32
+
     sealed interface Decoded {
         /** Mensaje de chat: [id] del emisor + [body] (texto/plano en bytes). */
         data class Text(val id: String, val body: ByteArray) : Decoded
@@ -182,9 +185,14 @@ object MessageEnvelope {
                 if (parts.size < 3) return null
                 val ts = parts[2].toLongOrNull() ?: return null
                 if (parts[0].isBlank() || parts[1].isBlank()) return null
-                // Una clave ilegible no invalida la señal: se trata como si no viniera y la
-                // llamada cae al camino antiguo, que es preferible a no timbrar.
-                Decoded.Call(parts[0], parts[1], ts, parts.getOrNull(3)?.let(::fromHex))
+                // Una mitad de clave que no sea exactamente de 32 bytes invalida la señal entera.
+                // Hasta el 11 oct 2026 se trataba como si no viniera y la llamada caía a la clave
+                // estática en silencio (A-09 de la auditoría interna). `Unsupported` y no `null`:
+                // null es «texto legado» y pintaría la cabecera cruda como un mensaje.
+                val key = parts.getOrNull(3)?.let { linea ->
+                    fromHex(linea.trim())?.takeIf { it.size == CALL_KEY_HALF_BYTES } ?: return Decoded.Unsupported
+                }
+                Decoded.Call(parts[0], parts[1], ts, key)
             }
             'D' -> {
                 // D\n<size>\n<mime>\n<path>\n<name>

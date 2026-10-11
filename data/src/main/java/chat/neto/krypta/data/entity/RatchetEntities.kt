@@ -1,5 +1,6 @@
 package chat.neto.krypta.data.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -35,7 +36,7 @@ data class RatchetSessionEntity(
  * Huella de un ciphertext ya procesado, para reconocer las reentregas del buzón **antes** de
  * intentar descifrarlas (la clave de un mensaje se borra al usarla). La huella va en hexadecimal
  * y no como BLOB para que la clave primaria compuesta no dependa de cómo compare cada SQLite los
- * blobs. Se poda: solo interesan las recientes.
+ * blobs. Se poda: solo interesan las recientes, **salvo las de la época 0** ([pinned]).
  */
 @Entity(
     tableName = "ratchet_seen",
@@ -46,4 +47,11 @@ data class RatchetSeenEntity(
     val conversationId: String,
     val digest: String,
     val seenAt: Long,
+    /**
+     * Huella de un sobre de la **época 0**, que no se poda nunca (base v10, 11 oct 2026). Esa
+     * época se rederiva del secreto compartido, así que pasada la ventana de poda el ratchet
+     * volvería a abrir un sobre reproducido (W-2; A-05 de la auditoría interna). El tráfico
+     * honrado en la época 0 es poco, porque se sale de ella con el primer mensaje recibido.
+     */
+    @ColumnInfo(defaultValue = "0") val pinned: Boolean = false,
 )

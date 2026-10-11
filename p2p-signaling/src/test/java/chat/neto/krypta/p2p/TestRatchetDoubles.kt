@@ -9,6 +9,9 @@ class FakeRatchetStore : RatchetStore {
     val sessions = mutableMapOf<String, ByteArray>()
     val seen = mutableSetOf<Pair<String, String>>()
 
+    /** Las huellas que se marcaron como permanentes (época 0). */
+    val permanent = mutableSetOf<Pair<String, String>>()
+
     override suspend fun load(conversationId: String) = sessions[conversationId]
     override suspend fun save(conversationId: String, state: ByteArray) {
         sessions[conversationId] = state
@@ -22,8 +25,9 @@ class FakeRatchetStore : RatchetStore {
     override suspend fun seen(conversationId: String, digest: String) =
         (conversationId to digest) in seen
 
-    override suspend fun markSeen(conversationId: String, digest: String, at: Long) {
+    override suspend fun markSeen(conversationId: String, digest: String, at: Long, permanent: Boolean) {
         seen += conversationId to digest
+        if (permanent) this.permanent += conversationId to digest
     }
 }
 

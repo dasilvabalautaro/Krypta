@@ -1001,11 +1001,14 @@ class ChatService @Inject constructor(
         kind: String,
         callId: String,
         key: ByteArray? = null,
+        peerNegotiates: Boolean = contact.peerProtocol >= RATCHET_MIN_PROTOCOL,
     ) {
         // La mitad de clave solo viaja hacia quien haya anunciado que la entiende: un cliente
         // anterior parte la cabecera `C` en tres trozos y descartaría la señal entera, con lo
         // que la llamada no llegaría a sonar. Con el resto se sigue por el camino antiguo.
-        val negociada = key?.takeIf { contact.peerProtocol >= RATCHET_MIN_PROTOCOL }
+        // [peerNegotiates] lo fuerza quien contesta a un invite que traía mitad: eso ya demuestra
+        // que el otro la entiende, conste lo que conste.
+        val negociada = key?.takeIf { peerNegotiates }
         sendRaw(contact, MessageEnvelope.encodeCall(kind, callId, System.currentTimeMillis(), negociada))
     }
 
@@ -1344,6 +1347,17 @@ class ChatService @Inject constructor(
     }
 
     /**
+     * Un invite sin mitad de clave de [contact], que consta que negocia: nos tiene apuntados como
+     * antiguos. Se le repite nuestro anuncio por la clave estática, con el mismo tope que el resto
+     * de anuncios, para que la próxima llamada negocie.
+     */
+    fun reannounceForCall(contact: Contact) = launchHello(
+        contact, estatico = true, limiter = lastHello,
+        enviado = "↔ anuncio repetido a ${short(contact.peerId)} (llamó sin negociar la clave)",
+        fallido = "↔ anuncio a ${short(contact.peerId)} no salió; se repite en la próxima llamada",
+    )
+
+    /**
      * Envía nuestro anuncio `V` —con la versión que tenemos apuntada de [contact]— **lanzado**, y
      * como mucho uno por contacto cada [REHOOK_MIN_INTERVAL_MS] según [limiter]: cualquiera de
      * tus contactos podría provocarlo a propósito, y sin tope serviría de altavoz. [estatico] =
@@ -1614,6 +1628,28 @@ class ChatService @Inject constructor(
      */
     fun safetyNumber(contact: Contact): String =
         SafetyNumber.compute(keyExchange.localPeerId(), contact.peerId)
+
+    /** Qué protección lleva hoy lo que se le envía a un contacto. */
+    enum class Protection {
+        /** Clave estática (v1): la versión del contacto aún no consta. */
+        STATIC,
+        /** Ratchet por épocas, sin relleno. */
+        RATCHET,
+        /** Ratchet por épocas y tamaño relleno por tramos. */
+        RATCHET_PADDED,
+    }
+
+    /**
+     * El modo **efectivo** con [contact], para enseñárselo al usuario. La primera negociación es
+     * oportunista: un nodo que tire los anuncios iniciales puede dejar a la pareja en v1, y lo
+     * único que lo hace visible es esto (A-07 de la auditoría interna del 11 oct 2026, y P9 de la
+     * especificación).
+     */
+    fun protectionOf(contact: Contact): Protection = when {
+        pads(contact) -> Protection.RATCHET_PADDED
+        usesRatchet(contact) -> Protection.RATCHET
+        else -> Protection.STATIC
+    }
 
     /** Marca (o desmarca) [contact] como verificado tras cotejar el número de seguridad. */
     suspend fun setVerified(contact: Contact, verified: Boolean) {

@@ -152,3 +152,15 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
         db.execSQL("ALTER TABLE `contacts` ADD COLUMN `announcedProtocol` INTEGER NOT NULL DEFAULT 0")
     }
 }
+
+/**
+ * v9→v10: las huellas de los sobres de la **época 0** dejan de podarse (`pinned`). Esa época se
+ * rederiva del secreto compartido, y fuera de la ventana de poda un sobre reproducido se volvía a
+ * abrir (W-2 de la especificación; A-05 de la auditoría interna del 11 oct 2026). Aditiva: las
+ * huellas de antes arrancan en 0 y siguen la poda de siempre, porque no se sabe de qué época eran.
+ */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `ratchet_seen` ADD COLUMN `pinned` INTEGER NOT NULL DEFAULT 0")
+    }
+}

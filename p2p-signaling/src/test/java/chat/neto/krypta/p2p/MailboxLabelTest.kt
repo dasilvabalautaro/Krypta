@@ -77,4 +77,23 @@ class MailboxLabelTest {
         assertEquals(64, MailboxLabel.toHex(label).length)
         assertTrue(MailboxLabel.toHex(label).all { it in "0123456789abcdef" })
     }
+
+    /**
+     * Límite de disponibilidad, no de seguridad (A-08 de la auditoría interna del 11 oct 2026):
+     * quien recibe solo mira su semana y la anterior. Un emisor con el reloj **adelantado** lo
+     * bastante como para caer en la semana siguiente deposita bajo una etiqueta que el receptor aún
+     * no consulta; el correo espera allí hasta que el reloj del receptor llegue a esa semana o el
+     * TTL de 7 días del nodo lo borre. Este test fija el límite; si se amplía la ventana, cambia.
+     */
+    @Test
+    fun `un emisor con el reloj una semana adelantado deposita donde aun no se mira`() {
+        val relojDelEmisor = martes.plusSeconds(7L * 24 * 3600)
+        val depositada = MailboxLabel.outbox(secret, myPeerId = ana, theirPeerId = beto, at = relojDelEmisor)
+        val miradas = MailboxLabel.inbox(secret, myPeerId = beto, theirPeerId = ana, at = martes)
+        assertFalse(miradas.any { it.contentEquals(depositada) })
+
+        // Con unas horas de desfase, que es lo normal, no pasa nada: misma semana o la anterior.
+        val pocoAdelantado = MailboxLabel.outbox(secret, ana, beto, at = martes.plusSeconds(6 * 3600))
+        assertTrue(miradas.any { it.contentEquals(pocoAdelantado) })
+    }
 }

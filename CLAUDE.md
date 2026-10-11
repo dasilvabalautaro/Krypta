@@ -1546,7 +1546,7 @@ compiled to an AAR with gomobile. Kotlin calls it through generated classes
 - **DI = Hilt, KSP not kapt.** Modules with Hilt/Room annotations apply both the
   `ksp` and (for Hilt) `hilt` plugins and use `ksp(...)` for the compilers. Put `@Module`
   bindings in a `di/` package. Components install in `SingletonComponent`.
-- **Room migrations, not destructive.** `KryptaDatabase` is at **v9** with real migrations
+- **Room migrations, not destructive.** `KryptaDatabase` is at **v10** with real migrations
   (`data/Migrations.kt`, wired in `DatabaseModule` via `addMigrations`); `exportSchema=true`
   writes `data/schemas/`. **Every schema change adds a `Migration` + bumps the version** —
   do not reintroduce `fallbackToDestructiveMigration` (it wipes user data). Destructive

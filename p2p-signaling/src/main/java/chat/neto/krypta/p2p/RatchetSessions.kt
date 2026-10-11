@@ -102,7 +102,9 @@ class RatchetSessions @Inject constructor(
         transactions.inTransaction {
             val value = persist(opened.plaintext)
             store.save(contact.id, opened.state.encode())
-            store.markSeen(contact.id, digest, System.currentTimeMillis())
+            // Los de la época 0 no se podan: esa época se rederiva del secreto compartido, y lo
+            // único que impide reproducirlos pasada la ventana es esta huella (W-2).
+            store.markSeen(contact.id, digest, System.currentTimeMillis(), permanent = Ratchet.isEpochZero(wire))
             Received.Opened(value)
         }
     }
