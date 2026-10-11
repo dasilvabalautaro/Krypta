@@ -71,9 +71,10 @@ class RatchetSessions @Inject constructor(
         contact: Contact,
         plaintext: ByteArray,
         pad: Boolean = false,
+        v4: Boolean = false,
         persist: suspend (ciphertext: ByteArray) -> T,
     ): T = lockFor(contact.id).withLock {
-        val sealed = ratchet.encrypt(stateFor(contact), plaintext, pad)
+        val sealed = ratchet.encrypt(stateFor(contact, v4), plaintext, pad, v4)
         transactions.inTransaction {
             val value = persist(sealed.ciphertext)
             store.save(contact.id, sealed.state.encode())
@@ -89,6 +90,7 @@ class RatchetSessions @Inject constructor(
     suspend fun <T> receive(
         contact: Contact,
         wire: ByteArray,
+        v4: Boolean = false,
         persist: suspend (plaintext: ByteArray) -> T,
     ): Received<T> = lockFor(contact.id).withLock {
         // Dentro del cerrojo también: dos entregas del mismo sobre a la vez (buzón y directo)
@@ -98,7 +100,7 @@ class RatchetSessions @Inject constructor(
 
         // Fuera de la transacción a propósito: descifrar es una función pura y puede costar un
         // X25519. Lo que no puede quedar a medias es lo de dentro.
-        val opened = ratchet.decrypt(stateFor(contact), secretOf(contact), wire)
+        val opened = ratchet.decrypt(stateFor(contact, v4), secretOf(contact), wire, v4)
         transactions.inTransaction {
             val value = persist(opened.plaintext)
             store.save(contact.id, opened.state.encode())
@@ -120,12 +122,12 @@ class RatchetSessions @Inject constructor(
      * abrir lo que se envíe desde ella, y como el linaje nuevo es la hora actual —mayor que el
      * suyo— lo adopta y la conversación se reengancha sola.
      */
-    private suspend fun stateFor(contact: Contact): RatchetState {
+    private suspend fun stateFor(contact: Contact, v4: Boolean): RatchetState {
         val stored = store.load(contact.id)
         if (stored != null) {
             runCatching { RatchetState.decode(stored) }.getOrNull()?.let { return it }
         }
-        return ratchet.initial(secretOf(contact), keyExchange.localPeerId(), contact.peerId)
+        return ratchet.initial(secretOf(contact), keyExchange.localPeerId(), contact.peerId, v4 = v4)
     }
 
     private fun secretOf(contact: Contact): ByteArray =

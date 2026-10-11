@@ -734,6 +734,14 @@ class ChatService @Inject constructor(
     private fun pads(contact: Contact): Boolean =
         usesRatchet(contact) && contact.peerProtocol >= PADDING_MIN_PROTOCOL
 
+    /**
+     * ¿Las propuestas nuevas para [contact] son **v4**, y se ata la época 0? (protocolo v4,
+     * `docs/DISENO-ratchet.md` §1.12). Con su propio mínimo, como el relleno: a quien anuncie 3 los
+     * bits nuevos le llegarían ignorados y derivaría con el KDF viejo.
+     */
+    private fun kdf4(contact: Contact): Boolean =
+        usesRatchet(contact) && contact.peerProtocol >= KDF4_MIN_PROTOCOL
+
     /** Un envío ya cifrado: el mensaje persistido (si lo hay) y los bytes que van por la red. */
     private class Outgoing(val message: Message, val wire: ByteArray)
 
@@ -750,7 +758,7 @@ class ChatService @Inject constructor(
             return cipher.encrypt(requireNotNull(contact.sharedSecret), envelope)
         }
         lateinit var wire: ByteArray
-        sessions.send(contact, envelope, pads(contact)) { wire = it }
+        sessions.send(contact, envelope, pads(contact), kdf4(contact)) { wire = it }
         return wire
     }
 
@@ -770,7 +778,7 @@ class ChatService @Inject constructor(
             return Outgoing(message, wire)
         }
         lateinit var wire: ByteArray
-        val message = sessions.send(contact, envelope, pads(contact)) { ct ->
+        val message = sessions.send(contact, envelope, pads(contact), kdf4(contact)) { ct ->
             wire = ct
             build().also { messages.save(it) }
         }
@@ -1235,7 +1243,7 @@ class ChatService @Inject constructor(
         ts: Long?,
     ): Message? {
         val recibido = runCatching {
-            sessions.receive(contact, ciphertext) { plain -> persistEnvelope(contact, plain, mailboxId, ts) }
+            sessions.receive(contact, ciphertext, kdf4(contact)) { plain -> persistEnvelope(contact, plain, mailboxId, ts) }
         }.getOrElse { return openLegacy(contact, ciphertext, mailboxId, ts, parecíaRatchet = true) }
         return when (recibido) {
             is RatchetSessions.Received.Opened -> {
@@ -1259,7 +1267,12 @@ class ChatService @Inject constructor(
      */
     private suspend fun learnFromRatchet(contact: Contact, wire: ByteArray) {
         val header = Ratchet.Header.decode(wire) ?: return
-        val demostrada = if (header.padded) PADDING_MIN_PROTOCOL else RATCHET_MIN_PROTOCOL
+        val demostrada = when {
+            // Un sobre que abre con los bits v4 demuestra v4: van en el AAD, no se pueden fingir sin S.
+            header.nextV4 || header.epochV4 -> KDF4_MIN_PROTOCOL
+            header.padded -> PADDING_MIN_PROTOCOL
+            else -> RATCHET_MIN_PROTOCOL
+        }
         // Releída: si el propio sobre era un anuncio, ya la ha subido dentro de la transacción.
         val apuntada = contacts.findById(contact.id)?.peerProtocol ?: return
         if (apuntada >= demostrada) return
@@ -1842,7 +1855,7 @@ class ChatService @Inject constructor(
          * clave de llamada** con todos los contactos que anunciaron 2 — una regresión de
          * seguridad por añadir una función. Cada capacidad tiene su propio mínimo.
          */
-        const val PROTOCOL_VERSION = 3
+        const val PROTOCOL_VERSION = 4
 
         /**
          * Mínimo para el **ratchet** y para la **clave de llamada negociada**: las dos llegaron
@@ -1856,6 +1869,12 @@ class ChatService @Inject constructor(
          * del mensaje como si fuera contenido.
          */
         const val PADDING_MIN_PROTOCOL = 3
+
+        /**
+         * Mínimo para el **KDF de raíz v4** y la **época 0 atada a la propuesta** (W-15 y W-16,
+         * auditoría interna del 11 oct 2026). Llegó con la v4.
+         */
+        const val KDF4_MIN_PROTOCOL = 4
 
         /** Tope del reengache de sesiones desincronizadas: uno por contacto cada 5 min. */
         internal const val REHOOK_MIN_INTERVAL_MS = 5 * 60 * 1000L

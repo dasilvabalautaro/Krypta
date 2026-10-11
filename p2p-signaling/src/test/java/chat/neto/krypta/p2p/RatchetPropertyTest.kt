@@ -36,10 +36,20 @@ class RatchetPropertyTest {
      * (para el mensaje de error). Las aserciones viven aquí para que las tres pruebas compartan
      * exactamente las mismas invariantes.
      */
-    private inner class Run(val seed: Long, val allowStateLoss: Boolean) {
+    /** Cómo usa cada extremo el protocolo v4 en una corrida (ver `DISENO-ratchet.md` §1.12). */
+    enum class V4 { OFF, ON, SWITCH }
+
+    private inner class Run(val seed: Long, val allowStateLoss: Boolean, val v4: V4 = V4.OFF) {
         private val rnd = Random(seed)
-        private var a = ratchet.initial(secret, alice, bob, lineage = 1_000L)
-        private var b = ratchet.initial(secret, bob, alice, lineage = 1_000L)
+        // Con SWITCH cada extremo empieza sin saber que el otro es v4 y se entera en un paso al azar,
+        // por separado: es la transición real, con las dos puntas un tiempo en desacuerdo.
+        private var aV4 = v4 == V4.ON
+        private var bV4 = v4 == V4.ON
+        private var a = ratchet.initial(secret, alice, bob, lineage = 1_000L, v4 = aV4)
+        private var b = ratchet.initial(secret, bob, alice, lineage = 1_000L, v4 = bV4)
+
+        /** ¿Las dos sesiones acabaron en una época v4? */
+        fun bothInV4() = a.epochV4 && b.epochV4
         private val inFlight = mutableListOf<Wire>()
         private val delivered = mutableListOf<Wire>()
         private val script = mutableListOf<String>()
@@ -75,8 +85,8 @@ class RatchetPropertyTest {
             // hay que poder repetirlo tal cual.
             val pad = rnd.nextBoolean()
             val sealed =
-                if (fromAlice) ratchet.encrypt(a, text.toByteArray(), pad)
-                else ratchet.encrypt(b, text.toByteArray(), pad)
+                if (fromAlice) ratchet.encrypt(a, text.toByteArray(), pad, aV4)
+                else ratchet.encrypt(b, text.toByteArray(), pad, bV4)
             if (fromAlice) a = sealed.state else b = sealed.state
             script += "$who envía $text${if (pad) " (relleno)" else ""}"
 
@@ -100,7 +110,7 @@ class RatchetPropertyTest {
             val who = if (w.fromAlice) "B" else "A"
             script += "$who recibe ${w.plaintext}"
             try {
-                val res = if (w.fromAlice) ratchet.decrypt(b, secret, w.bytes) else ratchet.decrypt(a, secret, w.bytes)
+                val res = if (w.fromAlice) ratchet.decrypt(b, secret, w.bytes, bV4) else ratchet.decrypt(a, secret, w.bytes, aV4)
                 if (w.fromAlice) b = res.state else a = res.state
                 val got = String(res.plaintext)
                 // Propiedad 1: si abre, abre lo suyo. Un texto ajeno sería lo más grave posible:
@@ -140,7 +150,7 @@ class RatchetPropertyTest {
             val enCadenaViva = h.lineage == receiver.lineage && h.epoch == receiver.epoch
             script += "duplicado de ${w.plaintext}"
             try {
-                val res = if (w.fromAlice) ratchet.decrypt(b, secret, w.bytes) else ratchet.decrypt(a, secret, w.bytes)
+                val res = if (w.fromAlice) ratchet.decrypt(b, secret, w.bytes, bV4) else ratchet.decrypt(a, secret, w.bytes, aV4)
                 if (enCadenaViva) {
                     oops("un duplicado de '${w.plaintext}' se reabrió dentro de la cadena viva (época ${h.epoch}): la clave debía estar gastada")
                 }
@@ -168,16 +178,20 @@ class RatchetPropertyTest {
             stateLosses++
             val lineage = 2_000L + stateLosses * 1_000L
             if (fromAlice) {
-                a = ratchet.initial(secret, alice, bob, lineage)
+                a = ratchet.initial(secret, alice, bob, lineage, v4 = aV4)
                 script += "A pierde el estado (linaje $lineage)"
             } else {
-                b = ratchet.initial(secret, bob, alice, lineage)
+                b = ratchet.initial(secret, bob, alice, lineage, v4 = bV4)
                 script += "B pierde el estado (linaje $lineage)"
             }
         }
 
         fun go(steps: Int) {
             repeat(steps) {
+                if (v4 == V4.SWITCH) {
+                    if (!aV4 && rnd.nextInt(40) == 0) { aV4 = true; script += "A sabe que B es v4" }
+                    if (!bV4 && rnd.nextInt(40) == 0) { bV4 = true; script += "B sabe que A es v4" }
+                }
                 when (rnd.nextInt(if (allowStateLoss) 22 else 20)) {
                     in 0..6 -> send(fromAlice = true)
                     in 7..12 -> send(fromAlice = false)
@@ -216,9 +230,9 @@ class RatchetPropertyTest {
             while (inFlight.isNotEmpty()) deliver()
 
             var legibleDeEntrada = true
-            val fromA = ratchet.encrypt(a, "¿me lees?".toByteArray()); a = fromA.state
+            val fromA = ratchet.encrypt(a, "¿me lees?".toByteArray(), false, aV4); a = fromA.state
             try {
-                val atB = ratchet.decrypt(b, secret, fromA.ciphertext)
+                val atB = ratchet.decrypt(b, secret, fromA.ciphertext, bV4)
                 b = atB.state
                 if (String(atB.plaintext) != "¿me lees?") {
                     oops("mensaje cruzado en la recuperación: se abrió '${String(atB.plaintext)}'")
@@ -230,9 +244,9 @@ class RatchetPropertyTest {
 
             // Habla B. Si B tiene el linaje mayor, esto es lo que reengancha; y si lo tiene A,
             // el mensaje de B se abre igual porque su época 0 es derivable del secreto.
-            val fromB = ratchet.encrypt(b, "te leo".toByteArray()); b = fromB.state
+            val fromB = ratchet.encrypt(b, "te leo".toByteArray(), false, bV4); b = fromB.state
             val atA = try {
-                ratchet.decrypt(a, secret, fromB.ciphertext)
+                ratchet.decrypt(a, secret, fromB.ciphertext, aV4)
             } catch (e: RatchetException) {
                 oops("la conversación quedó rota: A no pudo abrir un mensaje nuevo de B (${e.message})")
             }
@@ -241,9 +255,9 @@ class RatchetPropertyTest {
 
             if (!legibleDeEntrada) {
                 needsPeerTurn++
-                val retry = ratchet.encrypt(a, "otra vez".toByteArray()); a = retry.state
+                val retry = ratchet.encrypt(a, "otra vez".toByteArray(), false, aV4); a = retry.state
                 val atB2 = try {
-                    ratchet.decrypt(b, secret, retry.ciphertext)
+                    ratchet.decrypt(b, secret, retry.ciphertext, bV4)
                 } catch (e: RatchetException) {
                     oops("la conversación quedó rota: ni después de que B hablara se pudo leer a A (${e.message})")
                 }
@@ -288,6 +302,36 @@ class RatchetPropertyTest {
         for (seed in 201L..210L) {
             val run = Run(seed, allowStateLoss = false)
             run.go(steps = 400)
+            run.assertStillAlive()
+        }
+    }
+
+    /** Las mismas invariantes con el protocolo v4 encendido en los dos lados desde el principio. */
+    @Test
+    fun `con v4 nada se abre como otro mensaje, nada se repite y todas las epocas son v4`() {
+        for (seed in 301L..340L) {
+            val run = Run(seed, allowStateLoss = false, v4 = V4.ON)
+            run.go(steps = 120)
+            run.assertStillAlive()
+            assertTrue("semilla $seed: con v4 en los dos lados toda época es v4", run.bothInV4())
+        }
+        for (seed in 341L..360L) {
+            val run = Run(seed, allowStateLoss = true, v4 = V4.ON)
+            run.go(steps = 120)
+            run.assertStillAlive()
+        }
+    }
+
+    /**
+     * La transición: cada extremo se entera por su lado, en un paso al azar, de que el otro es v4.
+     * Es donde puede romperse la regla de «v4 si las dos propuestas lo son», si alguna vez los dos
+     * evaluaran cosas distintas.
+     */
+    @Test
+    fun `pasar de v3 a v4 a mitad de conversacion no rompe nada`() {
+        for (seed in 401L..460L) {
+            val run = Run(seed, allowStateLoss = seed % 2 == 0L, v4 = V4.SWITCH)
+            run.go(steps = 160)
             run.assertStillAlive()
         }
     }

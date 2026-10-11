@@ -417,6 +417,64 @@ toca a este diseño:
   decisión de no tocarla antes de la revisión externa sigue en pie. Lo fija `RatchetTest` y va como
   pregunta a la revisión.
 
+### 1.12 Protocolo v4: raíz separada de las cadenas y época 0 con frescura (11 oct 2026)
+
+La [auditoría interna](AUDITORIA-interna-2026-10-11.md) del 11 oct 2026 encontró dos fallos en
+§1.1–§1.4, y los dos se arreglan cambiando derivaciones, no la forma del ratchet:
+
+- **W-15 (A-01).** `RK(e)` se guarda, y `CK(e, d) = HKDF(RK(e), "chain:e:d")` sale de ella desde
+  N = 0. Quien se lleve el estado rederiva la época en curso entera. En el doble ratchet de Signal la
+  raíz nueva y la cadena son **salidas independientes** del KDF de raíz, y la raíz no lleva a la
+  cadena.
+- **W-16 (A-02).** La época 0 depende solo de `S`, del linaje y de la dirección. Dos sesiones con el
+  mismo linaje repiten clave y nonce.
+
+**Derivaciones v4.**
+
+```
+época e ≥ 1:   RK(e) ‖ CK(e,0) ‖ CK(e,1) = HKDF(dh, salt = RK(e−1), "krypta-rtc-root4:" ‖ e, 96)
+época 0:       RK(L,0) igual que en v3 (derivable de S, sin PFS a propósito)
+               CK(L,0,d) = HKDF(RK(L,0), ∅, "krypta-rtc-chain4:0:" ‖ d ‖ ":" ‖ P_d, 32)
+```
+
+`P_d` es la **propuesta efímera de quien escribe en el sentido `d`**, la `next_pub` que ya viaja en
+la cabecera de cada sobre de la época 0. Se sortea nueva al crear cada sesión, así que dos sesiones
+con el mismo linaje dejan de compartir cadena. HKDF-Expand encadena sus bloques con la PRK, que no
+se guarda, así que conocer `RK(e)` no da `CK(e, ·)`.
+
+**Cómo entra sin romper a nadie.** Dos bits nuevos de flags, que van en la cabecera y, por tanto, en
+el AAD:
+
+| Bit | Nombre | Significa |
+|---|---|---|
+| 1 | `FLAG_NEXT_V4` | La `next_pub` de este sobre es una propuesta v4 |
+| 2 | `FLAG_EPOCH_V4` | La época de este sobre usa derivaciones v4 |
+
+- La época `e+1` usa el KDF v4 **si y solo si las dos propuestas que la forman son v4**. Los dos
+  extremos evalúan la misma condición sobre los mismos datos, igual que el propio avance.
+- Mi propuesta es v4 si, cuando la sorteé, el contacto constaba como ≥ 4 (`KDF4_MIN_PROTOCOL`). La
+  suya la marca su `FLAG_NEXT_V4`.
+- Quien entra en una época por la cabecera (`H.e = e+1`, sin haber visto la propuesta) usa el
+  `FLAG_EPOCH_V4` del sobre.
+- En la época 0, el emisor ata su cadena a su propuesta si el contacto consta como ≥ 4, y lo marca
+  con `FLAG_EPOCH_V4`. El receptor la deriva con la `next_pub` de la cabecera.
+- Una época 0 que llega con otra propuesta en el mismo linaje (el caso de W-16 visto desde el
+  receptor) se abre derivándola aparte. Las huellas de la época 0 no se podan (base v10), así que
+  reproducirla no la vuelve a abrir.
+- A un cliente v3 nunca se le ponen estos bits: los ignora al recibir y derivaría mal. De ahí el
+  umbral propio, por la regla del 11 sep: **una versión nueva no es el umbral de nada**.
+
+**Consecuencias.**
+
+- Las sesiones en curso no migran nada: pasan solas a v4 en el siguiente avance en que las dos
+  propuestas lo sean.
+- `RatchetState` pasa al formato 2 (los flags de las propuestas y de la época, y la propuesta a la
+  que está atada la recepción de la época 0). El formato 1 se sigue leyendo. Un cliente anterior que
+  encuentre un blob de formato 2 lo trata como ilegible y reengancha, que es el camino ya previsto.
+- **Lo que no arregla**: el linaje forjado (W-4), la autenticación a nivel de `S` (W-3) ni la época
+  0, que sigue sin PFS. Una sesión creada antes de saber que el otro es v4 deja su época 0 sin atar
+  hasta el primer avance.
+
 ## 2. Por qué no el doble ratchet tal cual
 
 Merece la pena dejar escrito el callejón, porque el diseño de arriba es una desviación y las

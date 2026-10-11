@@ -52,9 +52,10 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
         myPeerId: String,
         theirPeerId: String,
         lineage: Long = System.currentTimeMillis(),
+        v4: Boolean = false,
     ): RatchetState {
         val sendDir = directionOf(sender = myPeerId, recipient = theirPeerId)
-        return epochZero(sharedSecret, lineage, sendDir, past = emptyList(), skipped = emptyList())
+        return epochZero(sharedSecret, lineage, sendDir, past = emptyList(), skipped = emptyList(), v4 = v4)
     }
 
     /**
@@ -64,8 +65,14 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
      * marca. Es un parámetro y no una decisión de aquí porque depende del contacto: solo se le
      * rellena a quien haya anunciado que sabe quitarlo (ver `ChatService.PADDING_MIN_PROTOCOL`).
      */
-    fun encrypt(state: RatchetState, plaintext: ByteArray, pad: Boolean = false): Sealed {
-        val st = maybeAdvance(state)
+    fun encrypt(state: RatchetState, plaintext: ByteArray, pad: Boolean = false, v4: Boolean = false): Sealed {
+        var st = maybeAdvance(state, v4)
+        // Sesión nacida antes de saber que el otro es v4: si aún no ha enviado nada en la época 0,
+        // su cadena de envío se ata ya a su propuesta (W-16). Con algo enviado no se puede: el
+        // otro ya derivó la cadena sin atar.
+        if (v4 && st.epoch == 0 && st.sendN == 0 && !st.epochV4) {
+            st = st.copy(sendChain = chainKeyZeroV4(st.rootKey, st.sendDir, st.nextPub), epochV4 = true)
+        }
         val header = Header(
             lineage = st.lineage,
             epoch = st.epoch,
@@ -73,7 +80,9 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
             pn = st.sendPN,
             curPub = st.myCurPub,
             nextPub = st.nextPub,
-            flags = if (pad) FLAG_PADDED else 0,
+            flags = (if (pad) FLAG_PADDED else 0) or
+                (if (st.nextV4) FLAG_NEXT_V4 else 0) or
+                (if (st.epochV4) FLAG_EPOCH_V4 else 0),
         ).encode()
         val mk = messageKey(st.sendChain)
         val body = seal(mk, header, if (pad) Padding.pad(plaintext) else plaintext)
@@ -89,7 +98,7 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
      * que una cabecera forjada (linaje altísimo, época futura) no pueda mover nada: sin el
      * secreto compartido no hay forma de que el AEAD valide.
      */
-    fun decrypt(state: RatchetState, sharedSecret: ByteArray, wire: ByteArray): Opened {
+    fun decrypt(state: RatchetState, sharedSecret: ByteArray, wire: ByteArray, v4: Boolean = false): Opened {
         val header = Header.decode(wire) ?: throw RatchetException("cabecera de ratchet ilegible")
         val body = wire.copyOfRange(HEADER_BYTES, wire.size)
         val aad = wire.copyOfRange(0, HEADER_BYTES)
@@ -103,67 +112,115 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
         // Lo encontró la prueba de propiedades (semilla 102). El precio es que, al añadirse dos
         // contactos, quien recibe primero se queda en su linaje y su primer mensaje sale en la
         // época 0 hasta que el otro responde (ver §1.8.4 del diseño).
-        if (header.lineage > st.lineage) st = reset(st, sharedSecret, header.lineage)
+        if (header.lineage > st.lineage) st = reset(st, sharedSecret, header.lineage, v4)
         // Va una época por delante: su pública de esa época viene en la cabecera, y mi privada
         // para ella es la propuesta que aún no he consumido. Como mucho puede ir una, porque
         // para avanzar necesita una propuesta mía que solo hago al entrar en la época anterior.
         if (header.lineage == st.lineage && header.epoch == st.epoch + 1) {
-            st = advance(st, header.curPub)
+            // Su `FLAG_EPOCH_V4` dice qué KDF eligió para esa época: el v4 solo si las dos
+            // propuestas lo eran, y la mía la conozco. Si el bit mintiera, el AEAD no validaría.
+            st = advance(st, header.curPub, peerPubV4 = header.epochV4, v4 = v4)
         }
 
         if (header.lineage != st.lineage || header.epoch != st.epoch) {
             return openOld(st, sharedSecret, header, aad, body)
         }
 
+        if (st.epoch == 0) {
+            // Época 0 v4: la cadena del otro va atada a su propuesta (W-16). Se ata con el primer
+            // sobre que lo diga; uno de otra propuesta en el mismo linaje es otra sesión del otro
+            // (la colisión de W-16 vista desde aquí) y se abre aparte, sin tocar el estado.
+            val wanted = if (header.epochV4) header.nextPub else null
+            if (!sameBound(st.recvBound, wanted)) {
+                if (st.recvBound == null && st.recvN == 0 && wanted != null) {
+                    st = st.copy(recvChain = chainKeyZeroV4(st.rootKey, 1 - st.sendDir, wanted), recvBound = wanted)
+                } else {
+                    return openDetachedZero(st, header, aad, body, wanted)
+                }
+            }
+        }
+
         val (advanced, mk) = takeReceiveKey(st, header)
         val plaintext = unpad(header, open(mk, aad, body))
         // Solo después de que el AEAD haya validado se apunta su propuesta y se avanza.
-        return Opened(maybeAdvance(advanced.copy(peerNextPub = header.nextPub)), plaintext)
+        return Opened(
+            maybeAdvance(advanced.copy(peerNextPub = header.nextPub, peerNextV4 = header.nextV4), v4),
+            plaintext,
+        )
     }
 
     // --- épocas -------------------------------------------------------------------------
 
     /** Con las dos públicas de la época siguiente, se pasa a ella. Si no, el estado tal cual. */
-    private fun maybeAdvance(st: RatchetState): RatchetState =
-        st.peerNextPub?.let { advance(st, it) } ?: st
+    private fun maybeAdvance(st: RatchetState, v4: Boolean): RatchetState =
+        st.peerNextPub?.let { advance(st, it, peerPubV4 = st.peerNextV4, v4 = v4) } ?: st
 
     /**
      * Entra en la época `epoch + 1` con la pública [peerPub] del otro. La privada propia se
      * consume aquí y **no se guarda**: es lo único que impide reconstruir esta época mañana.
      */
-    private fun advance(st: RatchetState, peerPub: ByteArray): RatchetState {
+    private fun advance(st: RatchetState, peerPub: ByteArray, peerPubV4: Boolean, v4: Boolean): RatchetState {
         val dh = runCatching { curve.agree(st.nextPriv, peerPub) }
             .getOrElse { throw RatchetException("clave pública de época inválida: ${it.message}") }
         // Punto de orden bajo: el acuerdo sale todo ceros y la época entera sería pública.
         if (dh.all { it == ZERO_BYTE }) throw RatchetException("clave pública de época degenerada")
         val epoch = st.epoch + 1
-        val root = Hkdf.derive(ikm = dh, salt = st.rootKey, info = info("root:$epoch"), length = KEY_BYTES)
+        // v4 solo si las dos propuestas que forman la época lo son: los dos lados evalúan lo mismo.
+        val epochV4 = st.nextV4 && peerPubV4
+        val root: ByteArray
+        val sendChain: ByteArray
+        val recvChain: ByteArray
+        if (epochV4) {
+            // W-15: raíz y cadenas como salidas independientes de un solo HKDF. HKDF-Expand
+            // encadena sus bloques con la PRK, que no se guarda, así que la raíz no lleva a ellas.
+            val out = Hkdf.derive(ikm = dh, salt = st.rootKey, info = info("root4:$epoch"), length = 3 * KEY_BYTES)
+            root = out.copyOfRange(0, KEY_BYTES)
+            val c0 = out.copyOfRange(KEY_BYTES, 2 * KEY_BYTES)
+            val c1 = out.copyOfRange(2 * KEY_BYTES, 3 * KEY_BYTES)
+            sendChain = if (st.sendDir == 0) c0 else c1
+            recvChain = if (st.sendDir == 0) c1 else c0
+        } else {
+            root = Hkdf.derive(ikm = dh, salt = st.rootKey, info = info("root:$epoch"), length = KEY_BYTES)
+            sendChain = chainKey(root, epoch, st.sendDir)
+            recvChain = chainKey(root, epoch, 1 - st.sendDir)
+        }
         val fresh = curve.generateKeyPair()
         return st.copy(
             epoch = epoch,
             rootKey = root,
-            sendChain = chainKey(root, epoch, st.sendDir),
+            sendChain = sendChain,
             sendN = 0,
             sendPN = st.sendN,
-            recvChain = chainKey(root, epoch, 1 - st.sendDir),
+            recvChain = recvChain,
             recvN = 0,
             myCurPub = st.nextPub,
             nextPriv = fresh.privateKey,
             nextPub = fresh.publicKey,
             peerNextPub = null,
-            past = retire(st.past, st.lineage, st.epoch, st.recvChain, st.recvN),
+            past = retire(st.past, st.lineage, st.epoch, st.recvChain, st.recvN, boundOf(st)),
+            nextV4 = v4,
+            epochV4 = epochV4,
+            peerNextV4 = false,
+            recvBound = null,
         )
     }
 
     /** Vuelve a la época 0 de un linaje nuevo, conservando lo que pueda seguir en vuelo. */
-    private fun reset(st: RatchetState, sharedSecret: ByteArray, lineage: Long): RatchetState =
+    private fun reset(st: RatchetState, sharedSecret: ByteArray, lineage: Long, v4: Boolean): RatchetState =
         epochZero(
             sharedSecret,
             lineage,
             st.sendDir,
-            past = retire(st.past, st.lineage, st.epoch, st.recvChain, st.recvN),
+            past = retire(st.past, st.lineage, st.epoch, st.recvChain, st.recvN, boundOf(st)),
             skipped = st.skipped,
+            v4 = v4,
         )
+
+    /** La propuesta a la que está atada la recepción actual (solo existe en la época 0 v4). */
+    private fun boundOf(st: RatchetState): ByteArray? = if (st.epoch == 0) st.recvBound else null
+
+    private fun sameBound(a: ByteArray?, b: ByteArray?): Boolean =
+        if (a == null) b == null else b != null && a.contentEquals(b)
 
     private fun epochZero(
         sharedSecret: ByteArray,
@@ -171,6 +228,7 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
         sendDir: Int,
         past: List<RatchetState.PastChain>,
         skipped: List<RatchetState.SkippedKey>,
+        v4: Boolean,
     ): RatchetState {
         // El linaje entra en la derivación: si no, dos linajes distintos compartirían las claves
         // de la época 0 y sus contadores N chocarían — la misma clave dos veces.
@@ -184,7 +242,9 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
             epoch = 0,
             sendDir = sendDir,
             rootKey = root,
-            sendChain = chainKey(root, 0, sendDir),
+            // v4: atada a mi propuesta, que es nueva en cada sesión (W-16). La de recepción no se
+            // puede atar aún: depende de la propuesta del otro, que llega con su primer sobre.
+            sendChain = if (v4) chainKeyZeroV4(root, sendDir, fresh.publicKey) else chainKey(root, 0, sendDir),
             sendN = 0,
             sendPN = 0,
             recvChain = chainKey(root, 0, 1 - sendDir),
@@ -195,6 +255,8 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
             peerNextPub = null,
             past = past,
             skipped = skipped,
+            nextV4 = v4,
+            epochV4 = v4,
         )
     }
 
@@ -204,8 +266,9 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
         epoch: Int,
         chainKey: ByteArray,
         n: Int,
+        bound: ByteArray?,
     ): List<RatchetState.PastChain> =
-        (past + RatchetState.PastChain(lineage, epoch, chainKey, n)).takeLast(MAX_PAST_CHAINS)
+        (past + RatchetState.PastChain(lineage, epoch, chainKey, n, bound)).takeLast(MAX_PAST_CHAINS)
 
     // --- claves de mensaje --------------------------------------------------------------
 
@@ -244,7 +307,11 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
             return Opened(dropped, unpad(header, open(mk, aad, body)))
         }
 
-        val chain = st.past.firstOrNull { it.lineage == header.lineage && it.epoch == header.epoch }
+        // En la época 0 v4 la cadena va atada a la propuesta del emisor: hay que buscar la suya.
+        val wanted = if (header.epoch == 0 && header.epochV4) header.nextPub else null
+        val chain = st.past.firstOrNull {
+            it.lineage == header.lineage && it.epoch == header.epoch && (header.epoch != 0 || sameBound(it.bound, wanted))
+        }
         // La época 0 de cualquier linaje es derivable del secreto compartido, así que un mensaje
         // de un linaje anterior (el otro aún no ha adoptado el nuestro) siempre se puede abrir.
         // Más allá de la 0 no: para llegar ahí el otro necesitó una propuesta nuestra, o sea que
@@ -254,7 +321,8 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
                 ikm = sharedSecret, salt = ByteArray(0),
                 info = info("root:0:${header.lineage}"), length = KEY_BYTES,
             )
-            RatchetState.PastChain(header.lineage, 0, chainKey(root, 0, 1 - st.sendDir), 0)
+            val ck = if (wanted != null) chainKeyZeroV4(root, 1 - st.sendDir, wanted) else chainKey(root, 0, 1 - st.sendDir)
+            RatchetState.PastChain(header.lineage, 0, ck, 0, wanted)
         } else {
             throw RatchetException("época ${header.epoch} del linaje ${header.lineage} ya no está")
         }
@@ -270,15 +338,34 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
         }
         val mk = messageKey(ck)
         val plaintext = unpad(header, open(mk, aad, body))
-        val updated = RatchetState.PastChain(header.lineage, header.epoch, nextChainKey(ck), header.n + 1)
+        val updated = RatchetState.PastChain(header.lineage, header.epoch, nextChainKey(ck), header.n + 1, resolved.bound)
         return Opened(
             st.copy(
-                past = (st.past.filterNot { it.lineage == header.lineage && it.epoch == header.epoch } + updated)
+                past = (st.past.filterNot { it.lineage == resolved.lineage && it.epoch == resolved.epoch && sameBound(it.bound, resolved.bound) } + updated)
                     .takeLast(MAX_PAST_CHAINS),
                 skipped = skippedKeys.takeLast(MAX_SKIPPED_KEYS),
             ),
             plaintext,
         )
+    }
+
+    /**
+     * Sobre de la época 0 del linaje vigente pero de **otra** sesión del emisor (otra propuesta, o
+     * sin atar cuando la nuestra ya lo está): solo pasa si el otro repitió un linaje (W-16). Se abre
+     * derivando su cadena desde el principio y **sin tocar el estado**; reproducirlo no lo vuelve a
+     * abrir porque las huellas de la época 0 no se podan (base v10).
+     */
+    private fun openDetachedZero(
+        st: RatchetState,
+        header: Header,
+        aad: ByteArray,
+        body: ByteArray,
+        bound: ByteArray?,
+    ): Opened {
+        if (header.n > MAX_SKIP) throw RatchetException("hueco de ${header.n} mensajes: por encima del tope")
+        var ck = if (bound != null) chainKeyZeroV4(st.rootKey, 1 - st.sendDir, bound) else chainKey(st.rootKey, 0, 1 - st.sendDir)
+        repeat(header.n) { ck = nextChainKey(ck) }
+        return Opened(st, unpad(header, open(messageKey(ck), aad, body)))
     }
 
     private fun takeSkipped(st: RatchetState, lineage: Long, epoch: Int, n: Int): Pair<RatchetState, ByteArray> {
@@ -331,6 +418,10 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
     private fun chainKey(root: ByteArray, epoch: Int, dir: Int): ByteArray =
         Hkdf.derive(ikm = root, salt = ByteArray(0), info = info("chain:$epoch:$dir"), length = KEY_BYTES)
 
+    /** Cadena de la época 0 en v4: atada a la propuesta efímera [proposal] de quien escribe en [dir]. */
+    private fun chainKeyZeroV4(root: ByteArray, dir: Int, proposal: ByteArray): ByteArray =
+        Hkdf.derive(ikm = root, salt = ByteArray(0), info = info("chain4:0:$dir:") + proposal, length = KEY_BYTES)
+
     private fun messageKey(chainKey: ByteArray): ByteArray = hmac(chainKey, MESSAGE_KEY_SEED)
 
     private fun nextChainKey(chainKey: ByteArray): ByteArray = hmac(chainKey, CHAIN_KEY_SEED)
@@ -357,6 +448,12 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
     ) {
         /** ¿El texto en claro va relleno por tramos? (bit 0 de los flags, ver [Padding]). */
         val padded: Boolean get() = flags and FLAG_PADDED != 0
+
+        /** ¿La `next_pub` de este sobre es una propuesta v4? (bit 1). */
+        val nextV4: Boolean get() = flags and FLAG_NEXT_V4 != 0
+
+        /** ¿La época de este sobre usa derivaciones v4? (bit 2). */
+        val epochV4: Boolean get() = flags and FLAG_EPOCH_V4 != 0
 
         fun encode(): ByteArray {
             val out = ByteArray(HEADER_BYTES)
@@ -437,6 +534,15 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
          * autenticado sin costar un byte más.
          */
         const val FLAG_PADDED = 0x01
+
+        /**
+         * Bits 1 y 2 (protocolo v4, [docs/DISENO-ratchet.md] §1.12): la propuesta de este sobre es
+         * v4, y la época de este sobre usa derivaciones v4. Van en el AAD, como el del relleno, así
+         * que nadie sin la clave puede cambiarlos. **Nunca se ponen hacia un cliente v3**: los
+         * ignoraría al recibir y derivaría con el KDF viejo.
+         */
+        const val FLAG_NEXT_V4 = 0x02
+        const val FLAG_EPOCH_V4 = 0x04
 
         /** Tope de claves derivadas de golpe para cubrir un hueco (anti-abuso, §1.5). */
         const val MAX_SKIP = 1000

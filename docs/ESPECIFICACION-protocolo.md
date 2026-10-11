@@ -1,7 +1,7 @@
 # Especificación del protocolo de Krypta
 
 **Qué es.** La descripción **normativa** de lo que hace el código de Krypta en `main` a fecha
-**11 de octubre de 2026** (protocolo anunciado: **v3**; formato sin cambios desde el 15 sep), escrita para que alguien de fuera pueda
+**11 de octubre de 2026** (protocolo anunciado: **v4**, §5.10; el último commit con el formato v3 lleva la etiqueta `protocolo-v3`), escrita para que alguien de fuera pueda
 revisarlo sin leerse las 1600 líneas de `ChatService`. Los `DISENO-*.md` cuentan **por qué** se
 decidió cada cosa; este documento cuenta **qué** hace: los bytes, las derivaciones y las reglas.
 **Si este documento y el código discrepan, manda el código y el documento está mal**: se corrige
@@ -144,8 +144,10 @@ doble ratchet de Signal está en [DISENO-ratchet.md](DISENO-ratchet.md) §2.
 | `peerNextPub` | La propuesta del otro para `e+1`, si ha llegado |
 | `past` | Hasta 3 cadenas de recepción retiradas: `(L, e, clave de cadena, n)` |
 | `skipped` | Hasta 2000 claves de mensajes saltados: `(L, e, N, mk)` |
+| `nextV4`, `epochV4`, `peerNextV4` | v4 (§5.10): mi propuesta es v4; la época actual usa derivaciones v4; la propuesta del otro es v4 |
+| `recvBound` | v4, época 0: la propuesta del otro a la que está atada `recvChain` (null = sin atar). Cada cadena de `past` lleva también la suya |
 
-Se serializa (`RatchetState.encode`, formato 1) y se guarda como blob opaco en la base cifrada.
+Se serializa (`RatchetState.encode`, formato 2 desde el v4; el 1 se sigue leyendo) y se guarda como blob opaco en la base cifrada.
 Dentro va `nextPriv`; lo que **no** va es `S`, que se deriva cuando hace falta.
 
 ### 5.2 Derivaciones
@@ -166,7 +168,9 @@ veces (P3).
 
 ```
 0        versión = 0x02
-1        flags        bit 0 = relleno (§6); los demás, reservados e ignorados al recibir
+1        flags        bit 0 = relleno (§6); bit 1 = next_pub es una propuesta v4; bit 2 = la
+                      época de este sobre usa derivaciones v4 (§5.10); los demás, reservados e
+                      ignorados al recibir
 2..9     L            u64 (se lee como Long con signo; no se valida su valor, ver W-4)
 10..13   e            u32 (se lee como Int con signo; negativo = cabecera rechazada)
 14..17   N            ídem
@@ -240,6 +244,9 @@ abrirViejo(st, S, H, wire):
 `reset(st, S, L')` vuelve a la época 0 del linaje `L'` con un par efímero nuevo, retirando la
 cadena de recepción actual a `past` y conservando `skipped`.
 
+Lo anterior es el ratchet **v3**, que se sigue usando con los contactos que no han anunciado la v4.
+Lo que cambia con la v4 está en §5.10.
+
 ### 5.7 Reglas del linaje
 
 - Una sesión nace con `L = System.currentTimeMillis()`: al primer uso, al añadir el contacto o
@@ -292,6 +299,48 @@ receive(C, wire, persistir):
 - **Estado ilegible** → sesión nueva en la época 0 con `L` = ahora (la conversación se reengancha
   sola). **Borrar el contacto** olvida la sesión; **vaciar el chat** no.
 
+### 5.10 Protocolo v4: raíz separada y época 0 atada (desde el 11 oct 2026)
+
+Cierra W-15 y W-16 con los contactos que anuncian ≥ 4. El diseño y sus porqués, en
+[DISENO-ratchet.md](DISENO-ratchet.md) §1.12.
+
+**Derivaciones v4.**
+
+```
+época e ≥ 1:  RK(e) ‖ CK(e,0) ‖ CK(e,1) = HKDF(dh, RK(e−1), "krypta-rtc-root4:" ‖ e, 96)
+época 0:      RK(L, 0) como en v3
+              CK(L, 0, d) = HKDF(RK(L, 0), ∅, "krypta-rtc-chain4:0:" ‖ d ‖ ":" ‖ P_d, 32)
+```
+
+`P_d` son los 32 bytes de la propuesta efímera de quien escribe en el sentido `d` (su `next_pub`,
+que viaja en cada cabecera de la época 0). `mk`, `CK_{N+1}`, clave y nonce, igual que en v3.
+
+**Cuándo se usa.**
+
+- `v4(C)` = el contacto consta como ≥ 4 (`KDF4_MIN_PROTOCOL`). Decide dos cosas: si una propuesta
+  nueva se marca como v4 (`nextV4`, que **no cambia** después) y si una sesión nueva ata su cadena
+  de envío de la época 0 (`epochV4`). Una sesión creada sin v4 la ata en su primer envío si aún no
+  ha enviado nada.
+- Cabecera: bit 1 = `st.nextV4`; bit 2 = `st.epochV4`.
+- **Avanzar a `e+1`**: v4 si y solo si las dos propuestas que forman la época son v4. Por
+  `maybeAdvance`, la del otro es `peerNextV4`, apuntada con el bit 1 de la cabecera que la trajo. Al
+  entrar por la cabecera (`H.e = st.e + 1`), se usa su bit 2.
+- **Recibir en la época 0 del linaje vigente**: si el bit 2 está puesto, la cadena del otro va atada
+  a `H.next_pub`.
+  - Si `recvBound` es esa propuesta, se sigue normal.
+  - Si no hay nada atado y aún no se ha recibido nada, se ata.
+  - Si no, es **otra sesión del otro con el mismo linaje** (W-16 vista desde aquí): se abre
+    derivando esa cadena desde N = 0, hasta `MAX_SKIP`, **sin tocar el estado**.
+
+  Lo mismo al revés: un sobre sin el bit 2 cuando la recepción ya está atada.
+- **`abrirViejo` en la época 0**: busca en `past` la cadena con la misma propuesta atada, o la
+  deriva con `H.next_pub` si el bit 2 está puesto.
+- A un contacto que no consta como ≥ 4 **nunca** se le ponen los bits 1 y 2: un cliente v3 los
+  ignoraría y derivaría con el KDF viejo.
+
+**Lo que no cambia**: la forma de la cabecera (86 bytes), el linaje (W-4, W-6), la autenticación a
+nivel de `S` (W-3) y que la época 0 no tenga secreto hacia adelante (W-1).
+
 ---
 
 ## 6. Relleno por tramos (v3)
@@ -311,7 +360,7 @@ Solo existe en v2 (el bit va en la cabecera, que es AAD). Se aplica a quien anun
 
 ### 7.1 Versiones y umbrales
 
-`PROTOCOL_VERSION = 3` es **lo que se anuncia**, no el umbral de nada. Cada capacidad tiene el suyo:
+`PROTOCOL_VERSION = 4` es **lo que se anuncia**, no el umbral de nada. Cada capacidad tiene el suyo:
 
 | Capacidad | Mínimo del contacto | Constante |
 |---|---|---|
@@ -319,6 +368,7 @@ Solo existe en v2 (el bit va en la cabecera, que es AAD). Se aplica a quien anun
 | Clave de llamada negociada | 2 | `RATCHET_MIN_PROTOCOL` |
 | Depósito ciego | 2 | `BLIND_MIN_PROTOCOL` |
 | Relleno | 3 | `PADDING_MIN_PROTOCOL` |
+| KDF de raíz v4 y época 0 atada (§5.10) | 4 | `KDF4_MIN_PROTOCOL` |
 
 Hay dos interruptores globales de emergencia, `RATCHET_SEND` y `BLIND_DEPOSIT`: puestos a `false`,
 devuelven todo al camino v1.
@@ -345,8 +395,8 @@ anuncio `V` de §7.6, que va por v1 a propósito.
 ### 7.4 Anunciar
 
 En cada ciclo WAN, a cada contacto no bloqueado con `announcedProtocol < PROTOCOL_VERSION`:
-`sellar(C, "V\n3\n" ‖ C.peerProtocol)`. Solo si sale (directo o buzón) se marca
-`announcedProtocol = 3`.
+`sellar(C, "V\n4\n" ‖ C.peerProtocol)`. Solo si sale (directo o buzón) se marca
+`announcedProtocol = 4`.
 
 ### 7.5 Recibir y elegir versión
 
@@ -356,7 +406,7 @@ alRecibir(C, wire):
     si parece v2: intentar RatchetSessions.receive; si falla → intentar v1 (marcando "parecía v2")
     si no: intentar v1
     si nada abre: descartar con línea de diagnóstico; si "parecía v2" → reengache (§7.6)
-    si abrió por v2: C.peerProtocol ← máx(C.peerProtocol, relleno ? 3 : 2)     -- lo demostrado
+    si abrió por v2: C.peerProtocol ← máx(C.peerProtocol, bits v4 ? 4 : relleno ? 3 : 2)  -- lo demostrado
 ```
 
 La cabecera de un sobre v2 que abre está autenticada (es el AAD), así que lo que demuestra no se
@@ -368,14 +418,14 @@ puede fingir sin `S`.
 alRecibirV(C, versión, apuntada):
     si versión > C.peerProtocol: C.peerProtocol ← versión
     si versión < C.peerProtocol: ignorar (la versión no baja)
-    si apuntada ≠ null ∧ apuntada < 3 ∧ C.announcedProtocol ≥ 3:
-        lanzar V("3", C.peerProtocol) por v1                  -- lo perdió: repetírselo
+    si apuntada ≠ null ∧ apuntada < 4 ∧ C.announcedProtocol ≥ 4:
+        lanzar V("4", C.peerProtocol) por v1                  -- lo perdió: repetírselo
     si no, si C.peerProtocol cruzó de < 2 a ≥ 2 ∧ usaRatchet(C):
-        lanzar V("3", C.peerProtocol) por sellar              -- que adopte nuestro linaje
+        lanzar V("4", C.peerProtocol) por sellar              -- que adopte nuestro linaje
 
 reengache(C):          -- un sobre que parecía v2 no abrió por ninguna vía
     si usaRatchet(C):              lanzar V por sellar (lleva nuestro linaje)
-    si C.peerProtocol < 2:         lanzar V("3", C.peerProtocol) por v1
+    si C.peerProtocol < 2:         lanzar V("4", C.peerProtocol) por v1
 ```
 
 Todo lo «lanzado» sale fuera del camino de recepción, que es síncrono con la confirmación del
@@ -484,8 +534,8 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 |---|---|---|---|---|
 | **P1** | Confidencialidad del contenido | A1, A2 | Probada | `RatchetTest`, `AesGcmMessageCipherTest`, `RatchetPropertyTest` («nada se abre como otro mensaje») |
 | **P2** | Integridad del sobre y de la cabecera frente a quien no tiene `S` | A1, A2 | Probada | `RatchetTest` (cabecera forjada), `RatchetPaddingTest` (bit de relleno), `ParserFuzzTest` |
-| **P3** | Ninguna terna `(L, e, N)` se repite en un mismo emisor, y por tanto ninguna clave ni nonce | — | Probada, **condicionada**: a que ningún linaje se repita (W-16) y a que el estado no retroceda a una copia anterior (exige root). Si falla, es reutilización de nonce de AES-GCM | `RatchetPropertyTest` (secuencial), `RatchetSessionsTest` (concurrente, desde el 14 sep 2026); el contraejemplo, en `RatchetCompromisoTest` |
-| **P4** | Secreto hacia adelante para mensajes de época ≥ 1: comprometer identidad y estado en *t* no abre lo entregado antes de *t* | A5 | Afirmada, **con excepciones**: la época 0 (W-1), **la época vigente del dispositivo comprometido** (W-15, en arreglo) y las claves saltadas y cadenas retiradas que sigan guardadas en *t*. «No se guarda» quiere decir que no está en el estado lógico; el borrado físico (memoria, páginas libres de la base) no se garantiza | `RatchetCompromisoTest` fija W-15; el compromiso en *t* en general es la primera cosa que debe cubrir el modelo formal |
+| **P3** | Ninguna terna `(L, e, N)` se repite en un mismo emisor, y por tanto ninguna clave ni nonce | — | Probada, **condicionada**: a que ningún linaje se repita con un contacto v3 (W-16; en v4 la época 0 va atada a una propuesta nueva) y a que el estado no retroceda a una copia anterior (exige root). Si falla, es reutilización de nonce de AES-GCM | `RatchetPropertyTest` (secuencial), `RatchetSessionsTest` (concurrente, desde el 14 sep 2026); el contraejemplo, en `RatchetCompromisoTest` |
+| **P4** | Secreto hacia adelante para mensajes de época ≥ 1: comprometer identidad y estado en *t* no abre lo entregado antes de *t* | A5 | Afirmada, **con excepciones**: la época 0 (W-1), **la época vigente del dispositivo comprometido con un contacto que aún va por v3** (W-15; cerrada en v4) y las claves saltadas y cadenas retiradas que sigan guardadas en *t*. «No se guarda» quiere decir que no está en el estado lógico; el borrado físico (memoria, páginas libres de la base) no se garantiza | `RatchetCompromisoTest` fija W-15 en v3 y comprueba que v4 la cierra; el compromiso en *t* en general es la primera cosa que debe cubrir el modelo formal |
 | **P5** | Recuperación tras un compromiso frente a un atacante **pasivo**: tras una ronda de DH que no ha visto, vuelve a no leer | A5 pasivo | Afirmada, no probada. Exige privadas efímeras nuevas, que el atacante no conozca, **en los dos lados** | Ídem |
 | **P6** | Recuperación tras un compromiso frente a un atacante **activo** | A4, A5 activos | **No se cumple** | W-3, W-4 (`RatchetTest`: «un linaje forjado secuestra la sesión») |
 | **P7** | Un sobre genuino se entrega como mucho una vez **dentro de la ventana de deduplicación** (8 días ∪ 500); fuera de ella, la época 0 se puede reproducir (W-2) | A1 | Probada | `RatchetSessionsTest`, `RatchetSeenPruneSqlTest`, `ChatServiceTest` |
@@ -517,8 +567,8 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 | **W-11** | El `.krbk` solo lo protege la frase (PBKDF2, 310 000 iteraciones): quien lo obtenga puede probar frases sin límite, y acertar es A4 | A4 | security-model §7 |
 | **W-12** | La misma semilla Ed25519 sirve para firmar (Noise de libp2p) y, convertida, para X25519 | — | Pregunta para la revisión |
 | **W-13** | Metadatos: el nodo ve el grafo de parejas del día (DHT), la presencia (wake) y quién habla con quién en vivo (relay); y, por identify, qué protocolos admite cada teléfono | A1 | security-model §5 y §6 |
-| **W-15** | **La raíz guardada reabre la época vigente.** `RK(e)` se guarda en el estado y las dos cadenas de la época se derivan de ella desde N = 0 (§5.2), así que quien obtenga el estado puede rederivar las claves de **todo** lo enviado y recibido en la época en curso, aunque las claves de mensaje se hayan descartado. Como la época avanza por mensaje recibido, en una conversación de ida y vuelta es poco; en una **ráfaga sin respuesta** (un archivo por trozos, varias notas de voz, textos a un contacto desconectado) es la ráfaga entera. Las raíces anteriores no se rederivan desde la actual | A5 | Encontrado por la auditoría interna del 11 oct 2026 ([AUDITORIA-interna-2026-10-11.md](AUDITORIA-interna-2026-10-11.md), A-01); fijado en `RatchetCompromisoTest`. Arreglo: KDF de raíz con salidas independientes (protocolo v4) |
-| **W-16** | **Repetir un linaje repite clave y nonce en la época 0.** La época 0 depende solo de `S`, el linaje y la dirección; las propuestas efímeras van en la cabecera (AAD) y no entran en la clave. Dos sesiones con el mismo linaje cifran su primer mensaje con la misma clave y el mismo nonce, lo que con AES-GCM da el XOR de los textos y rompe la autenticidad. Precondición: un linaje que esa identidad ya usó, al milisegundo (reloj que vuelve exactamente atrás, o estado restaurado o clonado, que exige root). No se ha encontrado cómo forzarlo desde la red | — | Auditoría interna del 11 oct 2026 (A-02); fijado en `RatchetCompromisoTest`. Arreglo: atar la cadena de la época 0 a la propuesta efímera del emisor (protocolo v4) |
+| **W-15** | **La raíz guardada reabre la época vigente.** `RK(e)` se guarda en el estado y las dos cadenas de la época se derivan de ella desde N = 0 (§5.2), así que quien obtenga el estado puede rederivar las claves de **todo** lo enviado y recibido en la época en curso, aunque las claves de mensaje se hayan descartado. Como la época avanza por mensaje recibido, en una conversación de ida y vuelta es poco; en una **ráfaga sin respuesta** (un archivo por trozos, varias notas de voz, textos a un contacto desconectado) es la ráfaga entera. Las raíces anteriores no se rederivan desde la actual | A5 | Encontrado por la auditoría interna del 11 oct 2026 ([AUDITORIA-interna-2026-10-11.md](AUDITORIA-interna-2026-10-11.md), A-01); fijado en `RatchetCompromisoTest`. **Cerrada con los contactos v4** (§5.10, KDF de raíz con salidas independientes); sigue por el camino v3 |
+| **W-16** | **Repetir un linaje repite clave y nonce en la época 0.** La época 0 depende solo de `S`, el linaje y la dirección; las propuestas efímeras van en la cabecera (AAD) y no entran en la clave. Dos sesiones con el mismo linaje cifran su primer mensaje con la misma clave y el mismo nonce, lo que con AES-GCM da el XOR de los textos y rompe la autenticidad. Precondición: un linaje que esa identidad ya usó, al milisegundo (reloj que vuelve exactamente atrás, o estado restaurado o clonado, que exige root). No se ha encontrado cómo forzarlo desde la red | — | Auditoría interna del 11 oct 2026 (A-02); fijado en `RatchetCompromisoTest`. **Cerrada con los contactos v4** (§5.10, cadena de la época 0 atada a la propuesta del emisor); sigue por el camino v3 |
 | **W-14** | Si la app se reinicia en los 10 min 45 s siguientes a un `invite`, quien pueda reenviarlo (el nodo, por el buzón) lo hace **sonar una vez más**: la memoria de invites atendidos vive en RAM. La fila de llamada perdida no se repite, porque su id va en la base | A1 | Aceptado el 15 sep 2026: persistir esa memoria dejaría metadatos de llamadas fuera de SQLCipher o tocaría la tabla de vistos del ratchet (REVISION §9.3) |
 
 ---
@@ -530,7 +580,7 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 | Secreto compartido | `native-bridge/libp2p/bridge.go` (`SharedSecretFor`), `Libp2pKeyExchange` | Go `TestSharedSecret*` |
 | Sobre de aplicación | `MessageEnvelope.kt` | `MessageEnvelopeTest`, `ParserFuzzTest` |
 | v1 | `AesGcmMessageCipher.kt` | `AesGcmMessageCipherTest` |
-| Ratchet | `Ratchet.kt`, `RatchetState.kt` | `RatchetTest`, `RatchetPropertyTest`, `RatchetPaddingTest`, `RatchetCompromisoTest`, `ParserFuzzTest` |
+| Ratchet | `Ratchet.kt`, `RatchetState.kt` | `RatchetTest`, `RatchetPropertyTest` (también con v4 y con la transición v3→v4), `RatchetPaddingTest`, `RatchetCompromisoTest`, `ParserFuzzTest` |
 | X25519 efímero | `bridge.go` (`RatchetKeyPair`, `RatchetAgree`), `BridgeCurve25519` | Go `TestRatchetKeyPairAgreement`, `JdkCurve25519` |
 | Persistencia, cerrojo, deduplicación | `RatchetSessions.kt`, `RoomRatchetStore.kt`, `RatchetDao` | `RatchetSessionsTest`, `RatchetSeenPruneSqlTest` |
 | Relleno | `Padding.kt` | `PaddingTest`, `RatchetPaddingTest` |

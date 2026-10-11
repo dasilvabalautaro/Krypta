@@ -8,7 +8,7 @@
 > we can translate any section on request.
 
 **What it is.** The **normative** description of what Krypta's code on `main` does as of
-**11 October 2026** (announced protocol: **v3**; format unchanged since 15 Sep), written so that an outside reviewer can review
+**11 October 2026** (announced protocol: **v4**, §5.10; the last commit with the v3 format carries the tag `protocolo-v3`), written so that an outside reviewer can review
 it without reading the 1,600 lines of `ChatService`. The `DISENO-*.md` documents explain **why** each
 decision was taken; this document says **what** is done: the bytes, the derivations and the rules.
 **If this document and the code disagree, the code wins and the document is wrong**: it is fixed
@@ -147,8 +147,10 @@ from Signal's double ratchet is in [DISENO-ratchet.md](DISENO-ratchet.md) §2.
 | `peerNextPub` | The other side's proposal for `e+1`, if it has arrived |
 | `past` | Up to 3 retired receiving chains: `(L, e, chain key, n)` |
 | `skipped` | Up to 2,000 skipped message keys: `(L, e, N, mk)` |
+| `nextV4`, `epochV4`, `peerNextV4` | v4 (§5.10): my proposal is v4; the current epoch uses v4 derivations; the other side's proposal is v4 |
+| `recvBound` | v4, epoch 0: the other side's proposal that `recvChain` is bound to (null = unbound). Each chain in `past` carries its own too |
 
-It is serialised (`RatchetState.encode`, format 1) and stored as an opaque blob in the encrypted
+It is serialised (`RatchetState.encode`, format 2 since v4; format 1 is still read) and stored as an opaque blob in the encrypted
 database. `nextPriv` is inside it; what is **not** inside is `S`, which is derived when needed.
 
 ### 5.2 Derivations
@@ -168,7 +170,9 @@ The lineage only enters `RK(L, 0)`; later epochs inherit it because the root cha
 
 ```
 0        version = 0x02
-1        flags        bit 0 = padding (§6); the others reserved and ignored on receipt
+1        flags        bit 0 = padding (§6); bit 1 = next_pub is a v4 proposal; bit 2 = this
+                      envelope's epoch uses v4 derivations (§5.10); the others reserved and
+                      ignored on receipt
 2..9     L            u64 (read as a signed Long; its value is not validated, see W-4)
 10..13   e            u32 (read as a signed Int; negative = header rejected)
 14..17   N            same
@@ -242,6 +246,9 @@ openOld(st, S, H, wire):
 `reset(st, S, L')` returns to epoch 0 of lineage `L'` with a fresh ephemeral pair, retiring the
 current receiving chain to `past` and keeping `skipped`.
 
+The above is the **v3** ratchet, still used with contacts that have not announced v4. What changes
+with v4 is in §5.10.
+
 ### 5.7 Lineage rules
 
 - A session is created with `L = System.currentTimeMillis()`: on first use, when the contact is
@@ -294,6 +301,49 @@ receive(C, wire, persist):
 - **Unreadable state** → new session in epoch 0 with `L` = now (the conversation rehooks by
   itself). **Deleting the contact** forgets the session; **clearing the chat** does not.
 
+### 5.10 Protocol v4: separate root and bound epoch 0 (since 11 Oct 2026)
+
+Closes W-15 and W-16 with contacts announcing ≥ 4. The design and its rationale are in
+[DISENO-ratchet.md](DISENO-ratchet.md) §1.12 (Spanish).
+
+**v4 derivations.**
+
+```
+epoch e ≥ 1:  RK(e) ‖ CK(e,0) ‖ CK(e,1) = HKDF(dh, RK(e−1), "krypta-rtc-root4:" ‖ e, 96)
+epoch 0:      RK(L, 0) as in v3
+              CK(L, 0, d) = HKDF(RK(L, 0), ∅, "krypta-rtc-chain4:0:" ‖ d ‖ ":" ‖ P_d, 32)
+```
+
+`P_d` is the 32 bytes of the ephemeral proposal of whoever writes in direction `d` (their
+`next_pub`, carried in every epoch-0 header). `mk`, `CK_{N+1}`, key and nonce are as in v3.
+
+**When it is used.**
+
+- `v4(C)` = the contact is recorded as ≥ 4 (`KDF4_MIN_PROTOCOL`). It decides two things: whether a
+  new proposal is marked v4 (`nextV4`, which **never changes** afterwards) and whether a new session
+  binds its epoch-0 sending chain (`epochV4`). A session created without v4 binds it on its first
+  send if it has not sent anything yet.
+- Header: bit 1 = `st.nextV4`; bit 2 = `st.epochV4`.
+- **Advancing to `e+1`**: v4 if and only if both proposals forming the epoch are v4. Through
+  `maybeAdvance`, the other side's is `peerNextV4`, recorded from bit 1 of the header that carried
+  it. When entering through the header (`H.e = st.e + 1`), its bit 2 is used.
+- **Receiving in epoch 0 of the current lineage**: if bit 2 is set, the other side's chain is bound
+  to `H.next_pub`.
+  - If `recvBound` is that proposal, it proceeds normally.
+  - If nothing is bound and nothing has been received yet, it binds.
+  - Otherwise it is **another session of the other side with the same lineage** (W-16 seen from
+    here): it is opened by deriving that chain from N = 0, up to `MAX_SKIP`, **without touching the
+    state**.
+
+  The same applies the other way round: an envelope without bit 2 when reception is already bound.
+- **`openOld` in epoch 0**: looks up in `past` the chain bound to the same proposal, or derives it
+  with `H.next_pub` if bit 2 is set.
+- Bits 1 and 2 are **never** set towards a contact not recorded as ≥ 4: a v3 client would ignore
+  them and derive with the old KDF.
+
+**What does not change**: the header layout (86 bytes), the lineage (W-4, W-6), `S`-level
+authentication (W-3) and epoch 0 having no forward secrecy (W-1).
+
 ---
 
 ## 6. Band padding (v3)
@@ -314,7 +364,7 @@ announce ≥ 3 (§7).
 
 ### 7.1 Versions and thresholds
 
-`PROTOCOL_VERSION = 3` is **what is announced**, not the threshold for anything. Each capability has
+`PROTOCOL_VERSION = 4` is **what is announced**, not the threshold for anything. Each capability has
 its own:
 
 | Capability | Contact's minimum | Constant |
@@ -323,6 +373,7 @@ its own:
 | Negotiated call key | 2 | `RATCHET_MIN_PROTOCOL` |
 | Blind deposit | 2 | `BLIND_MIN_PROTOCOL` |
 | Padding | 3 | `PADDING_MIN_PROTOCOL` |
+| v4 root KDF and bound epoch 0 (§5.10) | 4 | `KDF4_MIN_PROTOCOL` |
 
 There are two global emergency switches, `RATCHET_SEND` and `BLIND_DEPOSIT`: set to `false`, they
 return everything to the v1 path.
@@ -349,8 +400,8 @@ announcement of §7.6, which goes over v1 on purpose.
 ### 7.4 Announcing
 
 On every WAN cycle, to every non-blocked contact with `announcedProtocol < PROTOCOL_VERSION`:
-`seal(C, "V\n3\n" ‖ C.peerProtocol)`. Only if it goes out (direct or mailbox) is
-`announcedProtocol = 3` recorded.
+`seal(C, "V\n4\n" ‖ C.peerProtocol)`. Only if it goes out (direct or mailbox) is
+`announcedProtocol = 4` recorded.
 
 ### 7.5 Receiving and choosing the version
 
@@ -360,7 +411,7 @@ onReceive(C, wire):
     if it looks like v2: try RatchetSessions.receive; if it fails → try v1 (marking "looked like v2")
     else: try v1
     if nothing opens: drop with a diagnostics line; if "looked like v2" → rehook (§7.6)
-    if it opened via v2: C.peerProtocol ← max(C.peerProtocol, padded ? 3 : 2)     -- what was demonstrated
+    if it opened via v2: C.peerProtocol ← max(C.peerProtocol, v4 bits ? 4 : padded ? 3 : 2)  -- what was demonstrated
 ```
 
 The header of a v2 envelope that opens is authenticated (it is the AAD), so what it demonstrates
@@ -372,14 +423,14 @@ cannot be faked without `S`.
 onHello(C, version, recorded):
     if version > C.peerProtocol: C.peerProtocol ← version
     if version < C.peerProtocol: ignore (the version never decreases)
-    if recorded ≠ null ∧ recorded < 3 ∧ C.announcedProtocol ≥ 3:
-        launch V("3", C.peerProtocol) over v1                 -- they lost it: repeat it
+    if recorded ≠ null ∧ recorded < 4 ∧ C.announcedProtocol ≥ 4:
+        launch V("4", C.peerProtocol) over v1                 -- they lost it: repeat it
     else, if C.peerProtocol crossed from < 2 to ≥ 2 ∧ usesRatchet(C):
-        launch V("3", C.peerProtocol) via seal                -- so they adopt our lineage
+        launch V("4", C.peerProtocol) via seal                -- so they adopt our lineage
 
 rehook(C):             -- an envelope that looked like v2 did not open by any path
     if usesRatchet(C):             launch V via seal (carries our lineage)
-    if C.peerProtocol < 2:         launch V("3", C.peerProtocol) over v1
+    if C.peerProtocol < 2:         launch V("4", C.peerProtocol) over v1
 ```
 
 Everything "launched" runs outside the receive path, which is synchronous with the mailbox
@@ -490,8 +541,8 @@ protocol has yet had formal analysis or external review** (see
 |---|---|---|---|---|
 | **P1** | Confidentiality of content | A1, A2 | Tested | `RatchetTest`, `AesGcmMessageCipherTest`, `RatchetPropertyTest` ("nothing opens as another message") |
 | **P2** | Integrity of envelope and header against anyone without `S` | A1, A2 | Tested | `RatchetTest` (forged header), `RatchetPaddingTest` (padding bit), `ParserFuzzTest` |
-| **P3** | No `(L, e, N)` triple repeats for one sender, and therefore no key or nonce | — | Tested, **conditional**: on no lineage ever repeating (W-16) and on the state never rolling back to an earlier copy (requires root). If it fails, it is AES-GCM nonce reuse | `RatchetPropertyTest` (sequential), `RatchetSessionsTest` (concurrent, since 14 Sep 2026); the counterexample is in `RatchetCompromisoTest` |
-| **P4** | Forward secrecy for messages of epoch ≥ 1: compromising identity and state at *t* does not open what was delivered before *t* | A5 | Claimed, **with exceptions**: epoch 0 (W-1), **the compromised device's current epoch** (W-15, being fixed) and skipped keys and retired chains still stored at *t*. "Not kept" means not in the logical state; physical erasure (memory, free database pages) is not guaranteed | `RatchetCompromisoTest` pins W-15; compromise at *t* in general is the first thing the formal model must cover |
+| **P3** | No `(L, e, N)` triple repeats for one sender, and therefore no key or nonce | — | Tested, **conditional**: on no lineage ever repeating with a v3 contact (W-16; in v4 epoch 0 is bound to a fresh proposal) and on the state never rolling back to an earlier copy (requires root). If it fails, it is AES-GCM nonce reuse | `RatchetPropertyTest` (sequential), `RatchetSessionsTest` (concurrent, since 14 Sep 2026); the counterexample is in `RatchetCompromisoTest` |
+| **P4** | Forward secrecy for messages of epoch ≥ 1: compromising identity and state at *t* does not open what was delivered before *t* | A5 | Claimed, **with exceptions**: epoch 0 (W-1), **the compromised device's current epoch with a contact still on v3** (W-15; closed in v4) and skipped keys and retired chains still stored at *t*. "Not kept" means not in the logical state; physical erasure (memory, free database pages) is not guaranteed | `RatchetCompromisoTest` pins W-15 on v3 and checks that v4 closes it; compromise at *t* in general is the first thing the formal model must cover |
 | **P5** | Post-compromise recovery against a **passive** attacker: after a DH round it did not see, it can no longer read | A5 passive | Claimed, not tested. Requires fresh ephemeral private keys, unknown to the attacker, **on both sides** | Same |
 | **P6** | Post-compromise recovery against an **active** attacker | A4, A5 active | **Does not hold** | W-3, W-4 (`RatchetTest`: "a forged lineage hijacks the session") |
 | **P7** | A genuine envelope is delivered at most once **within the deduplication window** (8 days ∪ 500); outside it, epoch 0 can be replayed (W-2) | A1 | Tested | `RatchetSessionsTest`, `RatchetSeenPruneSqlTest`, `ChatServiceTest` |
@@ -523,8 +574,8 @@ protocol has yet had formal analysis or external review** (see
 | **W-11** | The `.krbk` is protected only by its passphrase (PBKDF2, 310,000 iterations): whoever obtains it can try passphrases without limit, and success is A4 | A4 | security-model §7 |
 | **W-12** | The same Ed25519 seed is used for signing (libp2p's Noise) and, converted, for X25519 | — | Question for the review |
 | **W-13** | Metadata: the node sees the day's pair graph (DHT), presence (wake) and who talks to whom live (relay); and, through identify, which protocols each phone supports | A1 | security-model §5 and §6 |
-| **W-15** | **The stored root re-opens the current epoch.** `RK(e)` is kept in the state and both chains of the epoch are derived from it starting at N = 0 (§5.2), so whoever obtains the state can re-derive the keys of **everything** sent and received in the current epoch, even though the message keys were discarded. Since the epoch advances per message received, in a back-and-forth conversation this is little; in an **unanswered burst** (a chunked file, several voice notes, texts to an offline contact) it is the whole burst. Earlier roots cannot be re-derived from the current one | A5 | Found by the internal audit of 11 Oct 2026 ([AUDITORIA-interna-2026-10-11.md](AUDITORIA-interna-2026-10-11.md), A-01, Spanish); pinned in `RatchetCompromisoTest`. Fix: a root KDF with independent outputs (protocol v4) |
-| **W-16** | **Repeating a lineage repeats key and nonce in epoch 0.** Epoch 0 depends only on `S`, the lineage and the direction; the ephemeral proposals travel in the header (AAD) and do not enter the key. Two sessions with the same lineage encrypt their first message with the same key and nonce, which with AES-GCM yields the XOR of the plaintexts and breaks authenticity. Precondition: a lineage that identity already used, to the millisecond (a clock going back exactly, or restored or cloned state, which requires root). No way to force it from the network has been found | — | Internal audit of 11 Oct 2026 (A-02); pinned in `RatchetCompromisoTest`. Fix: bind the epoch-0 chain to the sender's ephemeral proposal (protocol v4) |
+| **W-15** | **The stored root re-opens the current epoch.** `RK(e)` is kept in the state and both chains of the epoch are derived from it starting at N = 0 (§5.2), so whoever obtains the state can re-derive the keys of **everything** sent and received in the current epoch, even though the message keys were discarded. Since the epoch advances per message received, in a back-and-forth conversation this is little; in an **unanswered burst** (a chunked file, several voice notes, texts to an offline contact) it is the whole burst. Earlier roots cannot be re-derived from the current one | A5 | Found by the internal audit of 11 Oct 2026 ([AUDITORIA-interna-2026-10-11.md](AUDITORIA-interna-2026-10-11.md), A-01, Spanish); pinned in `RatchetCompromisoTest`. **Closed with v4 contacts** (§5.10, a root KDF with independent outputs); still present on the v3 path |
+| **W-16** | **Repeating a lineage repeats key and nonce in epoch 0.** Epoch 0 depends only on `S`, the lineage and the direction; the ephemeral proposals travel in the header (AAD) and do not enter the key. Two sessions with the same lineage encrypt their first message with the same key and nonce, which with AES-GCM yields the XOR of the plaintexts and breaks authenticity. Precondition: a lineage that identity already used, to the millisecond (a clock going back exactly, or restored or cloned state, which requires root). No way to force it from the network has been found | — | Internal audit of 11 Oct 2026 (A-02); pinned in `RatchetCompromisoTest`. **Closed with v4 contacts** (§5.10, epoch-0 chain bound to the sender's proposal); still present on the v3 path |
 | **W-14** | If the app restarts within 10 min 45 s of an `invite`, whoever can resend it (the node, through the mailbox) makes it **ring once more**: the memory of handled invites lives in RAM. The missed-call row does not repeat, because its id is in the database | A1 | Accepted on 15 Sep 2026: persisting that memory would leave call metadata outside SQLCipher or touch the ratchet's seen table (REVISION §9.3) |
 
 ---
@@ -536,7 +587,7 @@ protocol has yet had formal analysis or external review** (see
 | Shared secret | `native-bridge/libp2p/bridge.go` (`SharedSecretFor`), `Libp2pKeyExchange` | Go `TestSharedSecret*` |
 | Application envelope | `MessageEnvelope.kt` | `MessageEnvelopeTest`, `ParserFuzzTest` |
 | v1 | `AesGcmMessageCipher.kt` | `AesGcmMessageCipherTest` |
-| Ratchet | `Ratchet.kt`, `RatchetState.kt` | `RatchetTest`, `RatchetPropertyTest`, `RatchetPaddingTest`, `RatchetCompromisoTest`, `ParserFuzzTest` |
+| Ratchet | `Ratchet.kt`, `RatchetState.kt` | `RatchetTest`, `RatchetPropertyTest` (also with v4 and with the v3→v4 transition), `RatchetPaddingTest`, `RatchetCompromisoTest`, `ParserFuzzTest` |
 | Ephemeral X25519 | `bridge.go` (`RatchetKeyPair`, `RatchetAgree`), `BridgeCurve25519` | Go `TestRatchetKeyPairAgreement`, `JdkCurve25519` |
 | Persistence, lock, deduplication | `RatchetSessions.kt`, `RoomRatchetStore.kt`, `RatchetDao` | `RatchetSessionsTest`, `RatchetSeenPruneSqlTest` |
 | Padding | `Padding.kt` | `PaddingTest`, `RatchetPaddingTest` |

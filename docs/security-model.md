@@ -126,8 +126,9 @@ sigue siendo cierto hasta que pasen las pruebas con dos móviles.)
     época se guarda y sus cadenas salen de ella desde el primer mensaje, así que quien se lleve el
     estado puede reabrir todo lo enviado y recibido desde el último cambio de época. En una
     conversación de ida y vuelta es poco, porque la época cambia con cada mensaje recibido; en una
-    ráfaga sin respuesta (un archivo por trozos, varias notas de voz) es la ráfaga entera. Se arregla
-    con el protocolo v4;
+    ráfaga sin respuesta (un archivo por trozos, varias notas de voz) es la ráfaga entera. **Cerrado
+    con los contactos que ya tienen la v4** (desde el 11 oct 2026: la raíz ya no lleva a las cadenas);
+    sigue con quien va por la v3, y entre dos móviles todavía no se ha probado;
   - «no se guarda» quiere decir que no está en el estado lógico. **El borrado físico no se
     garantiza**: copias en memoria, o versiones viejas del estado en páginas libres de la base.
 - **La negación (deniability) no se promete, y tampoco se ha renunciado a ella.** Los sobres se

@@ -2052,7 +2052,20 @@ connection (`DataModule.SecureDeleteCallback`; +21 % per write measured on the T
 docs, phase 1 hardening with no wire change, phase 2 **protocol v4** (root KDF with three
 independent outputs + epoch-0 chain bound to the sender's proposal), phase 3 lineage/auth redesign
 after a Tamarin model. The wire-format freeze is lifted (no review will be contracted); the last v3
-commit gets the tag `protocolo-v3`.
+commit carries the tag `protocolo-v3` (`4100f5f`). **Phases 0–2 done the same day.** Phase 1:
+call key halves must be exactly 32 bytes and a negotiating contact never falls back to the static
+key (which also fixed two latent asymmetric-knowledge bugs that made calls silent); epoch-0 seen
+digests are never pruned (`pinned`, **DB v10**); the verify dialog shows the effective protection
+(`ChatService.protectionOf`); `secure_delete` on every connection. Phase 2: **protocol v4**
+(`PROTOCOL_VERSION = 4`, own gate `KDF4_MIN_PROTOCOL = 4`, spec §5.10, `DISENO-ratchet.md` §1.12):
+root KDF with three independent outputs and an epoch-0 chain bound to the sender's proposal,
+switched on per pair by header flag bits 1 (proposal is v4) and 2 (epoch is v4), **v4 iff both
+proposals of the epoch are**; `RatchetState` format 2 (format 1 still read). A proposal's v4 flag
+is fixed when it is drawn — if it could change, each side would pick a different KDF. Mutation
+checks proved the new tests bite (an AND→OR swap was *not* caught, correctly: it is still
+symmetric). **Not yet tested between two phones** (PRUEBAS-PENDIENTES §19). Gotcha found doing it:
+**macOS has no `timeout`**, so `timeout N cmd` fails instantly and leaves stale results that look
+like a real run.
 
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a

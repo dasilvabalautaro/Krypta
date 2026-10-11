@@ -12,7 +12,8 @@ cuando el otro está desconectado.
 > [especificado](docs/ESPECIFICACION-protocolo.md) para poder revisarse; una
 > [revisión interna](docs/REVISION-protocolo-2026-09-14.md) del 14 sep 2026 encontró y arregló
 > dos fallos graves, y una [auditoría interna](docs/AUDITORIA-interna-2026-10-11.md) del 11 oct
-> encontró que el estado guardado reabre los mensajes de la época en curso (en arreglo). Antes de confiarle nada sensible, lee
+> encontró que el estado guardado reabre los mensajes de la época en curso (cerrado en el protocolo
+> v4, aún sin probar entre dos móviles). Antes de confiarle nada sensible, lee
 > [lo que Krypta no protege](docs/security-model.md#9-resumen-honesto-de-lo-que-krypta-no-protege).
 
 *English summary [below](#english).*
@@ -28,7 +29,8 @@ cuando el otro está desconectado.
 - **Cifrado de extremo a extremo**: acuerdo X25519 y AES-256-GCM, y un doble ratchet por épocas
   **pensado para dar secreto hacia adelante**, con cada contacto cuya app también lo anuncia. Está
   desplegado, pero **todavía no es una garantía**: la primera época no lo tiene, quien se lleve el
-  estado del móvil puede reabrir lo enviado en la época en curso (en arreglo), entre dos móviles
+  estado del móvil puede reabrir lo enviado en la época en curso con quien aún tenga la versión
+  anterior (con la v4 ya no), entre dos móviles
   solo se ha probado la conversación normal y nadie de fuera lo ha revisado. El tamaño de los
   mensajes va relleno por tramos para que no delate qué son.
 - **Sin directorio de usuarios.** Cada pareja se cita en un punto de encuentro de la DHT que
@@ -163,7 +165,8 @@ properties and declared weaknesses. An internal review on 14 Sep 2026
 ([docs/REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md)) found and fixed
 a key/nonce reuse race and a permanent message-loss bug; an internal audit on 11 Oct 2026
 ([docs/AUDITORIA-interna-2026-10-11.md](docs/AUDITORIA-interna-2026-10-11.md), Spanish) found that
-a device's stored ratchet state re-opens the messages of its current epoch, which is being fixed.
+a device's stored ratchet state re-opens the messages of its current epoch; protocol v4 closes it
+(not yet tested between two phones).
 The infrastructure nodes never see content
 but do see metadata; see [docs/security-model.md](docs/security-model.md) (Spanish) for the full,
 unsoftened threat model.

@@ -928,6 +928,28 @@ móviles**: un build anterior en el emisor sigue mandando descriptores al reinte
      guardar restos de estos archivos (los del 20 sep se barren solos a las 24 h cuando llegue
      otro archivo).
 
+## 19. Protocolo v4 y endurecimiento de la auditoría interna — **PENDIENTE**
+
+Del 11 oct 2026 ([AUDITORIA-interna-2026-10-11.md](AUDITORIA-interna-2026-10-11.md)). El protocolo
+v4 cambia las derivaciones del ratchet (W-15, W-16): la raíz ya no lleva a las cadenas, y la época 0
+va atada a la propuesta del emisor. Se activa por pareja cuando los dos anuncian v4. Cubierto en la
+JVM (`RatchetCompromisoTest`, y `RatchetPropertyTest` con v4 y con la transición v3→v4), pero
+**nunca ha cruzado entre dos móviles**. Los pasos 1 a 3 son el mínimo antes de dar el v4 por bueno.
+
+1. - [ ] **v3↔v4.** Con B en un build anterior al 11 oct (v3) y A en el nuevo, una conversación de
+     ida y vuelta, una foto y un archivo de ~1 MB. Todo debe llegar. En A, «Verificar identidad»
+     debe decir «Clave que cambia (ratchet por épocas) y tamaño relleno.».
+2. - [ ] **Paso a v4.** Actualizar B. En el Diagnóstico de los dos debe salir
+     `↔ protocolo v4 anunciado a … contacto(s)` y, del otro, `↔ … habla protocolo v4` (o
+     `escribe por ratchet: se apunta v4`). Seguir la misma conversación sin borrar nada: los
+     mensajes de antes y de después deben llegar.
+3. - [ ] **v4↔v4 bajo presión**: un archivo de 6–8 MB (cientos de trozos en una ráfaga, el caso de
+     W-15), con B cerrado a mitad para que una parte vaya por el buzón. Debe ensamblarse entero.
+4. - [ ] **Llamada** entre los dos con el build nuevo: debe conectar y oírse. Repetirla con B todavía
+     en v3 (paso 1): debe conectar igual, por la clave negociada.
+5. - [ ] **Reinstalar B** (con `.krbk`) y escribirse: la conversación debe reengancharse sola
+     (W-6 aparte: con la hora automática).
+
 ---
 
 ## 10. DCUtR directo en celular (gate de NAT) — **BLOQUEADO por hardware**

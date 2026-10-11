@@ -433,4 +433,26 @@ class RatchetTest {
         assertArrayEquals(a.sendChain, b.recvChain)
         assertArrayEquals(a.recvChain, b.sendChain)
     }
+
+    /**
+     * Formato 2 del estado (protocolo v4): los flags y la propuesta atada viajan, y un estado
+     * guardado por una versión anterior (formato 1) se sigue leyendo, con todo eso a falso.
+     */
+    @Test
+    fun `el estado v4 se guarda entero y uno de formato 1 se sigue leyendo`() {
+        val v4 = ratchet.initial(secret, alice, bob, 1_000L, v4 = true)
+        val leido = RatchetState.decode(v4.encode())
+        assertTrue(leido.nextV4 && leido.epochV4)
+        assertEquals(v4, leido)
+
+        // Un formato 1 es el 2 sin el byte de flags ni el blob de la propuesta atada (y sin el
+        // blob por cadena retirada, que aquí no hay), con la versión a 1.
+        val viejo = ratchet.initial(secret, alice, bob, 1_000L)
+        val f2 = viejo.encode()
+        val f1 = byteArrayOf(1) + f2.copyOfRange(1, f2.size - 5)
+        val deFormato1 = RatchetState.decode(f1)
+        assertEquals(viejo.lineage, deFormato1.lineage)
+        assertArrayEquals(viejo.sendChain, deFormato1.sendChain)
+        assertTrue(!deFormato1.nextV4 && !deFormato1.epochV4 && deFormato1.recvBound == null)
+    }
 }

@@ -45,6 +45,24 @@ data class RatchetState(
     val past: List<PastChain>,
     /** Claves de mensajes saltados, acotadas. */
     val skipped: List<SkippedKey>,
+    /**
+     * Mi propuesta ([nextPub]) es **v4** (protocolo v4, [docs/DISENO-ratchet.md] §1.12): la época
+     * que forme usará el KDF de raíz nuevo si la del otro también lo es. Se fija al sortearla y no
+     * cambia: el otro la apunta de la cabecera, y si cambiara a mitad, cada lado elegiría un KDF.
+     */
+    val nextV4: Boolean = false,
+    /**
+     * La época actual usa derivaciones v4. En la época 0 quiere decir que **mi cadena de envío** va
+     * atada a mi propuesta; en las demás, que la raíz y las cadenas salieron del KDF de tres salidas.
+     */
+    val epochV4: Boolean = false,
+    /** La propuesta del otro ([peerNextPub]) es v4, según el bit de la cabecera que la trajo. */
+    val peerNextV4: Boolean = false,
+    /**
+     * Época 0: la propuesta del otro a la que está atada [recvChain], o null si va sin atar (v3).
+     * Se fija con el primer sobre v4 que llega en esta época.
+     */
+    val recvBound: ByteArray? = null,
 ) {
 
     /** Cadena de recepción de una época ya abandonada, viva mientras quepa algo en vuelo. */
@@ -53,13 +71,17 @@ data class RatchetState(
         val epoch: Int,
         val chainKey: ByteArray,
         val n: Int,
+        /** Solo en la época 0 v4: la propuesta del emisor a la que va atada esta cadena. */
+        val bound: ByteArray? = null,
     ) {
         override fun equals(other: Any?) = other is PastChain &&
             lineage == other.lineage && epoch == other.epoch && n == other.n &&
-            chainKey.contentEquals(other.chainKey)
+            chainKey.contentEquals(other.chainKey) &&
+            (bound?.contentEquals(other.bound) ?: (other.bound == null))
 
         override fun hashCode(): Int =
-            (((lineage.hashCode() * 31) + epoch) * 31 + n) * 31 + chainKey.contentHashCode()
+            ((((lineage.hashCode() * 31) + epoch) * 31 + n) * 31 + chainKey.contentHashCode()) * 31 +
+                (bound?.contentHashCode() ?: 0)
     }
 
     /** Clave de un mensaje que se saltó (llegó uno posterior antes). */
@@ -107,22 +129,33 @@ data class RatchetState(
         out.writeInt(past.size)
         for (p in past) {
             out.writeLong(p.lineage); out.writeInt(p.epoch); out.writeBlob(p.chainKey); out.writeInt(p.n)
+            out.writeBlob(p.bound ?: ByteArray(0))
         }
         out.writeInt(skipped.size)
         for (s in skipped) {
             out.writeLong(s.lineage); out.writeInt(s.epoch); out.writeInt(s.n); out.writeBlob(s.messageKey)
         }
+        // Formato 2 (protocolo v4): los flags y la propuesta atada, al final.
+        out.write((if (nextV4) 1 else 0) or (if (epochV4) 2 else 0) or (if (peerNextV4) 4 else 0))
+        out.writeBlob(recvBound ?: ByteArray(0))
         return out.toByteArray()
     }
 
     companion object {
-        private const val FORMAT_VERSION = 1
+        /**
+         * 2 desde el protocolo v4 (11 oct 2026): añade los flags v4 y la propuesta atada. El 1 se
+         * sigue leyendo, con todo eso a falso. Un cliente anterior que lea un 2 lo trata como
+         * ilegible y reengancha la conversación, que es el camino previsto para un estado perdido.
+         */
+        private const val FORMAT_VERSION = 2
+        private const val FORMAT_V1 = 1
 
-        /** Lee un estado serializado por [encode]; lanza si el blob no es de esta versión. */
+        /** Lee un estado serializado por [encode]; lanza si el blob no es de una versión conocida. */
         fun decode(bytes: ByteArray): RatchetState {
             val r = Reader(bytes)
             val version = r.byte()
-            require(version == FORMAT_VERSION) { "estado de ratchet versión $version desconocida" }
+            require(version == FORMAT_VERSION || version == FORMAT_V1) { "estado de ratchet versión $version desconocida" }
+            val v2 = version == FORMAT_VERSION
             val lineage = r.long()
             val epoch = r.int()
             val sendDir = r.byte()
@@ -139,15 +172,21 @@ data class RatchetState(
             // Los contadores van acotados por lo que queda del blob: `List(n)` reserva `n`
             // huecos ANTES de leer nada, y con un contador corrupto a 2³¹ eso sería un
             // OutOfMemoryError, no un "blob truncado" (cerrado de paso al arreglar `blob()`).
-            val past = List(r.count(minBytesEach = PAST_CHAIN_MIN_BYTES)) {
-                PastChain(r.long(), r.int(), r.blob(), r.int())
+            val past = List(r.count(minBytesEach = if (v2) PAST_CHAIN_MIN_BYTES + 4 else PAST_CHAIN_MIN_BYTES)) {
+                PastChain(r.long(), r.int(), r.blob(), r.int(), if (v2) r.blob().takeIf { it.isNotEmpty() } else null)
             }
             val skipped = List(r.count(minBytesEach = SKIPPED_KEY_MIN_BYTES)) {
                 SkippedKey(r.long(), r.int(), r.int(), r.blob())
             }
+            val flags = if (v2) r.byte() else 0
+            val recvBound = if (v2) r.blob().takeIf { it.isNotEmpty() } else null
             return RatchetState(
                 lineage, epoch, sendDir, rootKey, sendChain, sendN, sendPN, recvChain, recvN,
                 myCurPub, nextPriv, nextPub, peerNext, past, skipped,
+                nextV4 = flags and 1 != 0,
+                epochV4 = flags and 2 != 0,
+                peerNextV4 = flags and 4 != 0,
+                recvBound = recvBound,
             )
         }
 

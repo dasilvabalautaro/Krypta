@@ -305,8 +305,8 @@ Lo que la hace seria no es el nombre, sino que **cualquiera pueda comprobarla**.
 | Fase | Estado |
 |---|---|
 | 0 · Documentación | ✅ 11 oct 2026 (`ef949cf`): P3, P4, P5, P7, P9, P11 y P12 reescritas; W-15 y W-16; `RatchetCompromisoTest` |
-| 1 · Endurecer sin cambiar el formato | ✅ 11 oct 2026 (`f0fa581` y el siguiente); detalle abajo. Etiqueta `protocolo-v3` en `f0fa581` |
-| 2 · Protocolo v4 | ⬜ |
+| 1 · Endurecer sin cambiar el formato | ✅ 11 oct 2026 (`f0fa581` y el siguiente); detalle abajo. Etiqueta `protocolo-v3` en `4100f5f` |
+| 2 · Protocolo v4 | ✅ en código y en la JVM (11 oct 2026); 🟡 falta la prueba con dos móviles (PRUEBAS-PENDIENTES §19) |
 | 3 · Linaje, recuperación y autenticación | ⬜ Diseño y modelo formal primero |
 
 **Fase 1, lo hecho (11 oct 2026):**
@@ -330,4 +330,22 @@ Lo que la hace seria no es el nombre, sino que **cualquiera pueda comprobarla**.
    a v6. Coste medido en el TECNO: 300 transacciones de 8 KB, 195 ms sin él y 236 ms con él. Límite:
    las tramas viejas del WAL siguen ahí hasta que el WAL se reutiliza. Verificado instalando sobre la
    base real: arranca en v10, la conversación se lee y el estado es «conectado».
+
+**Fase 2, lo hecho (11 oct 2026):** protocolo **v4** ([DISENO-ratchet.md](DISENO-ratchet.md) §1.12,
+especificación §5.10).
+
+- **W-15**: el KDF de raíz da `RK(e) ‖ CK(e,0) ‖ CK(e,1)` como salidas independientes.
+- **W-16**: la cadena de la época 0 va atada a la propuesta del emisor.
+- **Activación por pareja**: con un bit en cada propuesta y otro en cada época, dentro del AAD.
+  `KDF4_MIN_PROTOCOL = 4` y `PROTOCOL_VERSION = 4`. Con los contactos v3 todo sigue igual.
+- `RatchetState` pasa al formato 2, y el 1 se sigue leyendo.
+- **Tests**: `RatchetCompromisoTest` mantiene fijadas las dos debilidades en v3 y comprueba que v4
+  las cierra. `RatchetPropertyTest` corre las mismas invariantes con v4 en los dos lados y con la
+  transición v3→v4 a mitad de conversación (100 semillas más).
+- **Que los tests muerden se comprobó rompiendo el código a propósito**. Con las cadenas v4 sacadas
+  otra vez de la raíz falla el test de W-15. Con el bit de época ignorado, o la época 0 atada a otra
+  clave, fallan los de propiedades. Hubo además una mutación que **no** se detectó, y no era un
+  fallo: cambiar el «y» de la regla por un «o» sigue siendo simétrico y los dos lados acuerdan
+  igual. El «y» es la opción conservadora, no una necesidad de coherencia.
+- La etiqueta `protocolo-v3` marca el último commit con el formato anterior.
 

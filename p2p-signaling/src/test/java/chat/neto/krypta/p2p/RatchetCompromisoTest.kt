@@ -14,9 +14,11 @@ import javax.crypto.spec.SecretKeySpec
  * especificación (§5.2) y no desde el código: así es como lo haría un atacante, y así el test no
  * hereda un error del propio `Ratchet`.
  *
- * Estos tests **fijan debilidades que hoy existen** (W-15 y la condición de W-6 en la
- * especificación). No describen lo que se quiere, sino lo que hay: cuando se arreglen, tienen que
- * fallar y darse la vuelta, igual que el del linaje forjado en [RatchetTest].
+ * Los tests «en v3» **fijan debilidades que siguen existiendo** por el camino v3 (W-15 y W-16), que
+ * es el que se sigue usando con los contactos que no han anunciado la v4. Sus parejas «con v4»
+ * comprueban que el protocolo v4 las cierra ([docs/DISENO-ratchet.md] §1.12). Que esas parejas
+ * prueban algo se comprobó rompiendo el arreglo a propósito: con las cadenas v4 derivadas otra vez
+ * de la raíz, el test de W-15 con v4 falla.
  */
 class RatchetCompromisoTest {
 
@@ -37,7 +39,7 @@ class RatchetCompromisoTest {
      * trozos, varios textos seguidos sin respuesta) si no la hay.
      */
     @Test
-    fun `con el estado guardado se reabre lo ya enviado en la epoca vigente`() {
+    fun `en v3 con el estado guardado se reabre lo ya enviado en la epoca vigente`() {
         var a = ratchet.initial(secret, alice, bob, 1_000L)
         var b = ratchet.initial(secret, bob, alice, 1_000L)
         // Una ida y vuelta lleva a A a una época ≥ 1, fuera de la época 0 que ya es derivable de S.
@@ -76,7 +78,7 @@ class RatchetCompromisoTest {
      * desde la red. Es lo que condiciona P3 en la especificación.
      */
     @Test
-    fun `repetir un linaje repite clave y nonce en la epoca 0`() {
+    fun `en v3 repetir un linaje repite clave y nonce en la epoca 0`() {
         val antes = ratchet.initial(secret, alice, bob, 5_000L)
         val despues = ratchet.initial(secret, alice, bob, 5_000L)
         val t1 = "mensaje antes de perder el estado".toByteArray()
@@ -88,6 +90,88 @@ class RatchetCompromisoTest {
         val xorCifrados = ByteArray(t1.size) { (c1[it].toInt() xor c2[it].toInt()).toByte() }
         val xorTextos = ByteArray(t1.size) { (t1[it].toInt() xor t2[it].toInt()).toByte() }
         assertArrayEquals(xorTextos, xorCifrados)
+    }
+
+    /**
+     * W-15 cerrada: con v4, la raíz guardada ya no lleva a las cadenas. Se intentan las dos
+     * derivaciones que un atacante probaría con el estado robado —la v3 desde la raíz y el KDF v4
+     * con la raíz como material— y ninguna abre lo ya enviado. Lo que queda en el estado es la
+     * cadena **ya avanzada**, y HMAC no se deshace.
+     */
+    @Test
+    fun `con v4 el estado guardado ya no reabre lo enviado en la epoca vigente`() {
+        var a = ratchet.initial(secret, alice, bob, 1_000L, v4 = true)
+        var b = ratchet.initial(secret, bob, alice, 1_000L, v4 = true)
+        val m1 = ratchet.encrypt(a, "uno".toByteArray(), v4 = true); a = m1.state
+        b = ratchet.decrypt(b, secret, m1.ciphertext, v4 = true).state
+        val m2 = ratchet.encrypt(b, "dos".toByteArray(), v4 = true); b = m2.state
+        a = ratchet.decrypt(a, secret, m2.ciphertext, v4 = true).state
+        assertTrue(a.epoch >= 1)
+        assertTrue("la época de A tiene que ser v4", a.epochV4)
+
+        val grabado = ratchet.encrypt(a, "sin respuesta".toByteArray(), v4 = true).also { a = it.state }.ciphertext
+        assertEquals("sin respuesta", String(ratchet.decrypt(b, secret, grabado, v4 = true).plaintext))
+
+        val robado = RatchetState.decode(a.encode())
+        val candidatas = listOf(
+            hkdf(robado.rootKey, "krypta-rtc-chain:${robado.epoch}:${robado.sendDir}"),
+            hkdf(robado.rootKey, "krypta-rtc-root4:${robado.epoch}", 96).copyOfRange(32 * (1 + robado.sendDir), 32 * (2 + robado.sendDir)),
+        )
+        for (cadena in candidatas) {
+            assertTrue(
+                "una derivación desde la raíz no puede abrir lo ya enviado",
+                runCatching { abrir(hmac(cadena, 0x01), grabado) }.isFailure,
+            )
+        }
+    }
+
+    /**
+     * W-16 cerrada: con v4, dos sesiones con el mismo linaje atan su cadena de la época 0 a su
+     * propuesta, que es nueva en cada una, así que ya no comparten flujo. Y el receptor abre las dos:
+     * la segunda como «otra sesión» del mismo linaje, sin tocar su estado.
+     */
+    @Test
+    fun `con v4 repetir un linaje ya no repite clave y el receptor abre las dos`() {
+        val antes = ratchet.initial(secret, alice, bob, 5_000L, v4 = true)
+        val despues = ratchet.initial(secret, alice, bob, 5_000L, v4 = true)
+        val t1 = "mensaje antes de perder el estado".toByteArray()
+        val t2 = "mensaje despues de perder el estad".toByteArray()
+        val w1 = ratchet.encrypt(antes, t1, v4 = true).ciphertext
+        val w2 = ratchet.encrypt(despues, t2, v4 = true).ciphertext
+
+        val c1 = w1.drop(Ratchet.HEADER_BYTES)
+        val c2 = w2.drop(Ratchet.HEADER_BYTES)
+        val xorCifrados = ByteArray(t1.size) { (c1[it].toInt() xor c2[it].toInt()).toByte() }
+        val xorTextos = ByteArray(t1.size) { (t1[it].toInt() xor t2[it].toInt()).toByte() }
+        assertTrue("ya no puede salir el XOR de los textos", !xorCifrados.contentEquals(xorTextos))
+
+        var b = ratchet.initial(secret, bob, alice, 5_000L, v4 = true)
+        val r1 = ratchet.decrypt(b, secret, w1, v4 = true); b = r1.state
+        assertArrayEquals(t1, r1.plaintext)
+        assertArrayEquals("la otra sesión del mismo linaje también se abre", t2, ratchet.decrypt(b, secret, w2, v4 = true).plaintext)
+    }
+
+    /**
+     * Un cliente que aún no sabe que el otro es v4 (sus propuestas van sin marcar) conversa con uno
+     * que sí: la época 0 atada del segundo se abre, y las épocas siguientes se quedan en v3 hasta
+     * que las dos propuestas sean v4. Cuando el primero se entera, la conversación pasa sola.
+     */
+    @Test
+    fun `una pareja en la que solo uno sabe del v4 conversa y pasa sola cuando el otro se entera`() {
+        var a = ratchet.initial(secret, alice, bob, 1_000L, v4 = true)
+        var b = ratchet.initial(secret, bob, alice, 1_000L, v4 = false)
+        var bSabe = false
+        repeat(6) { ronda ->
+            if (ronda == 3) bSabe = true
+            val m = ratchet.encrypt(a, "a$ronda".toByteArray(), v4 = true); a = m.state
+            val ab = ratchet.decrypt(b, secret, m.ciphertext, v4 = bSabe); b = ab.state
+            assertEquals("a$ronda", String(ab.plaintext))
+            val r = ratchet.encrypt(b, "b$ronda".toByteArray(), v4 = bSabe); b = r.state
+            val ba = ratchet.decrypt(a, secret, r.ciphertext, v4 = true); a = ba.state
+            assertEquals("b$ronda", String(ba.plaintext))
+            if (ronda < 3) assertTrue("mientras B no sepa, sus épocas son v3", !b.epochV4 || b.epoch == 0)
+        }
+        assertTrue("al enterarse B, la conversación pasa a v4", a.epochV4 && b.epochV4)
     }
 
     // --- §5.2 de la especificación, a mano -------------------------------------------------
