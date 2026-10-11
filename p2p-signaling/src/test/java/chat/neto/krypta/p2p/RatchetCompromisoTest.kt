@@ -192,20 +192,21 @@ class RatchetCompromisoTest {
     }
 
     /**
-     * El caso extremo de W-4 (A-03 de la auditoría interna): un linaje forjado a `Long.MAX_VALUE`
-     * se adopta, y como la regla es «estrictamente mayor», **ningún** linaje posterior —ni el reloj
-     * de nadie— puede superarlo. Exige `S`. Fija la debilidad hasta el rediseño del linaje.
+     * El caso extremo de W-4 (A-03 de la auditoría interna): un linaje forjado a `Long.MAX_VALUE` se
+     * adoptaba, y como la regla es «estrictamente mayor», ningún linaje posterior podía superarlo.
+     * **Cerrado el 11 oct 2026 con el tope (R1)**: ya no se adopta, y el linaje legítimo de después,
+     * sí. Antes este test fijaba la debilidad; se dio la vuelta con el arreglo.
      */
     @Test
-    fun `un linaje forjado al maximo se adopta y ningun reloj lo supera`() {
+    fun `un linaje forjado al maximo ya no se adopta y el legitimo de despues si`() {
         var b = ratchet.initial(secret, bob, alice, 1_000L)
         val mallory = ratchet.initial(secret, alice, bob, lineage = Long.MAX_VALUE)
-        val forjado = ratchet.encrypt(mallory, "hola".toByteArray())
-        b = ratchet.decrypt(b, secret, forjado.ciphertext).state
-        assertEquals(Long.MAX_VALUE, b.lineage)
+        b = ratchet.decrypt(b, secret, ratchet.encrypt(mallory, "hola".toByteArray()).ciphertext).state
+        assertEquals("el forjado no se adopta", 1_000L, b.lineage)
 
-        val alicia = ratchet.initial(secret, alice, bob, lineage = System.currentTimeMillis())
+        val ahora = System.currentTimeMillis()
+        val alicia = ratchet.initial(secret, alice, bob, lineage = ahora)
         b = ratchet.decrypt(b, secret, ratchet.encrypt(alicia, "soy yo".toByteArray()).ciphertext).state
-        assertEquals("el linaje legítimo no se adopta: es menor", Long.MAX_VALUE, b.lineage)
+        assertEquals("el legítimo sí", ahora, b.lineage)
     }
 }

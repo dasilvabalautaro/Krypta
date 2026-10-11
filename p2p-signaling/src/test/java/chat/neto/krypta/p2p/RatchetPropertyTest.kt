@@ -39,8 +39,21 @@ class RatchetPropertyTest {
     /** Cómo usa cada extremo el protocolo v4 en una corrida (ver `DISENO-ratchet.md` §1.12). */
     enum class V4 { OFF, ON, SWITCH }
 
-    private inner class Run(val seed: Long, val allowStateLoss: Boolean, val v4: V4 = V4.OFF) {
+    private inner class Run(
+        val seed: Long,
+        val allowStateLoss: Boolean,
+        val v4: V4 = V4.OFF,
+        /**
+         * Rediseño del linaje (`DISENO-ratchet.md` §1.13): reloj simulado, pérdidas de estado con el
+         * reloj atrasado (W-6), linajes forjados por quien tiene S (W-4) y el relevo (R2) cuando un
+         * sobre de un linaje mayor no abre. Lo que se exige pasa a ser «se recupera en pocas rondas».
+         */
+        val relojes: Boolean = false,
+    ) {
         private val rnd = Random(seed)
+        /** Reloj simulado, que avanza en cada paso; solo cuenta con [relojes]. */
+        private var now = 1_000_000L
+        private fun ahora() = if (relojes) now else System.currentTimeMillis()
         // Con SWITCH cada extremo empieza sin saber que el otro es v4 y se entera en un paso al azar,
         // por separado: es la transición real, con las dos puntas un tiempo en desacuerdo.
         private var aV4 = v4 == V4.ON
@@ -95,7 +108,7 @@ class RatchetPropertyTest {
             // clave dentro de su cadena. Si el linaje dejara de entrar en la derivación de la
             // época 0, dos sesiones reiniciadas chocarían aquí.
             val h = Ratchet.Header.decode(sealed.ciphertext) ?: oops("cabecera ilegible al emitir $text")
-            val id = "$who:${h.lineage}:${h.epoch}:${h.n}"
+            val id = keyId(who, h)
             if (!headers.add(id)) oops("clave reutilizada: $who repitió (linaje, época, N) = $id al enviar $text")
             if (!wires.add(sealed.ciphertext.joinToString(",") { it.toString() })) {
                 oops("dos mensajes idénticos en el cable al enviar $text")
@@ -110,7 +123,7 @@ class RatchetPropertyTest {
             val who = if (w.fromAlice) "B" else "A"
             script += "$who recibe ${w.plaintext}"
             try {
-                val res = if (w.fromAlice) ratchet.decrypt(b, secret, w.bytes, bV4) else ratchet.decrypt(a, secret, w.bytes, aV4)
+                val res = if (w.fromAlice) ratchet.decrypt(b, secret, w.bytes, bV4, ahora()) else ratchet.decrypt(a, secret, w.bytes, aV4, ahora())
                 if (w.fromAlice) b = res.state else a = res.state
                 val got = String(res.plaintext)
                 // Propiedad 1: si abre, abre lo suyo. Un texto ajeno sería lo más grave posible:
@@ -122,6 +135,7 @@ class RatchetPropertyTest {
                 // Fallar es legítimo (época retirada, clave gastada, hueco enorme): lo que no es
                 // legítimo es abrir otra cosa. Se anota para el guion.
                 script += "  (no abre: ${e.message})"
+                if (relojes) relayIfBehind(receiverIsB = w.fromAlice, wire = w.bytes)
             }
         }
 
@@ -150,7 +164,7 @@ class RatchetPropertyTest {
             val enCadenaViva = h.lineage == receiver.lineage && h.epoch == receiver.epoch
             script += "duplicado de ${w.plaintext}"
             try {
-                val res = if (w.fromAlice) ratchet.decrypt(b, secret, w.bytes, bV4) else ratchet.decrypt(a, secret, w.bytes, aV4)
+                val res = if (w.fromAlice) ratchet.decrypt(b, secret, w.bytes, bV4, ahora()) else ratchet.decrypt(a, secret, w.bytes, aV4, ahora())
                 if (enCadenaViva) {
                     oops("un duplicado de '${w.plaintext}' se reabrió dentro de la cadena viva (época ${h.epoch}): la clave debía estar gastada")
                 }
@@ -167,6 +181,57 @@ class RatchetPropertyTest {
             }
         }
 
+        /**
+         * Lo que identifica de verdad la clave de un mensaje. Sin [relojes] basta la terna
+         * `(linaje, época, N)` del emisor, que es lo que esta prueba exigió siempre. Con relojes, un
+         * extremo que restaura con el reloj atrasado puede **volver a entrar en un linaje propio ya
+         * usado** (adopta el vigente de la pareja), y entonces la terna se repite sin que se repita
+         * la clave: en una época ≥ 1 la clave sale de un DH con una privada nueva (la identifica
+         * su pública, `cur_pub`), y en la época 0 v4, de la propuesta (`next_pub`). En la época 0
+         * v3 sí se repetiría, y por eso con relojes solo se corre v4 (el caso v3 lo fija aparte
+         * `RatchetCompromisoTest`).
+         */
+        private fun keyId(who: String, h: Ratchet.Header): String {
+            val base = "$who:${h.lineage}:${h.epoch}:${h.n}"
+            if (!relojes) return base
+            val binding = when {
+                h.epoch >= 1 -> h.curPub
+                h.epochV4 -> h.nextPub
+                else -> return base
+            }
+            return base + ":" + binding.joinToString("") { "%02x".format(it) }
+        }
+
+        /** R2, como `RatchetSessions.relay`: un sobre de un linaje mayor en época ≥ 1 que no abre. */
+        private fun relayIfBehind(receiverIsB: Boolean, wire: ByteArray) {
+            // Como en producción, solo con v4: en v3 dos relevos al mismo linaje repetirían clave
+            // y nonce en la época 0 (lo encontró esta prueba, semilla 504, corrida en v3).
+            if (!(if (receiverIsB) bV4 else aV4)) return
+            val h = Ratchet.Header.decode(wire) ?: return
+            val receiver = if (receiverIsB) b else a
+            if (h.epoch < 1 || !Ratchet.peerIsAhead(h.lineage, h.epoch, receiver)) return
+            val lineage = Ratchet.relayLineage(h.lineage, ahora()) ?: return
+            val restarted = ratchet.restart(receiver, secret, lineage, if (receiverIsB) bV4 else aV4)
+            if (receiverIsB) b = restarted else a = restarted
+            script += "  (relevo de ${if (receiverIsB) "B" else "A"} al linaje $lineage)"
+        }
+
+        /** W-4: quien tiene S le mete a uno un sobre de época 0 con un linaje forjado, dentro del tope. */
+        private fun forge() {
+            val toB = rnd.nextBoolean()
+            val lineage = ahora() + rnd.nextInt(Ratchet.LINEAGE_MAX_AHEAD_MS.toInt())
+            val mallory = if (toB) ratchet.initial(secret, alice, bob, lineage) else ratchet.initial(secret, bob, alice, lineage)
+            val wire = ratchet.encrypt(mallory, "forjado".toByteArray()).ciphertext
+            script += "el atacante le mete a ${if (toB) "B" else "A"} el linaje $lineage"
+            try {
+                val res = if (toB) ratchet.decrypt(b, secret, wire, bV4, ahora()) else ratchet.decrypt(a, secret, wire, aV4, ahora())
+                if (String(res.plaintext) != "forjado") oops("el forjado se abrió como otra cosa")
+                if (toB) b = res.state else a = res.state
+            } catch (e: RatchetException) {
+                script += "  (no abre: ${e.message})"
+            }
+        }
+
         private fun drop() {
             if (inFlight.isEmpty()) return
             val w = inFlight.removeAt(rnd.nextInt(inFlight.size))
@@ -176,7 +241,13 @@ class RatchetPropertyTest {
         /** Reinstalación: el estado se va y se arranca un linaje nuevo (mayor). */
         private fun loseState(fromAlice: Boolean) {
             stateLosses++
-            val lineage = 2_000L + stateLosses * 1_000L
+            // Con relojes, la hora; y la mitad de las veces, una hora atrasada (W-6). Atrasada pero
+            // nueva: repetir un linaje ya usado es W-16, cuya precondición está fuera del modelo.
+            val lineage = when {
+                !relojes -> 2_000L + stateLosses * 1_000L
+                rnd.nextBoolean() -> ahora() - 500_000L
+                else -> ahora()
+            }
             if (fromAlice) {
                 a = ratchet.initial(secret, alice, bob, lineage, v4 = aV4)
                 script += "A pierde el estado (linaje $lineage)"
@@ -192,12 +263,14 @@ class RatchetPropertyTest {
                     if (!aV4 && rnd.nextInt(40) == 0) { aV4 = true; script += "A sabe que B es v4" }
                     if (!bV4 && rnd.nextInt(40) == 0) { bV4 = true; script += "B sabe que A es v4" }
                 }
-                when (rnd.nextInt(if (allowStateLoss) 22 else 20)) {
+                now += 1_000L
+                when (rnd.nextInt(if (relojes) 23 else if (allowStateLoss) 22 else 20)) {
                     in 0..6 -> send(fromAlice = true)
                     in 7..12 -> send(fromAlice = false)
                     in 13..17 -> deliver()
                     18 -> duplicate()
                     19 -> drop()
+                    22 -> forge()
                     else -> loseState(fromAlice = rnd.nextBoolean())
                 }
                 // Propiedad 5: sin reinicios de linaje, los dos extremos nunca se separan más de
@@ -226,6 +299,40 @@ class RatchetPropertyTest {
          * mensajes enviados a alguien que acaba de reinstalar **se pierden** hasta que esa
          * persona escribe.
          */
+        /**
+         * Con [relojes] la exigencia cambia: tras pérdidas con el reloj atrasado y linajes forjados,
+         * la conversación tiene que volver a ir **en los dos sentidos en pocas rondas**, con el relevo
+         * haciendo su parte. Sin relevo, el W-6 y el W-4 la dejaban rota para siempre.
+         */
+        fun assertRecovers(rounds: Int = 4) {
+            while (inFlight.isNotEmpty()) deliver()
+            repeat(rounds) { r ->
+                now += Ratchet.LINEAGE_MAX_AHEAD_MS // tiempo de sobra entre rondas: que el tope no estorbe
+                val okAB = roundTrip(fromAlice = true, tag = "ronda $r A→B")
+                val okBA = roundTrip(fromAlice = false, tag = "ronda $r B→A")
+                if (okAB && okBA) return
+            }
+            oops("la conversación no se recuperó en $rounds rondas")
+        }
+
+        private fun roundTrip(fromAlice: Boolean, tag: String): Boolean {
+            val sealed = if (fromAlice) ratchet.encrypt(a, tag.toByteArray(), false, aV4) else ratchet.encrypt(b, tag.toByteArray(), false, bV4)
+            if (fromAlice) a = sealed.state else b = sealed.state
+            val h = Ratchet.Header.decode(sealed.ciphertext)!!
+            val id = keyId(if (fromAlice) "A" else "B", h)
+            if (!headers.add(id)) oops("clave reutilizada en la recuperación: $id")
+            return try {
+                val res = if (fromAlice) ratchet.decrypt(b, secret, sealed.ciphertext, bV4, ahora()) else ratchet.decrypt(a, secret, sealed.ciphertext, aV4, ahora())
+                if (String(res.plaintext) != tag) oops("mensaje cruzado en la recuperación: '${String(res.plaintext)}'")
+                if (fromAlice) b = res.state else a = res.state
+                true
+            } catch (e: RatchetException) {
+                script += "  ($tag no abre: ${e.message})"
+                relayIfBehind(receiverIsB = fromAlice, wire = sealed.ciphertext)
+                false
+            }
+        }
+
         fun assertStillAlive() {
             while (inFlight.isNotEmpty()) deliver()
 
@@ -333,6 +440,21 @@ class RatchetPropertyTest {
             val run = Run(seed, allowStateLoss = seed % 2 == 0L, v4 = V4.SWITCH)
             run.go(steps = 160)
             run.assertStillAlive()
+        }
+    }
+
+    /**
+     * El rediseño del linaje bajo caos (`DISENO-ratchet.md` §1.13): pérdidas de estado con el reloj
+     * atrasado (W-6), linajes forjados por quien tiene S (W-4) y el relevo (R2). Las invariantes de
+     * siempre (nada se abre como otro mensaje, ninguna terna se repite) y además que la conversación
+     * vuelva a ir en los dos sentidos en pocas rondas. Sin el relevo, esta prueba falla.
+     */
+    @Test
+    fun `con relojes atrasados y linajes forjados la conversacion se recupera con relevos`() {
+        for (seed in 501L..580L) {
+            val run = Run(seed, allowStateLoss = true, v4 = V4.ON, relojes = true)
+            run.go(steps = 160)
+            run.assertRecovers()
         }
     }
 }

@@ -307,7 +307,7 @@ Lo que la hace seria no es el nombre, sino que **cualquiera pueda comprobarla**.
 | 0 · Documentación | ✅ 11 oct 2026 (`ef949cf`): P3, P4, P5, P7, P9, P11 y P12 reescritas; W-15 y W-16; `RatchetCompromisoTest` |
 | 1 · Endurecer sin cambiar el formato | ✅ 11 oct 2026 (`f0fa581` y el siguiente); detalle abajo. Etiqueta `protocolo-v3` en `4100f5f` |
 | 2 · Protocolo v4 | ✅ en código y en la JVM (11 oct 2026); 🟡 falta la prueba con dos móviles (PRUEBAS-PENDIENTES §19) |
-| 3 · Linaje, recuperación y autenticación | 🟡 Modelos M1 y M2 hechos (11 oct 2026, [formal/](formal/README.md)): M1 encuentra A-01 en v3 y lo da por cerrado en v4; M2 encuentra H-4. Rediseño del linaje **propuesto** en [DISENO-ratchet.md](DISENO-ratchet.md) §1.13 (tope, relevo y aviso), pendiente de decisión y de su modelo M2b |
+| 3 · Linaje, recuperación y autenticación | 🟡 Modelos M1 y M2 hechos (11 oct 2026, [formal/](formal/README.md)): M1 encuentra A-01 en v3 y lo da por cerrado en v4; M2 encuentra H-4. Rediseño del linaje **implementado** el 11 oct 2026 ([DISENO-ratchet.md](DISENO-ratchet.md) §1.13): tope, relevo (solo con contactos v4) y aviso. Falta la prueba con dos móviles (PRUEBAS-PENDIENTES §19) |
 
 **Fase 1, lo hecho (11 oct 2026):**
 

@@ -1046,6 +1046,28 @@ class ChatService @Inject constructor(
         logLine("📞 llamada perdida de ${short(contact.peerId)}")
     }
 
+    /**
+     * Fila «sesión reiniciada» (R3, `docs/DISENO-ratchet.md` §1.13): [contact] nos hizo adoptar otro
+     * linaje en una sesión que ya había salido de la época 0. Lo normal es que haya reinstalado o
+     * restaurado; si no, alguien con su identidad o la nuestra forzó una sesión (W-4), y esto es lo
+     * único que lo deja ver. Una sola fila por linaje, y sin notificación: no es un mensaje suyo.
+     */
+    private suspend fun recordSessionRestart(contact: Contact, lineage: Long) {
+        val id = sessionRestartId(contact.id, lineage)
+        if (messages.findById(id) != null) return
+        messages.save(
+            Message(
+                id = id,
+                conversationId = contact.id,
+                senderId = contact.id,
+                payload = MessageEnvelope.encodeText(id, SESSION_RESTART_TEXT.toByteArray()),
+                timestamp = System.currentTimeMillis(),
+                status = MessageStatus.DELIVERED,
+            ),
+        )
+        logLine("🔄 sesión con ${short(contact.peerId)} reiniciada (linaje $lineage)")
+    }
+
     /** Cifra y envía un sobre "en crudo" (meta/trozo) sin crear un Message: directo → buzón. */
     private suspend fun sendRaw(contact: Contact, envelope: ByteArray) {
         requireNotBlocked(contact)
@@ -1054,6 +1076,41 @@ class ChatService @Inject constructor(
 
     /** Último reengache por contacto, para no convertir un fallo repetido en una ráfaga. */
     private val lastRehook = mutableMapOf<String, Long>()
+
+    /** Último relevo por contacto: el disparador no está autenticado, así que va con tope de ritmo. */
+    private val lastRelay = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
+     * **Relevo** (R2, `docs/DISENO-ratchet.md` §1.13): [wire] no abrió y reclama una época ≥ 1 de un
+     * linaje mayor que el nuestro, así que el otro está en una sesión que aquí no existe. Se crea una
+     * por encima y se le manda el anuncio por ella, que es lo que hará que la adopte. Cubre W-6 (nos
+     * restauramos con el reloj atrasado) y quita el «sin vuelta atrás» de W-4 (alguien con S lo metió
+     * en un linaje forjado). Como mucho uno por contacto cada [REHOOK_MIN_INTERVAL_MS]: la cabecera
+     * no está autenticada y un nodo podría fabricarla. Solo con contactos v4 (ver dentro). Devuelve
+     * si hubo relevo.
+     */
+    private suspend fun relayIfBehind(contact: Contact, wire: ByteArray): Boolean {
+        // Solo con contactos v4. Tras perder el estado, un segundo relevo puede caer en el mismo
+        // linaje que uno anterior (cabecera + 1, si el otro sigue en la suya); en v3 la cadena de
+        // la época 0 depende solo de S, el linaje y el sentido, así que el primer mensaje repetiría
+        // clave y nonce. En v4 va atada a una propuesta nueva y no pasa. Lo encontró
+        // `RatchetPropertyTest` (semilla 504) el 11 oct 2026.
+        if (!kdf4(contact)) return false
+        val now = System.currentTimeMillis()
+        if (now - (lastRelay[contact.id] ?: 0L) < REHOOK_MIN_INTERVAL_MS) return false
+        val lineage = runCatching { sessions.relay(contact, wire, kdf4(contact), now) }.getOrNull() ?: return false
+        lastRelay[contact.id] = now
+        logLine("↔ relevo con ${short(contact.peerId)}: escribe en un linaje que aquí no está; sesión nueva $lineage")
+        launchHello(
+            contact, estatico = false, limiter = lastRelayHello,
+            enviado = "↔ anuncio por la sesión nueva a ${short(contact.peerId)}",
+            fallido = "↔ anuncio por la sesión nueva a ${short(contact.peerId)} no salió",
+        )
+        return true
+    }
+
+    /** El anuncio del relevo tiene su propio tope: si compartiera el del reengache, podría no salir. */
+    private val lastRelayHello = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /**
      * **Reengancha** una sesión de ratchet desincronizada mandando cualquier cosa nuestra.
@@ -1248,6 +1305,7 @@ class ChatService @Inject constructor(
         return when (recibido) {
             is RatchetSessions.Received.Opened -> {
                 learnFromRatchet(contact, ciphertext)
+                recibido.restartedTo?.let { recordSessionRestart(contact, it) }
                 recibido.value
             }
             // Ya procesado: devolver null lo ack'ea en el buzón, que es lo correcto — está
@@ -1300,7 +1358,7 @@ class ChatService @Inject constructor(
             // Si venía con cabecera de ratchet, lo más probable es que sus linajes estén
             // desincronizados y el otro esté escribiendo en uno que aquí ya no vale. Nosotros
             // sí lo sabemos: reengancharlo (ver [rehook]).
-            if (parecíaRatchet) rehook(contact)
+            if (parecíaRatchet && !relayIfBehind(contact, ciphertext)) rehook(contact)
             return null
         }
         return persistEnvelope(contact, plain, mailboxId, ts)
@@ -1813,6 +1871,17 @@ class ChatService @Inject constructor(
          * un hash con el contacto para que un `callId` elegido por el otro no pueda coincidir con
          * el id de ningún otro mensaje, de esta conversación o de otra.
          */
+        /** Texto de la fila de R3. Va en primera persona del sistema, no del contacto. */
+        const val SESSION_RESTART_TEXT =
+            "🔄 La sesión con este contacto se ha reiniciado. Si no ha reinstalado ni restaurado " +
+                "Krypta, verifica su identidad."
+
+        /** Id de la fila de R3: una por (contacto, linaje), así una reentrega no la repite. */
+        fun sessionRestartId(contactId: String, lineage: Long): String =
+            MessageDigest.getInstance("SHA-256")
+                .digest("krypta-session-restart-v1\u0000$contactId\u0000$lineage".toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+
         fun missedCallId(contactId: String, callId: String): String =
             MessageDigest.getInstance("SHA-256")
                 .digest("krypta-missed-call-v1\u0000$contactId\u0000$callId".toByteArray(Charsets.UTF_8))

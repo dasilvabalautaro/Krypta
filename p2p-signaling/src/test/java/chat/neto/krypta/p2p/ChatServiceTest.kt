@@ -2274,16 +2274,17 @@ class ChatServiceTest {
         val contactosAna = FakeContacts(listOf(bobDeAna))
         val contactosBob = FakeContacts(listOf(anaDeBob))
         val mensajesBob = FakeMessages()
-        private val storeAna = FakeRatchetStore().apply {
+        val mensajesAna = FakeMessages()
+        val storeAna = FakeRatchetStore().apply {
             sessions[bobDeAna.id] = Ratchet(JdkCurve25519())
                 .initial(secreto, anaDeBob.peerId, bobDeAna.peerId, lineage = ahora - 7_200_000L).encode()
         }
-        private val storeBob = FakeRatchetStore().apply {
+        val storeBob = FakeRatchetStore().apply {
             sessions[anaDeBob.id] = Ratchet(JdkCurve25519())
                 .initial(secreto, bobDeAna.peerId, anaDeBob.peerId, lineage = ahora - 3_600_000L).encode()
         }
         val ana = ChatService(
-            sigAna, cipher, FakeMessages(), contactosAna, FakeKeyExchange(anaDeBob.peerId), RendezvousService(),
+            sigAna, cipher, mensajesAna, contactosAna, FakeKeyExchange(anaDeBob.peerId), RendezvousService(),
             FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange(anaDeBob.peerId), storeAna),
         )
         val bob = ChatService(
@@ -2312,7 +2313,149 @@ class ChatServiceTest {
             .mapNotNull { (MessageEnvelope.decode(it.payload) as? MessageEnvelope.Decoded.Text)?.let { t -> String(t.body) } }
 
         fun logs() = "log Bob=${bob.log.value} · log Ana=${ana.log.value}"
+
+        fun avisosDeReinicio(mensajes: FakeMessages) = mensajes.saved.count {
+            (MessageEnvelope.decode(it.payload) as? MessageEnvelope.Decoded.Text)
+                ?.let { t -> String(t.body) == ChatService.SESSION_RESTART_TEXT } == true
+        }
     }
+
+    // --- Rediseño del linaje (11 oct 2026, DISENO-ratchet §1.13): tope, relevo y aviso ----------
+
+    /**
+     * **W-6, arreglada con el relevo (R2).** Bob pierde el estado y su sesión nueva nace con un
+     * linaje **menor** que el vigente (el reloj atrasado). Antes, lo que Ana le escribía se perdía
+     * para siempre: va en una época > 0 de un linaje que Bob ya no tiene, y Ana no adoptaba el menor
+     * de Bob. Ahora Bob ve que Ana escribe en un linaje mayor que no abre, se pone por encima, y Ana
+     * lo adopta. Se pierde el mensaje que lo dispara, no los siguientes. Y a Ana le sale el aviso.
+     */
+    @Test
+    fun `w6 perder el estado con el reloj atrasado se arregla solo con un relevo`() = runTest {
+        conRatchet {
+            val p = Pareja()
+            kotlinx.coroutines.runBlocking {
+                p.conversar()
+                val vigente = RatchetState.decode(p.storeBob.sessions.getValue(p.anaDeBob.id)).lineage
+                p.storeBob.sessions[p.anaDeBob.id] = Ratchet(JdkCurve25519())
+                    .initial(p.secreto, p.bobDeAna.peerId, p.anaDeBob.peerId, lineage = vigente - 60_000L)
+                    .encode()
+
+                p.ana.send(p.bobVistoPorAna(), "este se pierde".toByteArray()); bombear(p.anaHaciaBob, p.bobHaciaAna)
+                p.ana.send(p.bobVistoPorAna(), "este ya llega".toByteArray()); bombear(p.anaHaciaBob, p.bobHaciaAna)
+
+                assertTrue("lo siguiente tiene que llegar\n${p.logs()}", "este ya llega" in p.textosDeBob())
+                val nuevo = RatchetState.decode(p.storeBob.sessions.getValue(p.anaDeBob.id)).lineage
+                assertTrue("Bob tiene que acabar por encima del linaje de Ana", nuevo > vigente)
+                assertEquals("a Ana le sale el aviso de sesión reiniciada", 1, p.avisosDeReinicio(p.mensajesAna))
+            }
+        }
+    }
+
+    /**
+     * **W-4 deja de ser «sin vuelta atrás».** Quien tiene S mete a Bob en un linaje forjado (dentro
+     * del tope). Bob lo adopta y le sale el aviso (R3); lo que escribe va a una sesión del atacante,
+     * que Ana no abre. Ana ve un linaje mayor que no abre y hace un relevo; Bob lo adopta y vuelve
+     * a hablar con ella. Para mantener el secuestro el atacante tendría que volver a intervenir.
+     */
+    @Test
+    fun `un linaje forjado ya no es para siempre el relevo devuelve la sesion a quien es`() = runTest {
+        conRatchet {
+            val p = Pareja()
+            kotlinx.coroutines.runBlocking {
+                p.conversar()
+                val ratchet = Ratchet(JdkCurve25519())
+                val forjadoLinaje = System.currentTimeMillis() + 5 * 60 * 1000L
+                var mallory = ratchet.initial(p.secreto, p.anaDeBob.peerId, p.bobDeAna.peerId, lineage = forjadoLinaje)
+                val forjado = ratchet.encrypt(mallory, MessageEnvelope.encodeText("m1", "soy Ana".toByteArray()))
+                mallory = forjado.state
+                p.bob.onReceived(p.anaDeBob.peerId, forjado.ciphertext)
+                assertEquals(
+                    "Bob adopta el linaje forjado (W-4 sigue mientras el atacante esté activo)",
+                    forjadoLinaje, RatchetState.decode(p.storeBob.sessions.getValue(p.anaDeBob.id)).lineage,
+                )
+                assertEquals("y le sale el aviso", 1, p.avisosDeReinicio(p.mensajesBob))
+                p.bobHaciaAna.saltarLoEnviado()
+
+                // Bob escribe: va a la sesión del atacante. Ana no la abre y hace el relevo.
+                p.bob.send(p.anaVistaPorBob(), "esto lo lee el atacante".toByteArray())
+                bombear(p.anaHaciaBob, p.bobHaciaAna)
+                val trasRelevo = RatchetState.decode(p.storeBob.sessions.getValue(p.anaDeBob.id)).lineage
+                assertTrue("Bob tiene que haber dejado el linaje forjado\n${p.logs()}", trasRelevo > forjadoLinaje)
+
+                p.bob.send(p.anaVistaPorBob(), "de vuelta con Ana".toByteArray())
+                val wire = p.sigBob.sentCiphertext!!
+                bombear(p.anaHaciaBob, p.bobHaciaAna)
+                assertTrue(
+                    "el atacante, sin volver a intervenir, ya no lee a Bob",
+                    runCatching { ratchet.decrypt(mallory, p.secreto, wire) }.isFailure,
+                )
+            }
+        }
+    }
+
+    /**
+     * Con un contacto que aún va por v3 **no hay relevo**: tras perder el estado, un segundo relevo
+     * podía caer en el mismo linaje que uno anterior, y en v3 la época 0 repetiría clave y nonce
+     * (lo encontró `RatchetPropertyTest`, semilla 504). Con él quedan el tope y el aviso.
+     */
+    @Test
+    fun `con un contacto v3 no hay relevo`() = runTest {
+        conRatchet {
+            val v3 = contact.copy(peerProtocol = 3)
+            val store = FakeRatchetStore()
+            val chat = ChatService(
+                FakeSignaling(), cipher, FakeMessages(), FakeContacts(listOf(v3)), FakeKeyExchange(), RendezvousService(),
+                FakeFileStore(), scopeInmediato(), testSessions(FakeKeyExchange(), store),
+            )
+            kotlinx.coroutines.runBlocking {
+                chat.send(v3, "hola".toByteArray())
+                val antes = RatchetState.decode(store.sessions.getValue(v3.id)).lineage
+                val basura = Ratchet.Header(
+                    lineage = antes + 60_000L, epoch = 3, n = 0, pn = 0,
+                    curPub = ByteArray(32) { 1 }, nextPub = ByteArray(32) { 2 },
+                ).encode() + ByteArray(48) { 9 }
+                chat.onReceived(v3.peerId, basura)
+                assertEquals(antes, RatchetState.decode(store.sessions.getValue(v3.id)).lineage)
+            }
+        }
+    }
+
+    /**
+     * El coste de R2, fijado: una cabecera **sin autenticar** con un linaje mayor provoca un relevo
+     * (aquí la fabrica alguien sin claves). Lo acotan dos cosas, y es lo que se comprueba: como mucho
+     * uno cada 5 minutos por contacto, y nunca por encima del tope. No lee nada.
+     */
+    @Test
+    fun `una cabecera falsa provoca como mucho un relevo y nunca por encima del tope`() = runTest {
+        conRatchet {
+            val p = Pareja()
+            kotlinx.coroutines.runBlocking {
+                p.conversar()
+                fun basura(linaje: Long): ByteArray {
+                    val h = Ratchet.Header(
+                        lineage = linaje, epoch = 3, n = 0, pn = 0,
+                        curPub = ByteArray(32) { 1 }, nextPub = ByteArray(32) { 2 },
+                    ).encode()
+                    return h + ByteArray(48) { 9 }
+                }
+                val ahora = System.currentTimeMillis()
+                p.bob.onReceived(p.anaDeBob.peerId, basura(ahora + 60_000L))
+                val primero = RatchetState.decode(p.storeBob.sessions.getValue(p.anaDeBob.id)).lineage
+                assertEquals("un relevo por encima de la cabecera", ahora + 60_001L, primero)
+
+                p.bob.onReceived(p.anaDeBob.peerId, basura(ahora + 120_000L))
+                assertEquals(
+                    "el segundo, dentro de los 5 minutos, no hace nada",
+                    primero, RatchetState.decode(p.storeBob.sessions.getValue(p.anaDeBob.id)).lineage,
+                )
+                assertTrue(
+                    "por encima del tope no hay relevo",
+                    Ratchet.relayLineage(ahora + Ratchet.LINEAGE_MAX_AHEAD_MS + 1, ahora) == null,
+                )
+            }
+        }
+    }
+
 
     /**
      * **H-1.** Bob borra a Ana y la vuelve a añadir (o importa un `.krbk`, que desde aquí es lo

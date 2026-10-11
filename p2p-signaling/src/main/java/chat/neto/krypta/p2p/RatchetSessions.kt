@@ -51,7 +51,15 @@ class RatchetSessions @Inject constructor(
 
     /** Resultado de [receive]: o se abrió, o era una reentrega que ya se procesó. */
     sealed interface Received<out T> {
-        data class Opened<T>(val value: T) : Received<T>
+        data class Opened<T>(
+            val value: T,
+            /**
+             * El sobre hizo adoptar otro linaje en una sesión que ya había salido de la época 0:
+             * el otro reinstaló o restauró, o alguien con S forzó una sesión (W-4). Es el linaje
+             * nuevo, para el aviso del chat (R3, `docs/DISENO-ratchet.md` §1.13); null si no.
+             */
+            val restartedTo: Long? = null,
+        ) : Received<T>
 
         /**
          * Ciphertext ya visto. El buzón reentrega lo que no se acusa, y su clave ya está
@@ -100,16 +108,46 @@ class RatchetSessions @Inject constructor(
 
         // Fuera de la transacción a propósito: descifrar es una función pura y puede costar un
         // X25519. Lo que no puede quedar a medias es lo de dentro.
-        val opened = ratchet.decrypt(stateFor(contact, v4), secretOf(contact), wire, v4)
+        val before = stateFor(contact, v4)
+        val opened = ratchet.decrypt(before, secretOf(contact), wire, v4)
+        val restarted = opened.state.lineage.takeIf { it != before.lineage && before.epoch >= 1 }
         transactions.inTransaction {
             val value = persist(opened.plaintext)
             store.save(contact.id, opened.state.encode())
             // Los de la época 0 no se podan: esa época se rederiva del secreto compartido, y lo
             // único que impide reproducirlos pasada la ventana es esta huella (W-2).
             store.markSeen(contact.id, digest, System.currentTimeMillis(), permanent = Ratchet.isEpochZero(wire))
-            Received.Opened(value)
+            Received.Opened(value, restartedTo = restarted)
         }
     }
+
+    /**
+     * **Relevo** (R2, `docs/DISENO-ratchet.md` §1.13). [wire] no se pudo abrir y su cabecera reclama
+     * una época ≥ 1 de un linaje **mayor** que el nuestro: el otro está en una sesión que no tenemos
+     * (perdimos el estado con el reloj atrasado, W-6; o alguien con S lo metió en una forjada, W-4).
+     * Se crea una sesión por encima de ese linaje, para que el otro la adopte con lo siguiente que le
+     * mandemos. Devuelve el linaje nuevo, o null si no procede.
+     *
+     * También con el **mismo** linaje y una época posterior a la nuestra: es otra sesión con ese
+     * linaje (la creamos antes de perder el estado, o el otro la creó en un relevo previo), y sin
+     * esto las dos quedaban atascadas para siempre. Lo encontró `RatchetPropertyTest` (semilla 506).
+     *
+     * La cabecera **no está autenticada**: un nodo puede fabricarla para forzar relevos. Lo acotan el
+     * tope ([Ratchet.relayLineage]) y el límite de ritmo de quien llama; no lee nada (la época 0 solo
+     * se abre con S).
+     */
+    suspend fun relay(contact: Contact, wire: ByteArray, v4: Boolean = false, now: Long = System.currentTimeMillis()): Long? =
+        lockFor(contact.id).withLock {
+            val (claimedLineage, claimedEpoch) = Ratchet.claimedLineageAndEpoch(wire) ?: return@withLock null
+            // La época 0 se habría abierto (es derivable de S): una que no abre es basura sin más.
+            if (claimedEpoch < 1) return@withLock null
+            val current = stateFor(contact, v4)
+            if (!Ratchet.peerIsAhead(claimedLineage, claimedEpoch, current)) return@withLock null
+            val lineage = Ratchet.relayLineage(claimedLineage, now) ?: return@withLock null
+            val restarted = ratchet.restart(current, secretOf(contact), lineage, v4)
+            transactions.inTransaction { store.save(contact.id, restarted.encode()) }
+            lineage
+        }
 
     /** Olvida la sesión (al borrar el contacto). Volver a añadirlo arranca un linaje nuevo. */
     suspend fun forget(contact: Contact) = lockFor(contact.id).withLock { store.deleteSession(contact.id) }

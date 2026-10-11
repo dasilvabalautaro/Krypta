@@ -2071,7 +2071,18 @@ Maude 3.5.1 behind a `MAUDE_LIB` wrapper in `~/.local/bin` (a plain symlink can'
 `prelude.maude`). **M1 finds W-15 by itself in v3 and verifies v4; M2 finds H-4** — the check that
 they model what we think. `docs/formal/verificar.sh` asserts all 16 lemma outcomes (<1 min). Trap
 worth remembering: a reveal rule that re-produces its own state fact makes Tamarin chain reveals
-forever, so even trivial lemmas never terminate.
+forever, so even trivial lemmas never terminate. **Lineage redesign implemented the same day** (author's choice of R1+R2+R3,
+`DISENO-ratchet.md` §1.13, spec §5.7): **R1** adopt a higher lineage only if `≤ now + 10 min`
+(kills the `Long.MAX_VALUE` lock); **R2 relay**, only with v4 contacts: an envelope that doesn't open
+and whose *unauthenticated* header claims epoch ≥ 1 of a higher lineage, or of ours at a later epoch
+(a sibling session), makes us restart at `max(now, L_header + 1)` and send `V` through it, at most
+once per contact per 5 min — fixes W-6 and makes H-4 last only while the attacker stays active, at
+the cost that a malicious node can force epoch-0 resets; **R3** a "sesión reiniciada" system row on
+adopting a lineage after epoch 0. `RatchetPropertyTest` with clocks/forgeries/relay found two things:
+the sibling-session deadlock (seed 506, fixed by the equal-lineage trigger) and that in **v3** two
+relays to the same lineage repeat key and nonce (seed 504) — hence relay is v4-only. M2b
+(`docs/formal/krypta_m2b.spthy`) verifies "without S nobody adopts a non-honest lineage" only
+**assuming** a helper Tamarin can't close; its recovery traces didn't terminate.
 
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a

@@ -947,8 +947,12 @@ JVM (`RatchetCompromisoTest`, y `RatchetPropertyTest` con v4 y con la transició
      W-15), con B cerrado a mitad para que una parte vaya por el buzón. Debe ensamblarse entero.
 4. - [ ] **Llamada** entre los dos con el build nuevo: debe conectar y oírse. Repetirla con B todavía
      en v3 (paso 1): debe conectar igual, por la clave negociada.
-5. - [ ] **Reinstalar B** (con `.krbk`) y escribirse: la conversación debe reengancharse sola
-     (W-6 aparte: con la hora automática).
+5. - [ ] **Reinstalar B** (con `.krbk`) y escribirse: la conversación debe reengancharse sola, y
+     en el chat de A debe salir la fila «La sesión con este contacto se ha reiniciado».
+6. - [ ] **W-6 con el relevo**: reinstalar B con la **hora automática apagada y el reloj una hora
+     atrasado**, importar el `.krbk` y que A escriba dos mensajes. El primero puede perderse; el
+     segundo tiene que llegar. En el Diagnóstico de B debe salir `↔ relevo con …` y en el de A el
+     aviso de sesión reiniciada. Después, volver a la hora automática.
 
 ---
 

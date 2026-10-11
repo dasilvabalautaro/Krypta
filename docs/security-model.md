@@ -506,7 +506,13 @@ escrituras.
     a quien **solo escucha** después de un robo, en cuanto los dos giran claves. A quien tiene la
     identidad **y además manda algo**, no:
     - Con un sobre de época 0 y un linaje forjado **secuestra la sesión** y lee en pasivo lo que
-      escriba el otro, sin vuelta atrás hasta borrar el contacto (H-4).
+      escriba el otro (H-4). Hasta el 11 oct 2026 era sin vuelta atrás. Desde entonces el linaje
+      forjado tiene que caber en «ahora + 10 min», y con contactos que tengan la versión actual
+      el extremo legítimo hace un **relevo** que le devuelve la sesión: el secuestro dura lo que
+      el atacante siga interviniendo, y el chat muestra que la sesión se reinició
+      ([DISENO-ratchet.md](DISENO-ratchet.md) §1.13). El relevo se dispara con una cabecera sin
+      autenticar, así que un nodo malicioso puede forzar reinicios a la época 0 (sin secreto hacia
+      adelante hasta la siguiente respuesta) una vez cada 5 minutos, sin leer nada.
     - Como la autenticación del remitente es la del secreto compartido, **puede escribir como
       cualquiera de tus contactos**. Con el depósito ciego eso incluye ponerte palabras en boca de
       un contacto usando **tu propia** identidad robada, por ejemplo de tu `.krbk` (H-5). Está
@@ -529,8 +535,10 @@ escrituras.
 13. **Restaurar la identidad con el reloj del móvil atrasado** (W-6 de la especificación). Si al
     reinstalar o importar el `.krbk` la fecha del móvil es anterior al momento en que la pareja
     empezó su sesión actual, lo que escribes llega pero sin secreto hacia adelante, y **lo que te
-    escribe el otro se pierde sin aviso**. Poner bien la hora después no lo arregla; lo arregla que
-    el otro te borre y te vuelva a añadir. Con el reloj en hora automática no pasa.
+    escribe el otro se pierde sin aviso**. Desde el 11 oct 2026, con un contacto que tenga la
+    versión actual, el relevo lo arregla solo y se pierde como mucho el primer mensaje suyo. Con un
+    contacto en una versión anterior sigue igual: poner bien la hora después no lo arregla, lo
+    arregla borrar y volver a añadir el contacto. Con el reloj en hora automática no pasa.
 
 ---
 

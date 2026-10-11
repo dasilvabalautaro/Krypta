@@ -265,6 +265,20 @@ Lo que cambia con la v4 está en §5.10.
 - Recuperación: como la época 0 de cualquier linaje es derivable de `S`, el lado que pierde el
   estado siempre puede volver a hablar, y el otro adopta su linaje (que es mayor). Si el otro sigue
   escribiendo en el viejo, el que perdió el estado responde con un `V` (reengache, §7.6).
+- **Tope (R1, desde el 11 oct 2026).** Un linaje mayor se adopta solo si `L ≤ ahora + 10 min`
+  (`Ratchet.LINEAGE_MAX_AHEAD_MS`), con el reloj de quien recibe. Por encima, su época 0 se abre
+  (`openOld`) pero no se adopta.
+- **Relevo (R2), solo con contactos v4.** Si un sobre con pinta de v2 no abre por ninguna vía y su
+  cabecera, **sin autenticar**, reclama una época ≥ 1 de un linaje mayor que el nuestro, o del
+  nuestro en una época posterior a la nuestra (una sesión hermana con el mismo linaje), se crea una
+  sesión nueva con `L' = máx(ahora, L_cabecera + 1)`, si cabe en el tope, y se le manda el `V` por
+  ella. Como mucho una vez por contacto cada 5 min (`RatchetSessions.relay`,
+  `ChatService.relayIfBehind`). Con un contacto v3 no se hace: tras perder el estado, un segundo
+  relevo puede caer en el mismo linaje que uno anterior, y la época 0 v3 repetiría clave y nonce.
+- **Aviso (R3).** Al adoptar otro linaje en una sesión que ya había salido de la época 0, el chat
+  guarda una fila de sistema (`ChatService.SESSION_RESTART_TEXT`), una por linaje.
+- Diseño y coste en [DISENO-ratchet.md](DISENO-ratchet.md) §1.13; modelo M2b en
+  [formal/](formal/README.md).
 
 ### 5.8 Límites
 
@@ -539,7 +553,7 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 | **P5** | Recuperación tras un compromiso frente a un atacante **pasivo**: tras una ronda de DH que no ha visto, vuelve a no leer | A5 pasivo | Afirmada, no probada. Exige privadas efímeras nuevas, que el atacante no conozca, **en los dos lados** | Ídem |
 | **P6** | Recuperación tras un compromiso frente a un atacante **activo** | A4, A5 activos | **No se cumple** | W-3, W-4 (`RatchetTest`: «un linaje forjado secuestra la sesión») |
 | **P7** | Un sobre genuino se entrega como mucho una vez **dentro de la ventana de deduplicación** (8 días ∪ 500); fuera de ella, la época 0 se puede reproducir (W-2) | A1 | Probada | `RatchetSessionsTest`, `RatchetSeenPruneSqlTest`, `ChatServiceTest` |
-| **P8** | Una conversación nunca queda rota del todo porque un extremo pierda el estado, borre y vuelva a añadir el contacto o importe un `.krbk` | — | Probada, **condicionada** a W-6 | `RatchetPropertyTest`, `ChatServiceTest` (re-añadir, `.krbk`, desde el 14 sep 2026) |
+| **P8** | Una conversación nunca queda rota del todo porque un extremo pierda el estado, borre y vuelva a añadir el contacto o importe un `.krbk` | — | Probada, **condicionada** a W-6 | `RatchetPropertyTest` (también con relojes atrasados, linajes forjados y relevo: 80 semillas), `ChatServiceTest` (re-añadir, `.krbk`, relevo). Con contactos v3, condicionada a W-6 |
 | **P9** | La red no puede degradar a v1 una pareja **cuya versión ya está aprendida**, y una copia vieja del contacto tampoco. **La primera negociación es oportunista**: un nodo que suprima los anuncios `V` iniciales (en v1 se distinguen por el tamaño) mantiene a la pareja en v1 mientras no llegue nada v2 | A1, A2 (y A4 por el camino del anuncio) | Probada desde el 14 sep 2026, con ese alcance | `ContactUpsertSqlTest`, `ChatServiceTest` |
 | **P10** | El avance del ratchet y la persistencia del mensaje se confirman juntos | — | Probada | `RatchetSessionsTest`, `ChatServiceTest` |
 | **P11** | Con v3, los mensajes de control y los textos cortos miden lo mismo: lo que cae en el mismo tramo es indistinguible por tamaño, lo que cae en tramos distintos no | A1 | Probada | `PaddingTest`, `RatchetPaddingTest` |
@@ -557,9 +571,9 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 | **W-1** | La **época 0** no tiene secreto hacia adelante, y si el primer mensaje del usuario sale en ella **depende de los relojes** | A4 | DISENO-ratchet §1.8.4 |
 | **W-2** | Un sobre de época 0 **reproducido** fuera de la ventana de deduplicación (8 días ∪ 500) se vuelve a entregar | A1 | DISENO-ratchet §1.9 |
 | **W-3** | **La autenticación del origen es la de `S`**. Quien tenga *cualquiera* de las dos identidades puede inyectar como el otro por tres vías: v1, época 0 de un linaje ajeno (se abre sin adoptarlo) y un linaje nuevo. Con el depósito ciego eso incluye **suplantar a cualquier contacto ante quien perdió su propia clave** (KCI). **La resistencia a KCI no se promete** (decisión del 15 sep 2026, hasta la revisión externa). Por el buzón **con PeerID** esa variante solo entra si el nodo miente sobre el remitente | A4 | H-5 de la revisión; fijado en `ChatServiceTest` (buzón ciego, PeerID con nodo honrado y con nodo que miente) |
-| **W-4** | **Secuestro por linaje**: un sobre de época 0 con un linaje forjado muy alto es adoptado, el receptor avanza con la propuesta del atacante y le escribe con material que este conoce; el extremo legítimo queda fuera **sin vuelta atrás** hasta borrar la sesión | A4 activo | H-4; fijado en `RatchetTest` |
+| **W-4** | **Secuestro por linaje**: un sobre de época 0 con un linaje forjado muy alto es adoptado, el receptor avanza con la propuesta del atacante y le escribe con material que este conoce; el extremo legítimo queda fuera **sin vuelta atrás** hasta borrar la sesión | A4 activo | H-4. **Acotado el 11 oct 2026**: R1 impide el linaje fuera del tope (`Long.MAX_VALUE`), y con contactos v4 el relevo (R2) devuelve la sesión al extremo legítimo, así que el secuestro dura lo que el atacante siga interviniendo; R3 lo hace visible. Con contactos v3, sin relevo. Fijado en `RatchetTest` y `ChatServiceTest` |
 | **W-5** | La recepción v1 se acepta siempre, de cualquier contacto, aunque la pareja ya use v2 | A4 | Ligado a W-3: cerrar solo esta vía no compra nada |
-| **W-6** | La monotonía del linaje la da el reloj. **El efecto real es de disponibilidad**: quien pierde el estado con el reloj por detrás del linaje vigente (restaurar con la fecha mal puesta, o un linaje vigente creado por un móvil con el reloj adelantado) crea un linaje menor; lo que escribe llega pero sin salir de la época 0, lo que le escriben **se pierde**, y corregir el reloj no lo arregla (§5.7). Repetir claves exigiría crear un linaje en el mismo milisegundo que uno anterior (eso es W-16) | — | Sin arreglo; fijado en `RatchetTest`. Un linaje monótono duradero toca la regla congelada (REVISION §9.2) |
+| **W-6** | La monotonía del linaje la da el reloj. **El efecto real es de disponibilidad**: quien pierde el estado con el reloj por detrás del linaje vigente (restaurar con la fecha mal puesta, o un linaje vigente creado por un móvil con el reloj adelantado) crea un linaje menor; lo que escribe llega pero sin salir de la época 0, lo que le escriben **se pierde**, y corregir el reloj no lo arregla (§5.7). Repetir claves exigiría crear un linaje en el mismo milisegundo que uno anterior (eso es W-16) | — | **Arreglado con contactos v4 el 11 oct 2026** por el relevo (R2): se pierde el mensaje que lo dispara, no los siguientes (`ChatServiceTest`, `RatchetPropertyTest` con relojes atrasados). Con contactos v3 sigue igual; fijado en `RatchetTest` |
 | **W-7** | Sin post-cuántico: todo es X25519, y el PeerID *es* la clave pública | A6 | [DISENO-postcuantico.md](DISENO-postcuantico.md) |
 | **W-8** | Los **frames de una llamada** no llevan contador ni ventana, y la clave es la misma en los dos sentidos: **la capa de aplicación** no distingue un frame repetido, reordenado o devuelto al emisor. **Impacto limitado mientras la seguridad de transporte de libp2p (TLS 1.3 o Noise) mantenga autenticidad, orden y anti-replay de extremo a extremo**, y eso está comprobado (15 sep 2026): un intermediario que duplica, reordena o refleja bytes corta la conexión sin entregar nada repetido, y un relay no ve ni el frame ni lo negociado dentro del circuito. En los tests se negoció TLS 1.3. Sin comprobar: la vía QUIC directa tras DCUtR (por inspección, go-libp2p no usa 0-RTT). No da frescura frente a un extremo comprometido ni frente a código que reinyecte frames después del transporte, y no sustituye a un contador si cambia el transporte. Y la app no puede verificarlo en ejecución: go-libp2p deja vacío `ConnState().Security` en las conexiones relayed | A1, si cambiara el transporte | Pregunta para la revisión (§15.5); evidencia en [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md) §8 |
 | **W-9** | `PN` se transmite y no se usa; las claves de la época anterior salen de la cadena retirada, acotadas por `MAX_SKIP` | — | Pregunta para la revisión |
@@ -599,12 +613,11 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 1. ¿La reformulación **por épocas** (§5, DISENO-ratchet §2) conserva el secreto hacia adelante y la
    recuperación tras compromiso del doble ratchet? En particular: una época avanza por **mensaje
    recibido**, no por turno, y la raíz de las épocas ≥ 1 no lleva el linaje en `info`.
-2. **Linaje** (W-4, W-6): ¿hay una regla que conserve la recuperación automática tras perder el
-   estado sin permitir que quien tenga `S` secuestre la sesión? Candidatas que no se han hecho:
-   acotar `L` a «ahora + margen», exigir prueba de época ≥ 1 para adoptar, no adoptar nunca un
-   linaje de una sesión con épocas avanzadas sin confirmación del usuario. La misma regla tendría que
-   resolver W-6: tras perder el estado con el reloj atrasado, un sentido queda roto y no se recupera
-   solo (fijado en `RatchetTest`).
+2. **Linaje** (W-4, W-6): desde el 11 oct 2026 hay tope, relevo y aviso (§5.7). ¿Es aceptable el
+   coste del relevo, que se dispara con una cabecera **sin autenticar** y deja a un nodo forzar
+   reinicios a la época 0 cada 5 min, sin leer nada? ¿Hay un disparador autenticado que conserve la
+   recuperación tras perder el estado? ¿Y el tope de 10 min es el compromiso correcto entre el
+   desfase de relojes que se tolera y lo que dura un secuestro?
 3. **Época 0 derivable** (W-1, W-2): ¿es aceptable que la protección contra reproducciones dependa de
    una tabla de deduplicación con ventana, o conviene rechazar la época 0 de un linaje que ya no es
    el vigente?

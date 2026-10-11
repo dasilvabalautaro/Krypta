@@ -17,6 +17,8 @@ conocemos**. Los dos lo hacen:
 | M1, las dos | `secreto`, `acuerdo`, `ejecutable` | verificado | Sin comprometer nada no se lee nada, y lo que B acepta lo envió A |
 | M2 | `recuperacion_con_S` | **falsificado** | Encuentra H-4 / W-4: con `S`, un linaje forjado deja a B en la sesión del atacante sin vuelta atrás |
 | M2 | `recuperacion_honrada` | verificado | Sin nadie con `S`, cuando A pierde el estado, B adopta su linaje nuevo |
+| M2b (regla del linaje nueva, §1.13) | `sin_S_solo_linajes_honrados` | verificado **condicionado** | Sin `S`, por muchas cabeceras falsas que fabrique el atacante, nadie adopta un linaje que no haya creado un extremo honrado. Se verifica suponiendo el auxiliar `linaje_escrito_es_honrado`, que Tamarin no cierra en 2 min |
+| M2b | `tope`, `ejecutable` | verificado | Un linaje fuera de «ahora + tope» no se adopta (el `Long.MAX_VALUE`) |
 
 `propuesta_autentica`, `secreto_dh` (M1) y `linaje_de_B_adoptado` (M2) son lemas auxiliares que
 Tamarin necesita para cerrar las pruebas. También se prueban.
@@ -28,6 +30,12 @@ Tamarin necesita para cerrar las pruebas. También se prueban.
   para la pregunta. No cubre las épocas siguientes, el desorden, las pérdidas, el relleno ni P5
   (recuperación frente a un atacante pasivo).
 - **M2** solo cubre la regla del linaje, sin cadenas.
+- **M2b** modela la regla nueva (tope y relevo) con un reloj por extremo. Sus trazas de recuperación
+  (`recuperacion_tras_forja`, `w6_se_recupera`) **no terminaron** con ninguna heurística, y el
+  auxiliar de su lema principal tampoco. Lo que muestran esas trazas lo cubren los tests de Kotlin
+  (`RatchetPropertyTest` con relojes y linajes forjados, `ChatServiceTest`). Su primera versión
+  encontró una reflexión: el modelo no llevaba el sentido en la clave de la época 0. Krypta sí lo
+  lleva.
 - Ninguno ve **condiciones de carrera** (H-0): en un modelo simbólico cada regla es atómica.
 - Ninguno ve **la reutilización de nonce** (W-16): AES-GCM es aquí un cifrado ideal. Eso lo fija
   `RatchetCompromisoTest`.
@@ -42,6 +50,8 @@ export PATH="$HOME/.local/bin:$PATH"
 tamarin-prover --prove krypta_m1.spthy          # M1 con derivaciones v3
 tamarin-prover --prove -DV4 krypta_m1.spthy     # M1 con derivaciones v4
 tamarin-prover --prove krypta_m2.spthy          # M2
+tamarin-prover --prove=tope krypta_m2b.spthy    # M2b: lema a lema. Sin nombre se cuelga en el
+                                                # auxiliar, que no cierra; las trazas van con -DTRAZAS
 tamarin-prover interactive .                    # interfaz web, para ver las trazas de ataque
 ```
 
@@ -82,3 +92,7 @@ Dos trampas que conviene no repetir:
   persistente tampoco sirve: dejaría revelar un estado ya sobrescrito y daría ataques falsos.
 - El preprocesador (`#ifdef`) no funciona dentro de un `let`. La diferencia entre v3 y v4 va en
   `macros:` a nivel de teoría.
+- **Un reloj como cadena de reglas** (`[ Reloj(t) ] → [ Reloj(t+1) ]`) hace que Tamarin retroceda por
+  ella sin fin. En M2b la hora entra como un valor cualquiera y la monotonía va en una restricción.
+- Con naturales, muchas comparaciones `<<` entre sumas desconocidas disparan los casos. Fijar
+  valores concretos en los lemas de traza ayudó en `ejecutable`, no en las demás.

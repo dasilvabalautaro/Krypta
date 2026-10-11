@@ -267,6 +267,20 @@ with v4 is in §5.10.
 - Recovery: since epoch 0 of any lineage is derivable from `S`, the side that lost its state can
   always talk again, and the other side adopts its lineage (which is higher). If the other side keeps
   writing in the old one, the side that lost its state answers with a `V` (rehook, §7.6).
+- **Cap (R1, since 11 Oct 2026).** A higher lineage is adopted only if `L ≤ now + 10 min`
+  (`Ratchet.LINEAGE_MAX_AHEAD_MS`), on the receiver's clock. Above that, its epoch 0 is opened
+  (`openOld`) but not adopted.
+- **Relay (R2), only with v4 contacts.** If an envelope that looks like v2 opens by no path and its
+  header, **unauthenticated**, claims an epoch ≥ 1 of a lineage higher than ours, or of ours in a
+  later epoch than ours (a sibling session with the same lineage), a new session is created with
+  `L' = max(now, L_header + 1)`, if it fits under the cap, and the `V` is sent through it. At most
+  once per contact every 5 min (`RatchetSessions.relay`, `ChatService.relayIfBehind`). Not done
+  with a v3 contact: after a state loss, a second relay can land on the same lineage as an earlier
+  one, and v3's epoch 0 would repeat key and nonce.
+- **Notice (R3).** When another lineage is adopted in a session that had already left epoch 0, the
+  chat stores a system row (`ChatService.SESSION_RESTART_TEXT`), one per lineage.
+- Design and cost in [DISENO-ratchet.md](DISENO-ratchet.md) §1.13 (Spanish); model M2b in
+  [formal/](formal/README.md).
 
 ### 5.8 Limits
 
@@ -546,7 +560,7 @@ protocol has yet had formal analysis or external review** (see
 | **P5** | Post-compromise recovery against a **passive** attacker: after a DH round it did not see, it can no longer read | A5 passive | Claimed, not tested. Requires fresh ephemeral private keys, unknown to the attacker, **on both sides** | Same |
 | **P6** | Post-compromise recovery against an **active** attacker | A4, A5 active | **Does not hold** | W-3, W-4 (`RatchetTest`: "a forged lineage hijacks the session") |
 | **P7** | A genuine envelope is delivered at most once **within the deduplication window** (8 days ∪ 500); outside it, epoch 0 can be replayed (W-2) | A1 | Tested | `RatchetSessionsTest`, `RatchetSeenPruneSqlTest`, `ChatServiceTest` |
-| **P8** | A conversation is never permanently broken because one end loses its state, deletes and re-adds the contact, or imports a `.krbk` | — | Tested, **conditional** on W-6 | `RatchetPropertyTest`, `ChatServiceTest` (re-add, `.krbk`, since 14 Sep 2026) |
+| **P8** | A conversation is never permanently broken because one end loses its state, deletes and re-adds the contact, or imports a `.krbk` | — | Tested, **conditional** on W-6 | `RatchetPropertyTest` (also with clocks behind, forged lineages and relay: 80 seeds), `ChatServiceTest` (re-add, `.krbk`, relay). With v3 contacts, conditional on W-6 |
 | **P9** | The network cannot downgrade to v1 a pair **whose version has already been learned**, nor can a stale copy of the contact. **The first negotiation is opportunistic**: a node that suppresses the initial `V` announcements (in v1 they stand out by size) keeps the pair on v1 until something v2 gets through | A1, A2 (and A4 via the announcement path) | Tested since 14 Sep 2026, with that scope | `ContactUpsertSqlTest`, `ChatServiceTest` |
 | **P10** | The ratchet advance and the persistence of the message commit together | — | Tested | `RatchetSessionsTest`, `ChatServiceTest` |
 | **P11** | With v3, control messages and short texts have the same size: whatever falls in the same band is indistinguishable by size, whatever falls in different bands is not | A1 | Tested | `PaddingTest`, `RatchetPaddingTest` |
@@ -564,9 +578,9 @@ protocol has yet had formal analysis or external review** (see
 | **W-1** | **Epoch 0** has no forward secrecy, and whether the user's first message goes out in it **depends on the clocks** | A4 | DISENO-ratchet §1.8.4 |
 | **W-2** | An epoch-0 envelope **replayed** outside the deduplication window (8 days ∪ 500) is delivered again | A1 | DISENO-ratchet §1.9 |
 | **W-3** | **Origin authentication is that of `S`**. Whoever holds *either* identity can inject as the other in three ways: v1, epoch 0 of a foreign lineage (opened without adopting it) and a new lineage. With blind deposit that includes **impersonating any contact to someone who lost their own key** (KCI). **KCI resistance is not promised** (decision of 15 Sep 2026, until the external review). Through the **PeerID** mailbox that variant only gets in if the node lies about the sender | A4 | H-5 of the review; pinned in `ChatServiceTest` (blind mailbox; PeerID mailbox with an honest node and with a lying node) |
-| **W-4** | **Lineage hijack**: an epoch-0 envelope with a forged, very high lineage is adopted, the receiver advances with the attacker's proposal and writes to them with material the attacker knows; the legitimate end is locked out **with no way back** until the session is deleted | A4 active | H-4; pinned in `RatchetTest` |
+| **W-4** | **Lineage hijack**: an epoch-0 envelope with a forged, very high lineage is adopted, the receiver advances with the attacker's proposal and writes to them with material the attacker knows; the legitimate end is locked out **with no way back** until the session is deleted | A4 active | H-4. **Bounded on 11 Oct 2026**: R1 rules out lineages beyond the cap (`Long.MAX_VALUE`), and with v4 contacts the relay (R2) hands the session back to the legitimate end, so the hijack lasts only while the attacker keeps intervening; R3 makes it visible. With v3 contacts, no relay. Pinned in `RatchetTest` and `ChatServiceTest` |
 | **W-5** | v1 reception is always accepted, from any contact, even when the pair already uses v2 | A4 | Tied to W-3: closing only this path buys nothing |
-| **W-6** | Lineage monotonicity comes from the clock. **The real effect is on availability**: whoever loses their state with the clock behind the current lineage (restoring with the wrong date set, or a current lineage created by a phone whose clock ran ahead) creates a lower lineage; what they write arrives but never leaves epoch 0, what is written to them **is lost**, and fixing the clock does not help (§5.7). Repeating keys would require creating a lineage in the same millisecond as an earlier one (that is W-16) | — | Not fixed; pinned in `RatchetTest`. A durable monotonic lineage touches the frozen rule (REVISION §9.2) |
+| **W-6** | Lineage monotonicity comes from the clock. **The real effect is on availability**: whoever loses their state with the clock behind the current lineage (restoring with the wrong date set, or a current lineage created by a phone whose clock ran ahead) creates a lower lineage; what they write arrives but never leaves epoch 0, what is written to them **is lost**, and fixing the clock does not help (§5.7). Repeating keys would require creating a lineage in the same millisecond as an earlier one (that is W-16) | — | **Fixed with v4 contacts on 11 Oct 2026** by the relay (R2): the message that triggers it is lost, not the following ones (`ChatServiceTest`, `RatchetPropertyTest` with clocks behind). With v3 contacts unchanged; pinned in `RatchetTest` |
 | **W-7** | No post-quantum protection: everything is X25519, and the PeerID *is* the public key | A6 | [DISENO-postcuantico.md](DISENO-postcuantico.md) |
 | **W-8** | **Call frames** carry no counter or window, and the key is the same in both directions: **the application layer** cannot tell a replayed, reordered or reflected frame. **Limited impact as long as libp2p's transport security (TLS 1.3 or Noise) keeps end-to-end authenticity, ordering and anti-replay**, and this was checked (15 Sep 2026): a middlebox that duplicates, reorders or reflects bytes kills the connection without delivering anything twice, and a relay sees neither the frame nor what is negotiated inside the circuit. The tests negotiated TLS 1.3. Not checked: the direct QUIC path after DCUtR (by inspection, go-libp2p does not use 0-RTT). It gives no freshness against a compromised end nor against code that re-injects frames after the transport, and it does not replace a counter if the transport changes. And the app cannot verify it at runtime: go-libp2p leaves `ConnState().Security` empty on relayed connections | A1, if the transport changed | Question for the review (§15.5); evidence in [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md) §8 |
 | **W-9** | `PN` is transmitted and not used; the previous epoch's keys come from the retired chain, bounded by `MAX_SKIP` | — | Question for the review |
@@ -608,12 +622,11 @@ Test names are mostly in Spanish, as is most of the code's commentary.
 1. Does the **epoch-based** reformulation (§5, DISENO-ratchet §2) preserve the double ratchet's
    forward secrecy and post-compromise recovery? In particular: an epoch advances per **message
    received**, not per turn, and the root of epochs ≥ 1 does not carry the lineage in `info`.
-2. **Lineage** (W-4, W-6): is there a rule that keeps automatic recovery after state loss without
-   letting whoever holds `S` hijack the session? Candidates not implemented: bounding `L` to
-   "now + margin", requiring proof of epoch ≥ 1 to adopt, never adopting a lineage for a session with
-   advanced epochs without user confirmation. The same rule would have to solve W-6: after losing
-   state with a clock running behind, one direction stays broken and does not recover by itself
-   (pinned in `RatchetTest`).
+2. **Lineage** (W-4, W-6): since 11 Oct 2026 there is a cap, a relay and a notice (§5.7). Is the
+   relay's cost acceptable — it fires on an **unauthenticated** header and lets a node force resets
+   to epoch 0 every 5 min, without reading anything? Is there an authenticated trigger that keeps
+   recovery after state loss? And is a 10-min cap the right trade-off between the clock skew
+   tolerated and how long a hijack lasts?
 3. **Derivable epoch 0** (W-1, W-2): is it acceptable for replay protection to depend on a
    deduplication table with a window, or should epoch 0 of a lineage that is no longer current be
    rejected?

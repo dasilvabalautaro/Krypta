@@ -1,0 +1,177 @@
+theory KryptaM2b
+begin
+
+/*
+ * Modelo M2b: la regla del linaje **propuesta** en DISENO-ratchet.md §1.13, con tope (R1) y relevo
+ * (R2). M2 modela la regla de antes y encuentra H-4; esto comprueba que la nueva hace lo que dice.
+ *
+ * Qué modela:
+ *   - cada extremo tiene su propio reloj: cada regla que necesita la hora la recibe como un natural
+ *     cualquiera y lo anuncia con `Ahora(X, t)`; una restricción impide que el reloj de un extremo
+ *     vaya hacia atrás. Los dos relojes son independientes, así que cabe W-6 (uno atrasado);
+ *   - un linaje nuevo vale la hora local de quien lo crea;
+ *   - R1: se adopta un linaje mayor solo si no pasa de «ahora + tope» (aquí, una unidad);
+ *   - R2: quien recibe un sobre de época ≥ 1 de un linaje mayor que el suyo, que no puede abrir,
+ *     crea una sesión por encima: máx(ahora, linaje de la cabecera + 1), si cabe en el tope;
+ *   - los sobres de época ≥ 1 son opacos, `<'e1', linaje>`, y **sin autenticar**: cualquiera, también
+ *     un nodo sin claves, puede fabricarlos. Es el coste de R2, y el modelo lo deja hacer a propósito.
+ *
+ * No modela el contenido ni las épocas (eso es M1), el límite de ritmo del relevo, ni R3 (el aviso
+ * es interfaz). Un reloj como cadena de «tics» hacía que Tamarin retrocediera por ella sin fin; por
+ * eso la hora entra como valor y la monotonía va en una restricción.
+ */
+
+builtins: hashing, symmetric-encryption, natural-numbers
+
+rule Pareja:
+    [ Fr(~s) ]
+  --[ Pareja($A, $B, ~s), Diferentes($A, $B) ]->
+    [ !Par($A, $B, ~s), !Par($B, $A, ~s), Lin($A, $B, %1), Lin($B, $A, %1) ]
+
+rule Revelar_S:
+    [ !Par(X, Y, s) ]
+  --[ RevelaS(X, Y) ]->
+    [ Out(s) ]
+
+/* X pierde el estado: sesión nueva con su hora local, que puede ir atrasada respecto a la del otro. */
+rule Pierde_estado:
+    [ Lin(X, Y, %l), In(%t) ]
+  --[ TieneLin(X, Y, %l), Ahora(X, %t), Crea(X, Y, %t) ]->
+    [ Lin(X, Y, %t) ]
+
+/* X escribe en la época 0 de su linaje: autenticado con S, el linaje va dentro (es el AAD). */
+rule Escribe_0:
+    [ !Par(X, Y, s), Lin(X, Y, %l), Fr(~m) ]
+  --[ TieneLin(X, Y, %l), Escribe0(X, Y, %l) ]->
+    // La clave lleva el sentido (quien escribe), como CK(e, d): sin él, un sobre reflejado al propio
+    // emisor se abriría. Así lo encontró este modelo en su primera versión.
+    [ Out(senc(<'e0', %l, ~m>, h(<'k0', s, %l, X>))), Lin(X, Y, %l) ]
+
+/* X escribe en una época ≥ 1 de su linaje. Para el linaje basta su cabecera. */
+rule Escribe_1:
+    [ Lin(X, Y, %l) ]
+  --[ TieneLin(X, Y, %l), Escribe1(X, Y, %l) ]->
+    [ Out(<'e1', %l>), Lin(X, Y, %l) ]
+
+/* R1: un linaje mayor que no pasa del tope se adopta. */
+rule Adopta:
+    [ !Par(Y, X, s), Lin(Y, X, %ly), In(%t), In(senc(<'e0', %lm, m>, h(<'k0', s, %lm, X>))) ]
+  --[ TieneLin(Y, X, %ly), Ahora(Y, %t), Menor(%ly, %lm), DentroDelTope(%lm, %t), Adopta(Y, X, %lm, %t) ]->
+    [ Lin(Y, X, %lm) ]
+
+/* Menor o igual: se abre (`openOld`) y no se adopta. */
+rule Abre_sin_adoptar:
+    [ !Par(Y, X, s), Lin(Y, X, %ly), In(senc(<'e0', %lm, m>, h(<'k0', s, %lm, X>))) ]
+  --[ TieneLin(Y, X, %ly), MenorOIgual(%lm, %ly), AbreSinAdoptar(Y, X, %lm) ]->
+    [ Lin(Y, X, %ly) ]
+
+/* Por encima del tope tampoco se adopta: es lo que deja fuera el `Long.MAX_VALUE`. */
+rule Abre_sin_adoptar_sobre_tope:
+    [ !Par(Y, X, s), Lin(Y, X, %ly), In(%t), In(senc(<'e0', %lm, m>, h(<'k0', s, %lm, X>))) ]
+  --[ TieneLin(Y, X, %ly), Ahora(Y, %t), Menor(%ly, %lm), SobreTope(%lm, %t), RechazaPorTope(Y, X, %lm) ]->
+    [ Lin(Y, X, %ly) ]
+
+/*
+ * R2: llega un sobre de época ≥ 1 de un linaje mayor que el propio, que no se abre. Se crea una
+ * sesión por encima. Dos casos, porque es un máximo: la cabecera más uno, si cabe en el tope; o la
+ * hora local, si es mayor que eso.
+ */
+rule Relevo_sobre_cabecera:
+    [ Lin(Y, X, %ly), In(%t), In(<'e1', %lh>) ]
+  --[ TieneLin(Y, X, %ly), Ahora(Y, %t), Menor(%ly, %lh), MenorOIgual(%t, %lh %+ %1), DentroDelTope(%lh %+ %1, %t),
+      Relevo(Y, X, %lh %+ %1) ]->
+    [ Lin(Y, X, %lh %+ %1) ]
+
+rule Relevo_con_la_hora:
+    [ Lin(Y, X, %ly), In(%t), In(<'e1', %lh>) ]
+  --[ TieneLin(Y, X, %ly), Ahora(Y, %t), Menor(%ly, %lh), Menor(%lh %+ %1, %t), Relevo(Y, X, %t) ]->
+    [ Lin(Y, X, %t) ]
+
+restriction diferentes:
+  "All A B #i. Diferentes(A, B) @ i ==> not (A = B)"
+
+/* El reloj de cada extremo no va hacia atrás. */
+restriction reloj_monotono:
+  "All X t1 t2 #i #j. Ahora(X, t1) @ i & Ahora(X, t2) @ j & #i < #j ==> not (t2 << t1)"
+
+restriction menor:
+  "All x y #i. Menor(x, y) @ i ==> x << y"
+
+restriction menor_o_igual:
+  "All x y #i. MenorOIgual(x, y) @ i ==> (x << y) | (x = y)"
+
+/* El tope es una unidad: l ≤ t + 1, que con naturales es l < t + 2. */
+restriction dentro_del_tope:
+  "All l t #i. DentroDelTope(l, t) @ i ==> l << (t %+ %1 %+ %1)"
+
+restriction sobre_tope:
+  "All l t #i. SobreTope(l, t) @ i ==> (t %+ %1) << l"
+
+/* ---- Lemas -------------------------------------------------------------------------------- */
+
+lemma ejecutable:
+  exists-trace
+  "Ex A B #i #j. Crea(A, B, %1 %+ %1) @ i & Adopta(B, A, %1 %+ %1, %1 %+ %1) @ j
+     & not (Ex X Y #r. RevelaS(X, Y) @ r)"
+
+/* R1: lo que se adopta nunca pasa de «ahora + tope». */
+lemma tope:
+  "All Y X l t #i. Adopta(Y, X, l, t) @ i ==> l << (t %+ %1 %+ %1)"
+
+/*
+ * Sin S, lo que se adopta lo creó un extremo honrado (al perder el estado o en un relevo), aunque
+ * el atacante fabrique cabeceras de época ≥ 1. El coste de R2 es que puede **provocar** relevos,
+ * no elegir con qué linaje se queda nadie.
+ */
+/*
+ * Auxiliar: todo linaje en el que escribe un extremo es el inicial o lo creó honradamente uno de los
+ * dos, salvo que S se revelara. **Tamarin no lo cierra** en 2 min (ver README): el lema de abajo se
+ * verifica suponiéndolo, y es lo que hay que leer como resultado condicionado.
+ */
+lemma linaje_escrito_es_honrado [use_induction, reuse]:
+  "All X Y l #i. Escribe0(X, Y, l) @ i ==>
+       (l = %1)
+     | (Ex #j. Crea(X, Y, l) @ j & #j < #i) | (Ex #j. Relevo(X, Y, l) @ j & #j < #i)
+     | (Ex #j. Crea(Y, X, l) @ j & #j < #i) | (Ex #j. Relevo(Y, X, l) @ j & #j < #i)
+     | (Ex A B #r. RevelaS(A, B) @ r)"
+
+lemma sin_S_solo_linajes_honrados:
+  "All Y X l t #i. Adopta(Y, X, l, t) @ i ==>
+       (Ex #j. Crea(X, Y, l) @ j) | (Ex #j. Relevo(X, Y, l) @ j)
+     | (Ex #j. Crea(Y, X, l) @ j) | (Ex #j. Relevo(Y, X, l) @ j)
+     | (Ex A B #r. RevelaS(A, B) @ r)"
+
+/*
+ * Las dos trazas que muestran la recuperación **no terminan** en Tamarin con ninguna heurística
+ * (ver README). Se dejan escritas, tras `-DTRAZAS`, como trabajo pendiente; lo que afirman lo cubren
+ * `RatchetPropertyTest` y `ChatServiceTest`.
+ */
+#ifdef TRAZAS
+/*
+ * Con la regla de antes (M2) un linaje forjado no tenía vuelta atrás. Aquí sí: B adopta un linaje
+ * que A no creó, y más tarde vuelve a uno que A creó en un relevo.
+ */
+lemma recuperacion_tras_forja:
+  exists-trace
+  "Ex A B #i #j #k.
+       Adopta(B, A, %1 %+ %1 %+ %1, %1 %+ %1) @ i
+     & not (Ex #c. Crea(A, B, %1 %+ %1 %+ %1) @ c) & not (Ex #c. Relevo(A, B, %1 %+ %1 %+ %1) @ c)
+     & Relevo(A, B, %1 %+ %1 %+ %1 %+ %1) @ j & #i < #j
+     & Adopta(B, A, %1 %+ %1 %+ %1 %+ %1, %1 %+ %1 %+ %1) @ k & #j < #k"
+
+/*
+ * W-6: B pierde el estado con el reloj atrasado y crea un linaje menor que el que A había creado.
+ * Con la regla de antes, A no lo adoptaba nunca. Aquí B ve sobres de época ≥ 1 de A que no abre,
+ * hace un relevo por encima, y A lo adopta.
+ */
+lemma w6_se_recupera:
+  exists-trace
+  "Ex A B #c #d #e #f.
+       Crea(A, B, %1 %+ %1 %+ %1) @ c
+     & Crea(B, A, %1 %+ %1) @ d & #c < #d
+     & Relevo(B, A, %1 %+ %1 %+ %1 %+ %1) @ e & #d < #e
+     & Adopta(A, B, %1 %+ %1 %+ %1 %+ %1, %1 %+ %1 %+ %1) @ f & #e < #f
+     & not (Ex X Y #r. RevelaS(X, Y) @ r)"
+#endif
+
+end

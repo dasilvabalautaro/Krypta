@@ -28,4 +28,10 @@ comprobar krypta_m2.spthy "" recuperacion_con_S falsified
 comprobar krypta_m2.spthy "" linaje_de_B_adoptado verified
 comprobar krypta_m2.spthy "" recuperacion_honrada verified
 
+# M2b, regla del linaje nueva (tope y relevo). sin_S se verifica suponiendo su auxiliar, que no cierra
+# (ver README); el auxiliar no se comprueba aquí.
+comprobar krypta_m2b.spthy "" ejecutable verified
+comprobar krypta_m2b.spthy "" tope verified
+comprobar krypta_m2b.spthy "" sin_S_solo_linajes_honrados verified
+
 if [ "$fallos" -eq 0 ]; then echo "todo como se esperaba"; else echo "$fallos resultado(s) inesperado(s)"; exit 1; fi

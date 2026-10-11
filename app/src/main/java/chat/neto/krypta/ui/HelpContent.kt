@@ -195,17 +195,28 @@ object HelpContent {
                 "eso depende de seguir viva en tu móvil.",
         ),
         // W-6 de docs/ESPECIFICACION-protocolo.md: tras restaurar con el reloj atrasado, lo que
-        // escribe el otro se pierde y corregir la hora no basta. El remedio va en el móvil
-        // restaurado, que no tiene historial que perder (el .krbk no lleva mensajes).
+        // escribe el otro se perdía. Desde el 11 oct 2026 el relevo lo arregla solo con contactos
+        // que tengan la versión actual; con los demás, el remedio sigue siendo el de antes, y va en
+        // el móvil restaurado, que no tiene historial que perder (el .krbk no lleva mensajes).
         HelpItem(
             category = "Problemas frecuentes",
             question = "Importé mi copia de seguridad y no me llegan los mensajes de un contacto",
-            answer = "Una causa posible es que, al importar, el móvil tuviera la fecha u hora " +
-                "atrasada. Entonces lo que tú escribes le llega, pero lo suyo no te llega a ti, y " +
-                "poner la hora bien después no basta. Solución: activa la fecha y hora " +
+            answer = "Puede pasar si al importar el móvil tenía la fecha u hora atrasada. Si tu " +
+                "contacto tiene la versión actual de Krypta, se arregla solo: como mucho se " +
+                "pierde su primer mensaje. Si tiene una anterior, activa la fecha y hora " +
                 "automáticas, elimina ese contacto y vuelve a añadirlo con su PeerID (se borra " +
                 "esa conversación en tu móvil y tendréis que verificaros de nuevo). Para " +
                 "evitarlo, pon la hora automática antes de importar.",
+        ),
+        // R3 de docs/DISENO-ratchet.md §1.13: la fila de sistema al adoptar otro linaje.
+        HelpItem(
+            category = "Problemas frecuentes",
+            question = "En un chat aparece «La sesión con este contacto se ha reiniciado»",
+            answer = "Lo normal es que tu contacto haya reinstalado Krypta o restaurado su copia de " +
+                "seguridad: su cifrado empezó de nuevo y la conversación sigue sin que hagas " +
+                "nada. Si no ha hecho nada de eso, puede que alguien con acceso a su identidad o a " +
+                "la tuya esté intentando meterse en medio. Comprobad juntos el número de " +
+                "seguridad en «Verificar identidad», en persona o por una llamada.",
         ),
     )
 

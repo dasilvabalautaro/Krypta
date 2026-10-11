@@ -475,7 +475,7 @@ el AAD:
   0, que sigue sin PFS. Una sesión creada antes de saber que el otro es v4 deja su época 0 sin atar
   hasta el primer avance.
 
-### 1.13 Rediseño del linaje: propuesta (11 oct 2026, sin implementar)
+### 1.13 Rediseño del linaje: tope, relevo y aviso (11 oct 2026, implementado)
 
 **El problema**, ya confirmado por el modelo M2 ([formal/](formal/README.md)):
 
@@ -530,10 +530,35 @@ el tope. **No lee nada**: la época 0 solo se abre con `S`. Lo acotan el tope, e
 el aviso de R3, que haría visible el abuso. Hoy, ese mismo sobre basura ya dispara un reengache;
 lo que se añade es que también reinicia la sesión.
 
-**Antes de implementarlo**: un modelo M2b con R1 y R2, en el que la recuperación honrada siga
-verificándose, se encuentre una traza de recuperación tras un linaje forjado (hoy no existe) y R1
-impida adoptar por encima del tope. Después, `RatchetPropertyTest` con relojes desfasados y
-linajes forjados.
+**Lo que pasó al implementarlo** (decidido por el autor el 11 oct 2026, con el coste a la vista):
+
+- **M2b** ([formal/](formal/README.md)). Tamarin verifica que, sin `S`, nadie adopta un linaje que no
+  haya creado un extremo honrado, aunque el atacante fabrique cabeceras a su gusto. Lo verifica
+  **suponiendo** un lema auxiliar que no consigue cerrar. Verifica también el tope. Las trazas de
+  recuperación no terminaron, y las cubren los tests. Su primera versión encontró una **reflexión**:
+  sin el sentido en la clave de la época 0, un sobre devuelto al emisor se abría. Krypta ya lleva el
+  sentido; el modelo no lo llevaba.
+- **Sesiones hermanas.** `RatchetPropertyTest`, con relojes atrasados y linajes forjados, encontró
+  un bloqueo permanente con la semilla 506. Tras perder el estado, un segundo relevo puede caer en
+  el **mismo** linaje que uno anterior (cabecera + 1, si el otro sigue en la suya). Las dos sesiones
+  quedan con el mismo linaje y propuestas distintas, y nada las movía, porque el linaje no era
+  mayor. R2 salta ahora también con el mismo linaje y una época posterior a la nuestra. Un sobre
+  legítimo de la época siguiente abre y los atrasados traen una época menor, así que solo queda la
+  sesión hermana.
+- **Solo con v4.** La misma prueba, corrida en v3 (semilla 504), encontró que esos dos relevos al
+  mismo linaje **repiten clave y nonce** en la época 0, que en v3 depende solo de `S`, el linaje y
+  el sentido. En v4 va atada a una propuesta nueva y no pasa. Por eso R2 solo se aplica a contactos
+  que anuncian ≥ 4. Con los v3 quedan R1 y R3.
+- **Tests**:
+  - `ChatServiceTest`: W-6 se arregla sola, el linaje forjado ya no es para siempre, una cabecera
+    falsa provoca como mucho un relevo y nunca por encima del tope, y con un contacto v3 no hay
+    relevo.
+  - `RatchetTest` y `RatchetCompromisoTest` dan la vuelta a los que fijaban el «sin vuelta atrás» y
+    el `Long.MAX_VALUE`.
+  - `RatchetPropertyTest` corre 80 semillas con relojes, linajes forjados y relevo.
+
+  Que los tests muerden se comprobó quitando el relevo: fallan los tres de extremo a extremo y la
+  prueba de caos.
 
 ## 2. Por qué no el doble ratchet tal cual
 

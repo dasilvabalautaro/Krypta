@@ -116,11 +116,16 @@ class RatchetTest {
      *
      * No contradice lo que el diseño promete («forjar uno nuevo exige `S`, y quien tiene `S` ya
      * tiene la identidad»), pero sí lo que se suele entender por recuperación tras un compromiso:
-     * con **un** sobre, el atacante activo pasa a leer en pasivo. Si algún cambio lo cierra, este
-     * test tiene que cambiar con él.
+     * con **un** sobre, el atacante activo pasa a leer en pasivo.
+     *
+     * **Desde el 11 oct 2026** (`docs/DISENO-ratchet.md` §1.13) el linaje forjado tiene que caber en
+     * el tope (R1, «ahora + 10 min»): por eso aquí es `ahora + 5 min` y no `Long.MAX_VALUE / 2`, que
+     * ya no se adopta (test de abajo). Dentro del tope el secuestro **en esta capa** sigue igual: lo
+     * que lo deshace es el relevo (R2), que vive en `RatchetSessions`/`ChatService` y tiene sus
+     * propios tests.
      */
     @Test
-    fun `con el secreto compartido un linaje forjado secuestra la sesion y no hay vuelta atras`() {
+    fun `con el secreto compartido un linaje forjado dentro del tope secuestra la sesion hasta un relevo`() {
         var (a, b) = sessions()
         repeat(2) {
             val m = ratchet.encrypt(a, "a".toByteArray()); a = m.state
@@ -131,7 +136,7 @@ class RatchetTest {
         assertTrue("la sesión legítima debía ir ya por varias épocas", b.epoch >= 2)
 
         // El atacante solo tiene S (p. ej. la identidad de Alice sacada de un .krbk con su frase).
-        val forjadoLinaje = Long.MAX_VALUE / 2
+        val forjadoLinaje = System.currentTimeMillis() + 5 * 60 * 1000L
         var mallory = ratchet.initial(secret, alice, bob, lineage = forjadoLinaje)
         val forjado = ratchet.encrypt(mallory, "soy Alice".toByteArray()); mallory = forjado.state
         val abierto = ratchet.decrypt(b, secret, forjado.ciphertext); b = abierto.state
@@ -153,7 +158,42 @@ class RatchetTest {
         val aliceDeCero = ratchet.initial(secret, alice, bob, lineage = System.currentTimeMillis())
         val reintento = ratchet.encrypt(aliceDeCero, "empiezo de cero".toByteArray())
         b = ratchet.decrypt(b, secret, reintento.ciphertext).state
-        assertEquals("no hay vuelta atrás: Bob sigue en el linaje forjado", forjadoLinaje, b.lineage)
+        assertEquals("sin relevo, Bob sigue en el linaje forjado", forjadoLinaje, b.lineage)
+
+        // El relevo (R2): Alice ve sobres de Bob en un linaje mayor que no abre y crea una sesión
+        // por encima. Bob la adopta, porque cabe en su tope, y vuelve a hablar con la Alice de verdad.
+        val relevo = requireNotNull(Ratchet.relayLineage(forjadoLinaje, System.currentTimeMillis()))
+        var aliceRelevo = ratchet.restart(a, secret, relevo)
+        val tras = ratchet.encrypt(aliceRelevo, "soy yo de verdad".toByteArray()); aliceRelevo = tras.state
+        b = ratchet.decrypt(b, secret, tras.ciphertext).state
+        assertEquals("con el relevo, Bob vuelve a una sesión de Alice", relevo, b.lineage)
+        val respuesta = ratchet.encrypt(b, "te leo".toByteArray()); b = respuesta.state
+        assertEquals("te leo", String(ratchet.decrypt(aliceRelevo, secret, respuesta.ciphertext).plaintext))
+        assertThrows(
+            "y el atacante, que no está en esa sesión, ya no lee a Bob",
+            RatchetException::class.java,
+        ) { ratchet.decrypt(mallory, secret, respuesta.ciphertext) }
+    }
+
+    /**
+     * R1: un linaje por encima de «ahora + tope» no se adopta. Era la forma de dejar la sesión en
+     * manos del atacante para siempre (A-03 de la auditoría interna del 11 oct 2026): ningún reloj
+     * alcanza `Long.MAX_VALUE / 2`. Su época 0 se sigue abriendo —quien tiene S puede escribir como
+     * el otro, W-3—, pero Bob se queda en su sesión.
+     */
+    @Test
+    fun `un linaje por encima del tope no se adopta`() {
+        var (a, b) = sessions()
+        val m = ratchet.encrypt(a, "a".toByteArray()); a = m.state
+        b = ratchet.decrypt(b, secret, m.ciphertext).state
+        val antes = b.lineage
+
+        val mallory = ratchet.initial(secret, alice, bob, lineage = Long.MAX_VALUE / 2)
+        val forjado = ratchet.encrypt(mallory, "soy Alice".toByteArray())
+        val abierto = ratchet.decrypt(b, secret, forjado.ciphertext); b = abierto.state
+        assertEquals("se abre (W-3)", "soy Alice", String(abierto.plaintext))
+        assertEquals("pero no se adopta", antes, b.lineage)
+        assertTrue(Ratchet.relayLineage(Long.MAX_VALUE, System.currentTimeMillis()) == null)
     }
 
     /**

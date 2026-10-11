@@ -98,7 +98,13 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
      * que una cabecera forjada (linaje altísimo, época futura) no pueda mover nada: sin el
      * secreto compartido no hay forma de que el AEAD valide.
      */
-    fun decrypt(state: RatchetState, sharedSecret: ByteArray, wire: ByteArray, v4: Boolean = false): Opened {
+    fun decrypt(
+        state: RatchetState,
+        sharedSecret: ByteArray,
+        wire: ByteArray,
+        v4: Boolean = false,
+        now: Long = System.currentTimeMillis(),
+    ): Opened {
         val header = Header.decode(wire) ?: throw RatchetException("cabecera de ratchet ilegible")
         val body = wire.copyOfRange(HEADER_BYTES, wire.size)
         val aad = wire.copyOfRange(0, HEADER_BYTES)
@@ -112,7 +118,13 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
         // Lo encontró la prueba de propiedades (semilla 102). El precio es que, al añadirse dos
         // contactos, quien recibe primero se queda en su linaje y su primer mensaje sale en la
         // época 0 hasta que el otro responde (ver §1.8.4 del diseño).
-        if (header.lineage > st.lineage) st = reset(st, sharedSecret, header.lineage, v4)
+        // R1 (11 oct 2026, `docs/DISENO-ratchet.md` §1.13): solo hasta «ahora + tope». Un linaje
+        // más alto lo forjó quien tiene S (W-4) o viene de un reloj muy adelantado; su época 0 se
+        // sigue abriendo abajo (`openOld`), pero no se adopta. Antes, uno de `Long.MAX_VALUE`
+        // dejaba la sesión en manos del atacante para siempre: ningún reloj lo supera.
+        if (header.lineage > st.lineage && adoptable(header.lineage, now)) {
+            st = reset(st, sharedSecret, header.lineage, v4)
+        }
         // Va una época por delante: su pública de esa época viene en la cabecera, y mi privada
         // para ella es la propuesta que aún no he consumido. Como mucho puede ir una, porque
         // para avanzar necesita una propuesta mía que solo hago al entrar en la época anterior.
@@ -215,6 +227,14 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
             skipped = st.skipped,
             v4 = v4,
         )
+
+    /**
+     * Sesión nueva en el linaje [lineage], conservando lo que pueda seguir en vuelo, como al adoptar
+     * uno mayor. Es el **relevo** (R2, `docs/DISENO-ratchet.md` §1.13): el otro escribe en un linaje
+     * mayor que no abrimos, y la forma de que vuelva a leernos es ponernos por encima de él.
+     */
+    fun restart(state: RatchetState, sharedSecret: ByteArray, lineage: Long, v4: Boolean = false): RatchetState =
+        reset(state, sharedSecret, lineage, v4)
 
     /** La propuesta a la que está atada la recepción actual (solo existe en la época 0 v4). */
     private fun boundOf(st: RatchetState): ByteArray? = if (st.epoch == 0) st.recvBound else null
@@ -516,6 +536,42 @@ class Ratchet @Inject constructor(private val curve: Curve25519) {
          */
         fun looksLikeRatchet(bytes: ByteArray): Boolean =
             bytes.size > HEADER_BYTES && bytes[0] == WIRE_VERSION
+
+        /**
+         * Tope de R1: cuánto puede ir por delante de nuestro reloj un linaje que se adopta. Basta
+         * para el desfase de relojes con hora automática, y acota lo que dura un secuestro por
+         * linaje forjado una vez el atacante deja de intervenir (ver [relayLineage]).
+         */
+        const val LINEAGE_MAX_AHEAD_MS = 10 * 60 * 1000L
+
+        /** R1: ¿un linaje [lineage] cabe en el tope a la hora [now]? */
+        fun adoptable(lineage: Long, now: Long): Boolean = lineage <= now + LINEAGE_MAX_AHEAD_MS
+
+        /**
+         * R2: linaje de un relevo por encima de [headerLineage], o null si no cabe en el tope. Es el
+         * máximo de la hora y la cabecera más uno: así lo adopta quien escribe en [headerLineage],
+         * aunque nuestro reloj vaya atrasado (W-6). Si el atacante puso su linaje justo en el tope,
+         * no cabe y hay que esperar a que el reloj avance: como mucho [LINEAGE_MAX_AHEAD_MS].
+         */
+        fun relayLineage(headerLineage: Long, now: Long): Long? {
+            if (headerLineage == Long.MAX_VALUE) return null
+            val candidate = maxOf(now, headerLineage + 1)
+            return candidate.takeIf { adoptable(it, now) }
+        }
+
+        /**
+         * R2: ¿una cabecera que no abre dice que el otro está en una sesión que no tenemos? O un
+         * linaje mayor, o el nuestro en una época posterior a la nuestra. El segundo caso es una
+         * sesión **hermana** con el mismo linaje: un sobre legítimo de nuestra época siguiente abre,
+         * y los atrasados traen una época menor, así que solo queda esa explicación. Sin él, dos
+         * sesiones con el mismo linaje se atascaban para siempre (`RatchetPropertyTest`, 506).
+         */
+        fun peerIsAhead(claimedLineage: Long, claimedEpoch: Int, current: RatchetState): Boolean =
+            claimedLineage > current.lineage || (claimedLineage == current.lineage && claimedEpoch > current.epoch)
+
+        /** Linaje y época que reclama una cabecera, **sin autenticar**; null si no es de ratchet. */
+        fun claimedLineageAndEpoch(wire: ByteArray): Pair<Long, Int>? =
+            Header.decode(wire)?.let { it.lineage to it.epoch }
 
         /** ¿Es un sobre de la época 0 (de cualquier linaje)? Lo lee de la cabecera. */
         fun isEpochZero(wire: ByteArray): Boolean = Header.decode(wire)?.epoch == 0
