@@ -7,6 +7,10 @@ decidió cada cosa; este documento cuenta **qué** hace: los bytes, las derivaci
 **Si este documento y el código discrepan, manda el código y el documento está mal**: se corrige
 aquí, en el mismo cambio.
 
+**Traducción.** Hay una versión en inglés,
+[ESPECIFICACION-protocolo.en.md](ESPECIFICACION-protocolo.en.md), para quien revise. Todo cambio
+aquí se replica allí en el mismo commit.
+
 **Para qué existe.** Es la pieza central del paquete de revisión externa que pide
 [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md) §5. Lo que se afirma va
 **numerado** (§12) para que una revisión pueda decir «P4 no se cumple», y lo que ya se sabe que no

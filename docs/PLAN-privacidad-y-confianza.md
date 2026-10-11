@@ -199,7 +199,8 @@ también le pasa a Signal.
 
    **El OTF la rechazó** (enviada el 22 sep, «Dismissed», conocido el 11 oct 2026): no por lo
    técnico, sino por falta de base de usuarios, de respaldo de la comunidad y de foco en usuarios
-   de entornos represivos. Siguiente vía: NLnet Restack, cierre el 3 nov 2026.
+   de entornos represivos. NLnet se descartó por su política de IA generativa. Vía elegida: una
+   revisión pagada acotada, con presupuestos antes del 30 nov 2026 (REVISION §5.3).
 2. **Post-cuántico híbrido.** Signal tiene el acuerdo inicial post-cuántico desde 2023 (PQXDH)
    y desde octubre de 2025 también el ratchet (SPQR, con ML-KEM-768). Krypta no tiene nada, y
    como `S` es función pura de dos identidades X25519, un adversario cuántico futuro que haya

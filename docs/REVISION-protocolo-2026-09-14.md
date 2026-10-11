@@ -475,7 +475,9 @@ la revisión.
 | Textos de la solicitud (OTF, correo de seguimiento, presupuesto y alcance técnico) | ✅ [SOLICITUD-revision-externa.md](SOLICITUD-revision-externa.md). **La tramita el autor** |
 | Canal cifrado para recibir los hallazgos | ✅ Clave PGP publicada el 22 sep 2026 ([`pgp-key.asc`](../pgp-key.asc), huella en [SECURITY.md](../SECURITY.md)) |
 | Solicitud enviada (fecha, vía, identificador) | ✅ 22 sep 2026, formulario del OTF Security Lab ([apply.opentech.fund/security-lab](https://apply.opentech.fund/security-lab/)). Identificador: **#23596** («Krypta (#23596)»). **Resultado: «Dismissed»**, conocido el 11 oct 2026 (motivos en SOLICITUD §1.1) |
-| Segunda vía | 🟡 NLnet, fondo Restack, cierre el 3 nov 2026. Borrador preparado (no se versiona: lleva tarifa y presupuesto) |
+| Segunda vía | ❌ NLnet (Restack), descartado el 11 oct 2026 por su política de IA generativa (§5.3) |
+| Tercera vía | 🟡 Revisión pagada acotada; presupuestos antes del 30 nov 2026 (§5.3) |
+| Especificación en inglés | ✅ [ESPECIFICACION-protocolo.en.md](ESPECIFICACION-protocolo.en.md) (11 oct 2026) |
 
 ### 5.2 Qué pedir, en este orden
 
@@ -499,9 +501,17 @@ la revisión.
   base de usuarios, respaldo de la comunidad y foco en usuarios de entornos represivos, que Krypta
   hoy no puede demostrar.
 - **NLnet, fondo Restack** (Comisión Europea, Horizon Europe). Becas de 5 000 a 50 000 € con
-  auditoría de seguridad como ayuda práctica. No pide base de usuarios; pide «dimensión europea», y
-  Bolivia está en la lista de países de renta baja y media elegibles de Horizon Europe. Cierre el
-  3 nov 2026.
+  auditoría de seguridad como ayuda práctica, y Bolivia es elegible. **Descartado el 11 oct 2026**:
+  su formulario dice *«We are not interested in AI-generated projects or proposals»*, y 102 de los
+  105 commits de Krypta llevan `Co-Authored-By: Claude`. Su política de IA (v1.1) no lo prohíbe,
+  pero exige registro de procedencia de prompts, y lo puramente generado no cuenta como trabajo
+  pagable. El rechazo se veía casi seguro.
+- **Revisión pagada acotada: la vía elegida (11 oct 2026).** Presupuestos antes del 30 nov 2026,
+  pidiendo dos cifras: solo el alcance A (diseño, unos 3 a 5 días de un criptógrafo) y A + el
+  núcleo del B. Estimación de orden de magnitud, sin cotizaciones todavía: del orden de 4 000 a
+  8 000 € solo A, y de 10 000 a 20 000 € A + B, más en las firmas grandes. Pedirlo también a
+  criptógrafos independientes o académicos, no solo a empresas. Requisito previo: la especificación
+  en inglés ([ESPECIFICACION-protocolo.en.md](ESPECIFICACION-protocolo.en.md)).
 - **Una revisión pagada acotada** a los puntos 1 y 2, con una empresa de criptografía aplicada.
 
 En los dos casos hay que pedir un **informe publicable**: es lo que convierte la revisión en algo
@@ -516,11 +526,11 @@ comprobable y no en otra afirmación.
   del linaje (H-4) hasta tener el informe.
 - **Caducidad de la congelación (decidida el 11 oct 2026).** Se pensó con una revisión del OTF en
   curso; rechazada esa, quedaba sin fecha de fin y bloqueaba H-4, H-5 y W-6 de forma indefinida.
-  Ahora dura **hasta que NLnet resuelva la propuesta de la convocatoria del 3 nov 2026**. Si la
-  aprueba, sigue hasta tener el informe, como estaba. Si la rechaza, o si la propuesta no llega a
-  enviarse antes del cierre, la congelación se levanta: se etiqueta `revision-externa-2` sobre el
-  último commit con el formato actual y después se arregla H-4, empezando por el modelo M2
-  (§4). Sin revisión externa, ese cambio también se publica sin ella, y así se dice.
+  Ahora dura **hasta el 30 nov 2026**, plazo para reunir presupuestos de una revisión pagada (§5.3)
+  y decidir. Si se contrata, sigue congelado hasta tener el informe: un auditor de pago no debe
+  revisar un formato que ya cambió. Si no se contrata, la congelación se levanta: se etiqueta
+  `revision-externa-2` sobre el último commit con el formato actual y después se arregla H-4,
+  empezando por el modelo M2 (§4). Ese cambio se publicaría sin revisión externa, y así se diría.
 
 ---
 
@@ -532,8 +542,8 @@ comprobable y no en otra afirmación.
 2. ⬜ Este build en los dos móviles, y §16 entero, incluidos los puntos nuevos 11 y 12.
 3. ⬜ La comparación con SPQR en DISENO-postcuantico.
 4. 🟡 Solicitud de revisión. **OTF enviada el 22 sep 2026 y rechazada** (conocido el 11 oct 2026).
-   Siguiente: NLnet Restack, antes del 3 nov 2026; de
-   respaldo, una revisión pagada acotada (SOLICITUD-revision-externa §1.2).
+   NLnet descartado por su política de IA. Vía elegida: revisión pagada acotada, con presupuestos
+   antes del 30 nov 2026 (§5.3 y SOLICITUD-revision-externa §1.2).
 5. ⬜ Modelo formal M1 y M2: decidir quién lo hace.
 6. ⬜ Revisión, informe publicado y correcciones.
 7. ⬜ Solo después: rediseño de H-4 y H-5, post-cuántico y rotación.

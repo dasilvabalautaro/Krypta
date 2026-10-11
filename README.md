@@ -110,6 +110,7 @@ Casi toda está en español.
 |---|---|
 | [security-model.md](docs/security-model.md) | Modelo de seguridad: qué ve cada actor y qué no se protege |
 | [ESPECIFICACION-protocolo.md](docs/ESPECIFICACION-protocolo.md) | Especificación normativa del protocolo: bytes, derivaciones, reglas, propiedades y debilidades declaradas |
+| [ESPECIFICACION-protocolo.en.md](docs/ESPECIFICACION-protocolo.en.md) | La misma especificación en inglés, para quien la revise |
 | [REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md) | Revisión interna del protocolo, sus hallazgos y el plan de revisión externa y análisis formal |
 | [SOLICITUD-revision-externa.md](docs/SOLICITUD-revision-externa.md) | Qué se pide en la revisión externa, y los textos para pedirla |
 | [architecture.md](docs/architecture.md) | Arquitectura actual |
@@ -153,7 +154,8 @@ The session protocol (an epoch-based double ratchet) is custom and **has not bee
 reviewed yet**: a first request (OTF Security Lab) was declined in October 2026, and other routes
 are being pursued. In the meantime, the protocol has a normative
 specification
-([docs/ESPECIFICACION-protocolo.md](docs/ESPECIFICACION-protocolo.md), Spanish), with numbered
+([docs/ESPECIFICACION-protocolo.en.md](docs/ESPECIFICACION-protocolo.en.md), English translation of
+the Spanish original), with numbered
 properties and declared weaknesses. An internal review on 14 Sep 2026
 ([docs/REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md)) found and fixed
 a key/nonce reuse race and a permanent message-loss bug. The infrastructure nodes never see content

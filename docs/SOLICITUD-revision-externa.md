@@ -2,7 +2,7 @@
 
 **Estado:** preparada el 14 de septiembre de 2026. **Enviada el 22 sep 2026** por el formulario del
 OTF Security Lab, solicitud **#23596**. **Resultado: «Dismissed»** (respuesta conocida el 11 oct
-2026; ver §1.1). La siguiente vía es NLnet (§1.3).
+2026; ver §1.1). NLnet se descartó (§1.3). La vía elegida es una revisión pagada (§1.2).
 
 **Qué se somete a revisión:** el commit con la etiqueta
 [`revision-externa-1`](https://github.com/dasilvabalautaro/Krypta/tree/revision-externa-1).
@@ -70,9 +70,11 @@ informe es público, así que no toca ni datos ni infraestructura de Krypta.
 
 ### 1.2 Revisión pagada (alternativa o complemento)
 
-> **Tras el rechazo del OTF (oct 2026)** esta vía pasa a ser la de respaldo si NLnet tampoco sale.
-> Pagada por 4000MSNM, conviene acotarla al alcance A más el núcleo del B (`Ratchet`,
-> `RatchetSessions`, `Padding`, `MessageEnvelope`).
+> **Vía elegida tras el rechazo del OTF (11 oct 2026).** Pagada por 4000MSNM. Presupuestos antes del
+> **30 nov 2026**, que es también cuando caduca la congelación del formato (REVISION §5.4). Pedir dos
+> cifras: solo el alcance A, y A más el núcleo del B (`Ratchet`, `RatchetSessions`, `Padding`,
+> `MessageEnvelope`). Pedirlo también a criptógrafos independientes o académicos. Adjuntar la
+> especificación en inglés, [ESPECIFICACION-protocolo.en.md](ESPECIFICACION-protocolo.en.md).
 
 El texto del §4 sirve para pedir presupuesto. Conviene pedir **dos cifras por separado**: solo el
 alcance A (diseño) y A + B (diseño y código).
@@ -81,13 +83,15 @@ Algunas empresas con práctica de revisión criptográfica, **sin contacto previ
 (Cryptography Services), Trail of Bits, Cure53, Radically Open Security, Least Authority y
 Quarkslab. Para un modelo formal, Cryspen.
 
-### 1.3 NLnet (Restack), siguiente vía
+### 1.3 NLnet (Restack), descartado
 
 Fondo de la Comisión Europea gestionado por NLnet, con becas de 5 000 a 50 000 € y **auditoría de
-seguridad como ayuda práctica** además del dinero. Cierra el **3 nov 2026 a las 12:00 CET**. Hay un
-borrador de la propuesta con los campos del formulario y sus límites; no se versiona porque lleva
-tarifa y presupuesto. Los textos de este documento (§3 y §5) siguen sirviendo
-como material adjunto.
+seguridad como ayuda práctica**. Bolivia es elegible. **Descartado el 11 oct 2026**, antes de enviar:
+el formulario dice *«We are not interested in AI-generated projects or proposals»*, y 102 de los 105
+commits de Krypta llevan `Co-Authored-By: Claude`. La
+[política de IA de NLnet](https://nlnet.nl/foundation/policies/generativeAI/) (v1.1) no lo prohíbe
+del todo, pero exige un registro de procedencia de cada prompt, marcar el código generado, y no
+paga lo puramente generado. Con ese historial el rechazo se veía casi seguro.
 
 ---
 

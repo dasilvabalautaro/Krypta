@@ -1733,7 +1733,10 @@ Findings, and the plan for the external review and the formal model:
 spec** (bytes, derivations, rules, numbered properties P1–P15, known weaknesses W-1–W-14, questions
 for a reviewer) is [docs/ESPECIFICACION-protocolo.md](docs/ESPECIFICACION-protocolo.md). **Keep the
 spec in sync with the code in the same change**: if they disagree, the code wins and the spec is
-wrong. Every finding was reproduced by a test that failed before its fix.
+wrong. Since 11 Oct 2026 there is an English translation,
+[docs/ESPECIFICACION-protocolo.en.md](docs/ESPECIFICACION-protocolo.en.md), for paid reviewers:
+**mirror every spec change there in the same commit**. Every finding was reproduced by a test that
+failed before its fix.
 
 - **H-0, critical.** `RatchetSessions` had no per-conversation exclusion, and `load` suspends
   (Room), so two concurrent operations on one conversation started from the same state: 8
@@ -1787,18 +1790,19 @@ Security Lab form (request **#23596**),
 with the texts in [docs/SOLICITUD-revision-externa.md](docs/SOLICITUD-revision-externa.md), against
 the commit tagged `revision-externa-1`. That tag never moves. **OTF dismissed it** (known 11 Oct
 2026): not on technical grounds, but for lacking a substantive user base, community buy-in and a
-clear focus on users in repressive contexts. Re-applying unchanged would fail the same way. **Next
-route: NLnet's Restack fund** (EU/Horizon Europe, €5k–50k, security audits offered as practical
-help, deadline **3 Nov 2026 12:00 CET**); draft proposal with the form's fields and character
-limits in `docs/SOLICITUD-nlnet.md`, which is **deliberately not versioned** (it will carry the rate
-and budget, and the repo is public; it is in `.git/info/exclude`, so a fresh clone won't have it). Bolivia is on Horizon Europe's
-low/middle-income eligible list, which matters for Restack's "European dimension" rule. The form
-asks whether generative AI was used and wants the prompts, so a proposal drafted here must be
-declared. Fallback: a narrowed paid review (SOLICITUD §1.2). The wire-format freeze (REVISION §5.4)
-still holds, and since 11 Oct 2026 **it has an end**: it lasts until NLnet decides on the 3 Nov 2026
-proposal. Approved → it holds until the report. Declined, or not submitted by the deadline → it is
-lifted: tag `revision-externa-2` on the last commit with the current format, then fix H-4 (Tamarin
-M2 first), and say plainly that the change shipped without external review. Play status (11 Oct
+clear focus on users in repressive contexts. Re-applying unchanged would fail the same way.
+**NLnet (Restack) was considered and dropped the same day**: its form says "We are not interested in
+AI-generated projects or proposals", and 102 of 105 commits carry `Co-Authored-By: Claude`; its GenAI
+policy (v1.1) demands a prompt-provenance log and does not pay for purely generated work. A draft
+proposal exists locally as `docs/SOLICITUD-nlnet.md`, deliberately not versioned (in
+`.git/info/exclude`). **Chosen route: a narrowed paid review**, quotes by **30 Nov 2026** (only
+scope A, and A + the ratchet core; also ask independent/academic cryptographers), with the English
+spec [docs/ESPECIFICACION-protocolo.en.md](docs/ESPECIFICACION-protocolo.en.md) attached. The
+wire-format freeze (REVISION §5.4) now **ends on 30 Nov 2026**: if a review is contracted it holds
+until the report; if not, tag `revision-externa-2` on the last commit with the current format, fix
+H-4 (Tamarin M2 first), and say plainly it shipped without external review. **The English spec is a
+translation**: every change to `ESPECIFICACION-protocolo.md` must be mirrored there in the same
+change (code wins over both). Play status (11 Oct
 2026): in its final verification before production.
 
 **Binaries for the review (14 Sep 2026).**
