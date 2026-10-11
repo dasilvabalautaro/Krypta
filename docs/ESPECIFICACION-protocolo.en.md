@@ -1,14 +1,14 @@
 # Krypta protocol specification
 
 > **English translation** of [ESPECIFICACION-protocolo.md](ESPECIFICACION-protocolo.md), made on
-> 11 Oct 2026 from the version last changed in commit `a642758` (21 Sep 2026). The wire format has
+> 11 Oct 2026 and kept in sync with it. The wire format has
 > not changed since the tag `revision-externa-1`. Every change to the Spanish document is mirrored
 > here in the same commit. **If the two disagree, or either disagrees with the code, the code wins.**
 > The other documents it links to (design rationale, threat model, internal review) are in Spanish;
 > we can translate any section on request.
 
 **What it is.** The **normative** description of what Krypta's code on `main` does as of
-**15 September 2026** (announced protocol: **v3**), written so that an outside reviewer can review
+**11 October 2026** (announced protocol: **v3**; format unchanged since 15 Sep), written so that an outside reviewer can review
 it without reading the 1,600 lines of `ChatService`. The `DISENO-*.md` documents explain **why** each
 decision was taken; this document says **what** is done: the bytes, the derivations and the rules.
 **If this document and the code disagree, the code wins and the document is wrong**: it is fixed
@@ -479,16 +479,16 @@ protocol has yet had formal analysis or external review** (see
 |---|---|---|---|---|
 | **P1** | Confidentiality of content | A1, A2 | Tested | `RatchetTest`, `AesGcmMessageCipherTest`, `RatchetPropertyTest` ("nothing opens as another message") |
 | **P2** | Integrity of envelope and header against anyone without `S` | A1, A2 | Tested | `RatchetTest` (forged header), `RatchetPaddingTest` (padding bit), `ParserFuzzTest` |
-| **P3** | No `(L, e, N)` triple repeats for one sender, and therefore no key or nonce | — | Tested, **conditional** on W-6 | `RatchetPropertyTest` (sequential) and `RatchetSessionsTest` (concurrent, since 14 Sep 2026) |
-| **P4** | Forward secrecy for messages of epoch ≥ 1: compromising identity and state at *t* does not open what was delivered before *t* | A5 | Claimed, **with exceptions**: epoch 0 (W-1), and skipped keys and retired chains still stored at *t* | No test models the compromise at *t*: it is the first thing the formal model must cover |
-| **P5** | Post-compromise recovery against a **passive** attacker: after a DH round it did not see, it can no longer read | A5 passive | Claimed, not tested | Same |
+| **P3** | No `(L, e, N)` triple repeats for one sender, and therefore no key or nonce | — | Tested, **conditional**: on no lineage ever repeating (W-16) and on the state never rolling back to an earlier copy (requires root). If it fails, it is AES-GCM nonce reuse | `RatchetPropertyTest` (sequential), `RatchetSessionsTest` (concurrent, since 14 Sep 2026); the counterexample is in `RatchetCompromisoTest` |
+| **P4** | Forward secrecy for messages of epoch ≥ 1: compromising identity and state at *t* does not open what was delivered before *t* | A5 | Claimed, **with exceptions**: epoch 0 (W-1), **the compromised device's current epoch** (W-15, being fixed) and skipped keys and retired chains still stored at *t*. "Not kept" means not in the logical state; physical erasure (memory, free database pages) is not guaranteed | `RatchetCompromisoTest` pins W-15; compromise at *t* in general is the first thing the formal model must cover |
+| **P5** | Post-compromise recovery against a **passive** attacker: after a DH round it did not see, it can no longer read | A5 passive | Claimed, not tested. Requires fresh ephemeral private keys, unknown to the attacker, **on both sides** | Same |
 | **P6** | Post-compromise recovery against an **active** attacker | A4, A5 active | **Does not hold** | W-3, W-4 (`RatchetTest`: "a forged lineage hijacks the session") |
-| **P7** | A genuine envelope is delivered at most once within the deduplication window | A1 | Tested | `RatchetSessionsTest`, `RatchetSeenPruneSqlTest`, `ChatServiceTest` |
+| **P7** | A genuine envelope is delivered at most once **within the deduplication window** (8 days ∪ 500); outside it, epoch 0 can be replayed (W-2) | A1 | Tested | `RatchetSessionsTest`, `RatchetSeenPruneSqlTest`, `ChatServiceTest` |
 | **P8** | A conversation is never permanently broken because one end loses its state, deletes and re-adds the contact, or imports a `.krbk` | — | Tested, **conditional** on W-6 | `RatchetPropertyTest`, `ChatServiceTest` (re-add, `.krbk`, since 14 Sep 2026) |
-| **P9** | The network cannot downgrade a pair to v1, nor can a stale copy of the contact | A1, A2 (and A4 via the announcement path) | Tested since 14 Sep 2026 | `ContactUpsertSqlTest`, `ChatServiceTest` |
+| **P9** | The network cannot downgrade to v1 a pair **whose version has already been learned**, nor can a stale copy of the contact. **The first negotiation is opportunistic**: a node that suppresses the initial `V` announcements (in v1 they stand out by size) keeps the pair on v1 until something v2 gets through | A1, A2 (and A4 via the announcement path) | Tested since 14 Sep 2026, with that scope | `ContactUpsertSqlTest`, `ChatServiceTest` |
 | **P10** | The ratchet advance and the persistence of the message commit together | — | Tested | `RatchetSessionsTest`, `ChatServiceTest` |
-| **P11** | With v3, control messages and short texts have the same size | A1 | Tested | `PaddingTest`, `RatchetPaddingTest` |
-| **P12** | A call's key is not derived from the identity (with contacts that negotiate) | A4 without the signalling | Tested | `CallServiceTest` |
+| **P11** | With v3, control messages and short texts have the same size: whatever falls in the same band is indistinguishable by size, whatever falls in different bands is not | A1 | Tested | `PaddingTest`, `RatchetPaddingTest` |
+| **P12** | A call's key is not derived from the identity alone (with contacts that negotiate). Its forward secrecy is that of the signalling carrying the two halves: if those envelopes travel over v1 or in epoch 0, whoever obtains `S` and has them recorded rebuilds the call | A4 without the signalling | Tested | `CallServiceTest` |
 | **P13** | The node's disk does not link mailbox labels to PeerIDs | A1 (dump) | Tested on the node | Go `TestMailboxV2NoGuardaNiRemitenteNiDestinatario` ("stores neither sender nor recipient"), `TestMailboxV2LaEtiquetaEsLaLlave` ("the label is the key"), [DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) |
 | **P14** | Domain separation between all derivations from `S` | — | By inspection | The `info` labels of §4, §5.2, §8, §9 and §10, all distinct |
 | **P15** | A genuine `invite` rings at most once and leaves at most one missed-call row, whoever delivers it and however many times | A1 | Tested since 15 Sep 2026, **conditional**: if the process restarts within 10 min 45 s it can ring once more (W-14), and clearing the chat deletes the row and with it its memory | `CallServiceTest` (7 H-7 tests), `ChatServiceTest` |
@@ -504,7 +504,7 @@ protocol has yet had formal analysis or external review** (see
 | **W-3** | **Origin authentication is that of `S`**. Whoever holds *either* identity can inject as the other in three ways: v1, epoch 0 of a foreign lineage (opened without adopting it) and a new lineage. With blind deposit that includes **impersonating any contact to someone who lost their own key** (KCI). **KCI resistance is not promised** (decision of 15 Sep 2026, until the external review). Through the **PeerID** mailbox that variant only gets in if the node lies about the sender | A4 | H-5 of the review; pinned in `ChatServiceTest` (blind mailbox; PeerID mailbox with an honest node and with a lying node) |
 | **W-4** | **Lineage hijack**: an epoch-0 envelope with a forged, very high lineage is adopted, the receiver advances with the attacker's proposal and writes to them with material the attacker knows; the legitimate end is locked out **with no way back** until the session is deleted | A4 active | H-4; pinned in `RatchetTest` |
 | **W-5** | v1 reception is always accepted, from any contact, even when the pair already uses v2 | A4 | Tied to W-3: closing only this path buys nothing |
-| **W-6** | Lineage monotonicity comes from the clock. **The real effect is on availability**: whoever loses their state with the clock behind the current lineage (restoring with the wrong date set, or a current lineage created by a phone whose clock ran ahead) creates a lower lineage; what they write arrives but never leaves epoch 0, what is written to them **is lost**, and fixing the clock does not help (§5.7). Repeating keys would require creating a lineage in the same millisecond as an earlier one | — | Not fixed; pinned in `RatchetTest`. A durable monotonic lineage touches the frozen rule (REVISION §9.2) |
+| **W-6** | Lineage monotonicity comes from the clock. **The real effect is on availability**: whoever loses their state with the clock behind the current lineage (restoring with the wrong date set, or a current lineage created by a phone whose clock ran ahead) creates a lower lineage; what they write arrives but never leaves epoch 0, what is written to them **is lost**, and fixing the clock does not help (§5.7). Repeating keys would require creating a lineage in the same millisecond as an earlier one (that is W-16) | — | Not fixed; pinned in `RatchetTest`. A durable monotonic lineage touches the frozen rule (REVISION §9.2) |
 | **W-7** | No post-quantum protection: everything is X25519, and the PeerID *is* the public key | A6 | [DISENO-postcuantico.md](DISENO-postcuantico.md) |
 | **W-8** | **Call frames** carry no counter or window, and the key is the same in both directions: **the application layer** cannot tell a replayed, reordered or reflected frame. **Limited impact as long as libp2p's transport security (TLS 1.3 or Noise) keeps end-to-end authenticity, ordering and anti-replay**, and this was checked (15 Sep 2026): a middlebox that duplicates, reorders or reflects bytes kills the connection without delivering anything twice, and a relay sees neither the frame nor what is negotiated inside the circuit. The tests negotiated TLS 1.3. Not checked: the direct QUIC path after DCUtR (by inspection, go-libp2p does not use 0-RTT). It gives no freshness against a compromised end nor against code that re-injects frames after the transport, and it does not replace a counter if the transport changes. And the app cannot verify it at runtime: go-libp2p leaves `ConnState().Security` empty on relayed connections | A1, if the transport changed | Question for the review (§15.5); evidence in [REVISION-protocolo-2026-09-14.md](REVISION-protocolo-2026-09-14.md) §8 |
 | **W-9** | `PN` is transmitted and not used; the previous epoch's keys come from the retired chain, bounded by `MAX_SKIP` | — | Question for the review |
@@ -512,6 +512,8 @@ protocol has yet had formal analysis or external review** (see
 | **W-11** | The `.krbk` is protected only by its passphrase (PBKDF2, 310,000 iterations): whoever obtains it can try passphrases without limit, and success is A4 | A4 | security-model §7 |
 | **W-12** | The same Ed25519 seed is used for signing (libp2p's Noise) and, converted, for X25519 | — | Question for the review |
 | **W-13** | Metadata: the node sees the day's pair graph (DHT), presence (wake) and who talks to whom live (relay); and, through identify, which protocols each phone supports | A1 | security-model §5 and §6 |
+| **W-15** | **The stored root re-opens the current epoch.** `RK(e)` is kept in the state and both chains of the epoch are derived from it starting at N = 0 (§5.2), so whoever obtains the state can re-derive the keys of **everything** sent and received in the current epoch, even though the message keys were discarded. Since the epoch advances per message received, in a back-and-forth conversation this is little; in an **unanswered burst** (a chunked file, several voice notes, texts to an offline contact) it is the whole burst. Earlier roots cannot be re-derived from the current one | A5 | Found by the internal audit of 11 Oct 2026 ([AUDITORIA-interna-2026-10-11.md](AUDITORIA-interna-2026-10-11.md), A-01, Spanish); pinned in `RatchetCompromisoTest`. Fix: a root KDF with independent outputs (protocol v4) |
+| **W-16** | **Repeating a lineage repeats key and nonce in epoch 0.** Epoch 0 depends only on `S`, the lineage and the direction; the ephemeral proposals travel in the header (AAD) and do not enter the key. Two sessions with the same lineage encrypt their first message with the same key and nonce, which with AES-GCM yields the XOR of the plaintexts and breaks authenticity. Precondition: a lineage that identity already used, to the millisecond (a clock going back exactly, or restored or cloned state, which requires root). No way to force it from the network has been found | — | Internal audit of 11 Oct 2026 (A-02); pinned in `RatchetCompromisoTest`. Fix: bind the epoch-0 chain to the sender's ephemeral proposal (protocol v4) |
 | **W-14** | If the app restarts within 10 min 45 s of an `invite`, whoever can resend it (the node, through the mailbox) makes it **ring once more**: the memory of handled invites lives in RAM. The missed-call row does not repeat, because its id is in the database | A1 | Accepted on 15 Sep 2026: persisting that memory would leave call metadata outside SQLCipher or touch the ratchet's seen table (REVISION §9.3) |
 
 ---
@@ -523,7 +525,7 @@ protocol has yet had formal analysis or external review** (see
 | Shared secret | `native-bridge/libp2p/bridge.go` (`SharedSecretFor`), `Libp2pKeyExchange` | Go `TestSharedSecret*` |
 | Application envelope | `MessageEnvelope.kt` | `MessageEnvelopeTest`, `ParserFuzzTest` |
 | v1 | `AesGcmMessageCipher.kt` | `AesGcmMessageCipherTest` |
-| Ratchet | `Ratchet.kt`, `RatchetState.kt` | `RatchetTest`, `RatchetPropertyTest`, `RatchetPaddingTest`, `ParserFuzzTest` |
+| Ratchet | `Ratchet.kt`, `RatchetState.kt` | `RatchetTest`, `RatchetPropertyTest`, `RatchetPaddingTest`, `RatchetCompromisoTest`, `ParserFuzzTest` |
 | Ephemeral X25519 | `bridge.go` (`RatchetKeyPair`, `RatchetAgree`), `BridgeCurve25519` | Go `TestRatchetKeyPairAgreement`, `JdkCurve25519` |
 | Persistence, lock, deduplication | `RatchetSessions.kt`, `RoomRatchetStore.kt`, `RatchetDao` | `RatchetSessionsTest`, `RatchetSeenPruneSqlTest` |
 | Padding | `Padding.kt` | `PaddingTest`, `RatchetPaddingTest` |
@@ -570,3 +572,8 @@ Test names are mostly in Spanish, as is most of the code's commentary.
    Signal's SPQR.
 10. The **identity rotation** of [DISENO-rotacion-identidad.md](DISENO-rotacion-identidad.md), which
     depends on all of the above.
+11. **The v4 root KDF** (W-15): `RK(e) ‖ CK(e,0) ‖ CK(e,1)` as independent outputs of a single HKDF,
+    switched on by a bit in both proposals that form the epoch. Is it enough for forward secrecy
+    within the epoch, and is the transition between v3 and v4 sessions safe?
+12. **Epoch-0 freshness** (W-16): binding its sending chain to the sender's ephemeral proposal.
+    Does it close the reuse without opening another path in `openOld` or in the rehook?

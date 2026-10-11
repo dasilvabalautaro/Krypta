@@ -482,7 +482,7 @@ la revisión.
 ### 5.2 Qué pedir, en este orden
 
 1. **Revisión de diseño** del protocolo por un criptógrafo, de pocos días. Es lo que más aporta por
-   lo que cuesta. Cubre §5 a §9 de la especificación, las debilidades W-1 a W-14 y los diseños
+   lo que cuesta. Cubre §5 a §9 de la especificación, las debilidades W-1 a W-16 y los diseños
    post-cuántico y de rotación.
 2. **Auditoría del código del camino criptográfico**, no de toda la app:
    - **Kotlin**: `Ratchet`, `RatchetState`, `RatchetSessions`, `RoomRatchetStore` y `RatchetDao`,

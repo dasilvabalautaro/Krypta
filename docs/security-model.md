@@ -120,7 +120,16 @@ sigue siendo cierto hasta que pasen las pruebas con dos móviles.)
     pendientes (`PRUEBAS-PENDIENTES` §16), así que este documento no lo cuenta aún como una
     garantía, solo como un mecanismo desplegado;
   - **no es retroactivo**: los mensajes anteriores no ganan PFS, y el historial guardado se
-    protege con el cifrado de la base (§7), no con el ratchet.
+    protege con el cifrado de la base (§7), no con el ratchet;
+  - **no cubre la época en curso del móvil comprometido** (W-15 de la especificación, encontrado
+    por la [auditoría interna](AUDITORIA-interna-2026-10-11.md) del 11 oct 2026): la raíz de esa
+    época se guarda y sus cadenas salen de ella desde el primer mensaje, así que quien se lleve el
+    estado puede reabrir todo lo enviado y recibido desde el último cambio de época. En una
+    conversación de ida y vuelta es poco, porque la época cambia con cada mensaje recibido; en una
+    ráfaga sin respuesta (un archivo por trozos, varias notas de voz) es la ráfaga entera. Se arregla
+    con el protocolo v4;
+  - «no se guarda» quiere decir que no está en el estado lógico. **El borrado físico no se
+    garantiza**: copias en memoria, o versiones viejas del estado en páginas libres de la base.
 - **La negación (deniability) no se promete, y tampoco se ha renunciado a ella.** Los sobres se
   autentican con el secreto compartido de la pareja, no con una firma, así que cualquiera de los
   dos pudo fabricarlos: frente a un tercero son negables de hecho. Pero no hay análisis que lo

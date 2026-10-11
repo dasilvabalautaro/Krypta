@@ -21,7 +21,9 @@ import java.time.ZoneOffset
  * correo. El sentido se fija ordenando los dos PeerID, que ambos conocen, así que los dos
  * calculan lo mismo sin negociar nada.
  *
- * **Semanal** (decisión del 9 sep 2026): rota, para que nada sea correlacionable a largo plazo,
+ * **Semanal** (decisión del 9 sep 2026): rota, para que un volcado del buzón no ligue las semanas
+ * entre sí sin el secreto compartido. No protege frente a quien obtenga una identidad: con ella
+ * recalcula el secreto y las etiquetas de cualquier semana (W-10 de la especificación). Rota
  * pero no tan rápido como para que recibir salga caro — con el TTL de 7 días del buzón basta
  * con mirar la semana en curso y la anterior, o sea **dos etiquetas por contacto**. Con rotación
  * diaria habría que preguntar por siete.

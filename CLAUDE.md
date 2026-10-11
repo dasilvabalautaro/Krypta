@@ -1730,7 +1730,7 @@ against a thief it only helps if both notices reach the contact. Phases 1–3 do
 its own design docs, done to address the "custom, days-old, unreviewed protocol" observation.
 Findings, and the plan for the external review and the formal model:
 [docs/REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md). The **normative
-spec** (bytes, derivations, rules, numbered properties P1–P15, known weaknesses W-1–W-14, questions
+spec** (bytes, derivations, rules, numbered properties P1–P15, known weaknesses W-1–W-16, questions
 for a reviewer) is [docs/ESPECIFICACION-protocolo.md](docs/ESPECIFICACION-protocolo.md). **Keep the
 spec in sync with the code in the same change**: if they disagree, the code wins and the spec is
 wrong. Since 11 Oct 2026 there is an English translation,
@@ -2033,6 +2033,25 @@ No wire-format change, so `revision-externa-1` stays valid. 5 new `ChatServiceTe
 its data intact. The two-phone retest is PRUEBAS-PENDIENTES §18, and **both phones need the 21 Sep
 APK**, because an older sender still sends descriptors. Test gotcha, seen again: a job launched into
 `backgroundScope` does not run under `advanceUntilIdle()` here; use `scopeInmediato()`.
+
+**Internal crypto-design audit (11 Oct 2026).** After OTF dismissed the request and NLnet was
+dropped, the author decided **not to pay** for an external review: Krypta runs **its own audits**,
+published but never called independent or external (same team, AI on both sides, correlated blind
+spots). The first one, on `9017e89`, is answered with a plan in
+[docs/AUDITORIA-interna-2026-10-11.md](docs/AUDITORIA-interna-2026-10-11.md) (the auditor's own
+report stays in `temp/`). Its new finding, **A-01 → W-15, high**: the ratchet keeps `RK(e)` and
+derives both chains of epoch *e* from it at N = 0, so a stolen state re-opens everything sent and
+received in the **current** epoch (an unanswered burst = the whole burst). **A-02 → W-16**: a
+repeated lineage repeats key and nonce in epoch 0 (the precondition was already in W-6's last line,
+but P3 didn't say what failing it means). Both reproduced from the spec, not from the code, in
+`RatchetCompromisoTest` — they **pin the weakness**, so they must flip when fixed. Also: P3, P4,
+P5, P7, P9 (first negotiation is opportunistic), P11 and P12 rescoped in both spec languages; call
+key halves aren't length-checked and fall back to the static key silently (A-09); and
+`PRAGMA secure_delete` is only set inside `MIGRATION_5_6`, not on normal connections. Plan: phase 0
+docs, phase 1 hardening with no wire change, phase 2 **protocol v4** (root KDF with three
+independent outputs + epoch-0 chain bound to the sender's proposal), phase 3 lineage/auth redesign
+after a Tamarin model. The wire-format freeze is lifted (no review will be contracted); the last v3
+commit gets the tag `protocolo-v3`.
 
 **Audit:** an architecture/code audit against the plan's objectives (7 Sep 2026) lives in
 [docs/AUDITORIA-2026-09-07.md](docs/AUDITORIA-2026-09-07.md) — findings A-1…A-14 with a

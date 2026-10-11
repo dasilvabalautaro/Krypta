@@ -7,11 +7,12 @@ cuando el otro está desconectado.
 
 > **Estado: beta, en la última fase de verificación de Google Play antes de salir a producción.** Lo desarrolla y opera **4000MSNM S.R.L.**, un solo
 > operador. La criptografía de sesión (un doble ratchet por épocas) es propia y **no ha tenido
-> revisión externa**: la solicitud al OTF Security Lab fue rechazada (oct 2026) y se busca por otra
-> vía. Mientras tanto, el protocolo está
-> [especificado](docs/ESPECIFICACION-protocolo.md) para poder revisarse, y una
+> revisión externa**. La solicitud al OTF Security Lab fue rechazada (oct 2026), y desde entonces el
+> proyecto hace **sus propias auditorías**, que no son independientes. El protocolo está
+> [especificado](docs/ESPECIFICACION-protocolo.md) para poder revisarse; una
 > [revisión interna](docs/REVISION-protocolo-2026-09-14.md) del 14 sep 2026 encontró y arregló
-> dos fallos graves. Antes de confiarle nada sensible, lee
+> dos fallos graves, y una [auditoría interna](docs/AUDITORIA-interna-2026-10-11.md) del 11 oct
+> encontró que el estado guardado reabre los mensajes de la época en curso (en arreglo). Antes de confiarle nada sensible, lee
 > [lo que Krypta no protege](docs/security-model.md#9-resumen-honesto-de-lo-que-krypta-no-protege).
 
 *English summary [below](#english).*
@@ -26,7 +27,8 @@ cuando el otro está desconectado.
 - **Mensajes, fotos, archivos, notas de voz, GIF, respuestas con cita y llamadas de voz y vídeo.**
 - **Cifrado de extremo a extremo**: acuerdo X25519 y AES-256-GCM, y un doble ratchet por épocas
   **pensado para dar secreto hacia adelante**, con cada contacto cuya app también lo anuncia. Está
-  desplegado, pero **todavía no es una garantía**: la primera época no lo tiene, entre dos móviles
+  desplegado, pero **todavía no es una garantía**: la primera época no lo tiene, quien se lleve el
+  estado del móvil puede reabrir lo enviado en la época en curso (en arreglo), entre dos móviles
   solo se ha probado la conversación normal y nadie de fuera lo ha revisado. El tamaño de los
   mensajes va relleno por tramos para que no delate qué son.
 - **Sin directorio de usuarios.** Cada pareja se cita en un punto de encuentro de la DHT que
@@ -112,6 +114,7 @@ Casi toda está en español.
 | [ESPECIFICACION-protocolo.md](docs/ESPECIFICACION-protocolo.md) | Especificación normativa del protocolo: bytes, derivaciones, reglas, propiedades y debilidades declaradas |
 | [ESPECIFICACION-protocolo.en.md](docs/ESPECIFICACION-protocolo.en.md) | La misma especificación en inglés, para quien la revise |
 | [REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md) | Revisión interna del protocolo, sus hallazgos y el plan de revisión externa y análisis formal |
+| [AUDITORIA-interna-2026-10-11.md](docs/AUDITORIA-interna-2026-10-11.md) | Auditoría interna del diseño criptográfico: hallazgos, respuesta y plan de ajustes |
 | [SOLICITUD-revision-externa.md](docs/SOLICITUD-revision-externa.md) | Qué se pide en la revisión externa, y los textos para pedirla |
 | [architecture.md](docs/architecture.md) | Arquitectura actual |
 | [TECNOLOGIA-propia.md](docs/TECNOLOGIA-propia.md) | Qué toma Krypta de terceros y qué construye por su cuenta |
@@ -151,14 +154,17 @@ Google-free wake channel.
 
 **Status: beta, in Google Play's final verification before production release.** Built and operated by **4000MSNM S.R.L.**, a single operator.
 The session protocol (an epoch-based double ratchet) is custom and **has not been externally
-reviewed yet**: a first request (OTF Security Lab) was declined in October 2026, and other routes
-are being pursued. In the meantime, the protocol has a normative
+reviewed**. A request to the OTF Security Lab was declined in October 2026, and since then the
+project runs **its own audits**, which are not independent. The protocol has a normative
 specification
 ([docs/ESPECIFICACION-protocolo.en.md](docs/ESPECIFICACION-protocolo.en.md), English translation of
 the Spanish original), with numbered
 properties and declared weaknesses. An internal review on 14 Sep 2026
 ([docs/REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md)) found and fixed
-a key/nonce reuse race and a permanent message-loss bug. The infrastructure nodes never see content
+a key/nonce reuse race and a permanent message-loss bug; an internal audit on 11 Oct 2026
+([docs/AUDITORIA-interna-2026-10-11.md](docs/AUDITORIA-interna-2026-10-11.md), Spanish) found that
+a device's stored ratchet state re-opens the messages of its current epoch, which is being fixed.
+The infrastructure nodes never see content
 but do see metadata; see [docs/security-model.md](docs/security-model.md) (Spanish) for the full,
 unsoftened threat model.
 

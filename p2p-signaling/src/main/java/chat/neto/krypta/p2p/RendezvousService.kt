@@ -13,8 +13,13 @@ import javax.inject.Singleton
  *     rendezvous = HKDF(shared_secret, info = "krypta-rdv:" + fecha)
  *
  * Propiedades (ver docs/PLAN-senalizacion-descentralizada.md, Riesgo 1 / Fase 3):
- *  - Rotativo por día → no correlacionable a largo plazo.
- *  - No enumerable sin el secreto → la DHT nunca ve identificadores reales.
+ *  - Rotativo por día: un observador **sin** el secreto no liga la clave de un día con la del
+ *    siguiente. Quien obtenga una de las dos identidades recalcula el secreto, y con él las
+ *    claves de cualquier día, pasado o futuro (W-10 de la especificación): la rotación no da
+ *    secreto retrospectivo.
+ *  - No enumerable sin el secreto: la clave no es un identificador. Pero el registro de
+ *    proveedor que se publica en la DHT sí lleva el PeerID de quien anuncia, y los dos extremos
+ *    anuncian la misma clave, así que los nodos ven qué parejas hay cada día (W-13).
  */
 @Singleton
 class RendezvousService @Inject constructor() {
