@@ -9,7 +9,7 @@ import (
 // contenido: aquí los mensajes son de 1 MiB).
 type sizeHandler struct{ got chan int }
 
-func (h *sizeHandler) OnMessage(from string, data []byte) { h.got <- len(data) }
+func (h *sizeHandler) OnMessage(from string, data []byte) bool { h.got <- len(data); return true }
 
 // TestIncomingMessageIsBounded fija el tope de lectura del stream de mensajes entrante.
 // Importa porque ese stream lo puede abrir **cualquier** peer que sepa marcarnos: quién

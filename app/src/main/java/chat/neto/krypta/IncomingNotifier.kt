@@ -73,6 +73,7 @@ class IncomingNotifier @Inject constructor(
         if (attached) return
         attached = true
         KryptaNotifications.ensureChannels(context)
+        NotificationPrivacy.init(context)
         main.post {
             ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
                 override fun onStart(owner: LifecycleOwner) {
@@ -105,11 +106,13 @@ class IncomingNotifier @Inject constructor(
         // Solo se calla si tienes ESA conversación delante; con la app abierta en la lista,
         // en ajustes o en otro chat sí avisa (heads-up), como cualquier mensajería.
         if (uiVisible && visibleConversationId == contact.id) return
-        val text = runCatching { chat.notificationText(contact, message) }
-            .getOrDefault("Mensaje nuevo")
+        val content = NotificationPrivacy.current(context)
+        // Si el texto no se va a enseñar, ni se descifra para el aviso.
+        val text = if (content != NotificationContent.NAME_AND_MESSAGE) "" else
+            runCatching { chat.notificationText(contact, message) }.getOrDefault("Mensaje nuevo")
         runCatching {
             KryptaNotifications.notifyMessage(
-                context, contact.id, contact.displayName, text, message.timestamp,
+                context, contact.id, contact.displayName, text, message.timestamp, content,
             )
         }
     }
@@ -123,7 +126,9 @@ class IncomingNotifier @Inject constructor(
         if (state.phase == CallPhase.RINGING) {
             runCatching { KryptaForegroundService.start(context) }
             startRinging()
-            KryptaNotifications.notifyIncomingCall(context, state.contact?.displayName ?: "Contacto")
+            KryptaNotifications.notifyIncomingCall(
+                context, state.contact?.displayName ?: "Contacto", NotificationPrivacy.current(context),
+            )
         } else {
             stopRinging()
             KryptaNotifications.cancelCall(context)

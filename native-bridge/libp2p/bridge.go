@@ -49,6 +49,34 @@ const BootstrapDialTimeout = 20 * time.Second
 // ProtocolID is the libp2p protocol for Krypta one-shot E2EE message streams.
 const ProtocolID = protocol.ID("/krypta/msg/1.0.0")
 
+// ProtocolIDAck es el mismo mensaje de un solo sobre, pero **con acuse de aplicación**: tras
+// leerlo, el receptor contesta un byte que dice si lo guardó ([ackStored]) o no ([ackRetry]).
+//
+// Existe porque con 1.0.0 el emisor daba el mensaje por enviado en cuanto los bytes salían
+// hacia el multiplexor, sin saber nada del otro lado; si la conexión se caía, el proceso del
+// receptor moría o su guardado fallaba, el mensaje se perdía y nadie se enteraba (O-7 de
+// docs/AUDITORIA-2026-10-12.md). El buzón tenía ack-tras-persistir desde julio; el camino
+// directo, que es el preferido, nunca lo tuvo. Con esto, un acuse que no llega es un error y
+// la app cae al buzón (la deduplicación del receptor hace inofensivo el duplicado).
+//
+// El emisor ofrece 1.1.0 y 1.0.0 en la misma negociación (multistream), así que con un
+// receptor anterior se sigue entendiendo, sin acuse, como siempre.
+const ProtocolIDAck = protocol.ID("/krypta/msg/1.1.0")
+
+const (
+	// ackStored: guardado, o descartado a propósito (remitente desconocido o bloqueado): no
+	// hay nada que reintentar.
+	ackStored byte = 1
+	// ackRetry: no se pudo guardar. El emisor lo deja en el buzón, que lo reentregará.
+	ackRetry byte = 0
+)
+
+// msgAckTimeout acota la espera del acuse. El receptor guarda antes de contestar (Room, el
+// avance del ratchet y, en un trozo de archivo, escribir el trozo en disco), así que no es
+// inmediato; pero un receptor que no contesta en este plazo cuenta como no entregado. Es
+// variable solo para que los tests no tengan que esperarlo entero.
+var msgAckTimeout = 20 * time.Second
+
 // mbxMaxLine acota **una línea** (un sobre) de la respuesta del buzón. No vale acotar el
 // total del stream: una retirada legítima puede traer hasta 200 sobres (varios MB) y un
 // `io.LimitReader` la cortaría por la mitad. Lo que hay que impedir es que un nodo que nunca
@@ -188,8 +216,12 @@ func RatchetAgree(priv []byte, pub []byte) ([]byte, error) {
 
 // MessageHandler is implemented on the Kotlin side to receive inbound messages.
 // gomobile binds this Go interface as a Java/Kotlin interface.
+//
+// OnMessage devuelve si el mensaje quedó guardado (o se descartó a propósito): es lo que se
+// contesta al emisor por [ProtocolIDAck]. Se llama en el hilo del stream y **debe** guardar
+// antes de volver, igual que [MailboxHandler].
 type MessageHandler interface {
-	OnMessage(from string, data []byte)
+	OnMessage(from string, data []byte) bool
 }
 
 // PeerHandler is implemented on the Kotlin side to learn when a LAN/peer connection opens.
@@ -396,35 +428,62 @@ func (m *mdnsNotifee) HandlePeerFound(pi peer.AddrInfo) {
 	}
 }
 
-// SetMessageHandler registers a handler invoked for every inbound message stream.
+// SetMessageHandler registers a handler invoked for every inbound message stream, on both
+// versions of the protocol: 1.1.0 contesta el acuse, 1.0.0 (emisores anteriores) no.
 func (n *Node) SetMessageHandler(h MessageHandler) {
 	n.h.SetStreamHandler(ProtocolID, func(s network.Stream) {
 		defer s.Close()
-		// Lectura **acotada**: este stream lo puede abrir CUALQUIER peer que sepa marcarnos
-		// —quién envía no se comprueba aquí, sino después en Kotlin (`ChatService.onReceived`
-		// resuelve el contacto por PeerID y descarta al desconocido)—, así que un `io.ReadAll`
-		// a pelo dejaba que un extraño hiciera reservar a la app tanta memoria como quisiera
-		// mandar. Se lee un byte de más que el tope para poder distinguir "justo el tope" de
-		// "se pasó": con `io.LimitReader` a secas ambos casos son indistinguibles y un mensaje
-		// cortado llegaría como si estuviera entero (el AES-GCM lo rechazaría, pero como
-		// "mensaje ilegible", no como lo que es).
-		data, err := io.ReadAll(io.LimitReader(s, maxIncomingMessage+1))
-		if err != nil && err != io.EOF {
-			_ = s.Reset()
-			return
-		}
-		if len(data) > maxIncomingMessage {
-			_ = s.Reset()
-			return
-		}
-		if h != nil {
+		data, ok := readIncomingMessage(s)
+		if ok && h != nil {
 			h.OnMessage(s.Conn().RemotePeer().String(), data)
+		}
+	})
+	n.h.SetStreamHandler(ProtocolIDAck, func(s network.Stream) {
+		defer s.Close()
+		data, ok := readIncomingMessage(s)
+		if !ok {
+			return
+		}
+		ack := ackRetry
+		if h != nil && h.OnMessage(s.Conn().RemotePeer().String(), data) {
+			ack = ackStored
+		}
+		_ = s.SetWriteDeadline(time.Now().Add(msgAckTimeout))
+		if _, err := s.Write([]byte{ack}); err != nil {
+			_ = s.Reset()
 		}
 	})
 }
 
+// readIncomingMessage lee un mensaje entrante hasta el EOF del emisor, **acotado**: este
+// stream lo puede abrir CUALQUIER peer que sepa marcarnos —quién envía no se comprueba aquí,
+// sino después en Kotlin (`ChatService.onReceived` resuelve el contacto por PeerID y descarta
+// al desconocido)—, así que un `io.ReadAll` a pelo dejaba que un extraño hiciera reservar a la
+// app tanta memoria como quisiera mandar. Se lee un byte de más que el tope para poder
+// distinguir "justo el tope" de "se pasó": con `io.LimitReader` a secas ambos casos son
+// indistinguibles y un mensaje cortado llegaría como si estuviera entero (el AES-GCM lo
+// rechazaría, pero como "mensaje ilegible", no como lo que es). Si no vale, resetea el stream
+// y devuelve false.
+func readIncomingMessage(s network.Stream) ([]byte, bool) {
+	data, err := io.ReadAll(io.LimitReader(s, maxIncomingMessage+1))
+	if err != nil && err != io.EOF {
+		_ = s.Reset()
+		return nil, false
+	}
+	if len(data) > maxIncomingMessage {
+		_ = s.Reset()
+		return nil, false
+	}
+	return data, true
+}
+
 // SendMessage dials peerID (reusing existing connections / peerstore addrs) and writes
 // data on a fresh Krypta stream, half-closing so the receiver gets a clean EOF.
+//
+// Ofrece [ProtocolIDAck] primero: si el otro lo habla, **espera su acuse** y solo devuelve nil
+// si dice que lo guardó; cualquier otra cosa (no contesta, contesta [ackRetry], se cae) es un
+// error, y la app lo deja en el buzón. Con un receptor que solo habla 1.0.0, se envía como
+// siempre y se da por enviado al escribirlo.
 func (n *Node) SendMessage(peerID string, data []byte) error {
 	pid, err := peer.Decode(peerID)
 	if err != nil {
@@ -434,7 +493,7 @@ func (n *Node) SendMessage(peerID string, data []byte) error {
 	// un stream sobre ellas salvo que el contexto lo permita explícitamente; sin esto espera una
 	// conexión directa que (tras NAT) no llega → "context deadline exceeded".
 	ctx := network.WithAllowLimitedConn(n.ctx, "krypta-msg")
-	s, err := n.h.NewStream(ctx, pid, ProtocolID)
+	s, err := n.h.NewStream(ctx, pid, ProtocolIDAck, ProtocolID)
 	if err != nil {
 		return err
 	}
@@ -443,7 +502,22 @@ func (n *Node) SendMessage(peerID string, data []byte) error {
 		_ = s.Reset()
 		return err
 	}
-	return s.CloseWrite()
+	if err := s.CloseWrite(); err != nil {
+		return err
+	}
+	if s.Protocol() != ProtocolIDAck {
+		return nil // receptor anterior: sin acuse, como antes
+	}
+	_ = s.SetReadDeadline(time.Now().Add(msgAckTimeout))
+	ack := make([]byte, 1)
+	if _, err := io.ReadFull(s, ack); err != nil {
+		_ = s.Reset()
+		return fmt.Errorf("sin acuse del destinatario: %w", err)
+	}
+	if ack[0] != ackStored {
+		return errors.New("el destinatario no pudo guardarlo")
+	}
+	return nil
 }
 
 // StartDHT initializes the Kademlia DHT and connects to the given bootstrap peers

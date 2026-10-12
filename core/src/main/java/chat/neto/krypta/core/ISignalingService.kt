@@ -26,9 +26,12 @@ interface ISignalingService {
      * direcciones públicas. El descarte de PeerID desconocido de `onReceived` no llegaba a
      * tiempo porque está una capa por encima. Ver `docs/security-model.md` §5.1.
      *
-     * Implementación por defecto vacía: los dobles de test no necesitan saber de esto.
+     * **Sin cuerpo por defecto, a propósito** (O-11 de docs/AUDITORIA-2026-10-12.md): con la
+     * lista vacía el filtro queda abierto, así que una implementación nueva que olvidara
+     * sobrescribir esto compilaría y desactivaría la protección sin avisar. Los dobles de test
+     * ponen el cuerpo vacío ellos mismos.
      */
-    suspend fun setAllowedPeers(peers: String) {}
+    suspend fun setAllowedPeers(peers: String)
 
     /** Estado del filtro de conexiones, para el diagnóstico. Vacío si no aplica. */
     suspend fun allowedPeersStatus(): String = ""
@@ -67,6 +70,16 @@ interface ISignalingService {
      * nodo — los demás se reentregan en el próximo fetch. Devuelve cuántos se confirmaron.
      */
     suspend fun fetchMailbox(labels: String = ""): Int
+
+    /**
+     * Registra el procesador síncrono de los mensajes que llegan por **stream directo**: recibe
+     * (PeerID remitente, ciphertext) y devuelve `true` si quedó persistido (o se descartó a
+     * propósito), `false` si no. Es el acuse que se contesta al emisor (`/krypta/msg/1.1.0`): con
+     * `false`, o sin acuse, el emisor lo deja en el buzón. Antes el camino directo no tenía acuse
+     * y un fallo al guardar perdía el mensaje sin que nadie lo supiera (O-7 de
+     * docs/AUDITORIA-2026-10-12.md).
+     */
+    fun setDirectProcessor(processor: suspend (fromPeerId: String, ciphertext: ByteArray) -> Boolean)
 
     /**
      * Registra el procesador síncrono de sobres del buzón: recibe (PeerID remitente,
@@ -145,8 +158,10 @@ sealed interface SignalingEvent {
     data class PeerFound(val contactId: String) : SignalingEvent
 
     /**
-     * Mensaje entrante por stream directo (en vivo). Los del buzón NO pasan por aquí:
-     * van al procesador de [ISignalingService.setMailboxProcessor] (ack-tras-persistir).
+     * Mensaje entrante por stream directo **sin procesador registrado** (no debería pasar: lo
+     * registra `ChatService` al construirse). Con procesador, los directos van a
+     * [ISignalingService.setDirectProcessor] y los del buzón a
+     * [ISignalingService.setMailboxProcessor], los dos síncronos (ack-tras-persistir).
      */
     data class MessageReceived(
         val fromContactId: String,

@@ -12,10 +12,7 @@ import chat.neto.krypta.core.model.MessageContent
 import chat.neto.krypta.core.model.MessageStatus
 import chat.neto.krypta.core.repository.ContactRepository
 import chat.neto.krypta.core.repository.MessageRepository
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,8 +23,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.security.MessageDigest
-import java.time.LocalTime
 import java.util.UUID
+import kotlin.coroutines.EmptyCoroutineContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -78,20 +75,77 @@ class ChatService @Inject constructor(
     private val fileStore: FileStore,
     private val scope: CoroutineScope,
     private val sessions: RatchetSessions,
+    private val cpu: CpuContext,
 ) {
+    /**
+     * Sin [CpuContext]: el cifrado corre en el hilo de quien llama. Solo para los tests, que así
+     * siguen en su reloj virtual; la app usa el constructor de arriba, con `Dispatchers.Default`.
+     */
+    internal constructor(
+        signaling: ISignalingService,
+        cipher: MessageCipher,
+        messages: MessageRepository,
+        contacts: ContactRepository,
+        keyExchange: KeyExchange,
+        rendezvous: RendezvousService,
+        fileStore: FileStore,
+        scope: CoroutineScope,
+        sessions: RatchetSessions,
+    ) : this(signaling, cipher, messages, contacts, keyExchange, rendezvous, fileStore, scope, sessions, CpuContext(EmptyCoroutineContext))
+
+
+    // --- Piezas (§5 de docs/AUDITORIA-2026-10-12.md) ---------------------------------------
+    // ChatService había llegado a 2.000 líneas con siete responsabilidades. Ahora es el lazo
+    // cifrar → persistir → enviar/recibir, y delega lo demás. Se construyen aquí, no se inyectan,
+    // para que la API pública y los constructores no cambien.
+
+    private val diag = DiagnosticsLog()
+
+    /** Registro de diagnóstico (últimas [LOG_LINES] líneas). */
+    val log: StateFlow<List<String>> = diag.lines
+
+    private fun logLine(msg: String) = diag.line(msg)
+
+    private val outbox = Outbox(signaling, cipher, messages, keyExchange, sessions, cpu, diag)
+    private val files = FileTransfer(outbox, messages, fileStore, scope, diag)
+    private val receipts = ReadReceipts(messages, outbox)
+    private val caps = CapabilityNegotiator(contacts, sessions, outbox, scope, diag)
+
+    private val wan = WanLoop(
+        signaling, scope, diag,
+        object : WanSteps {
+            override suspend fun inboxLabels() = this@ChatService.inboxLabels()
+            override suspend fun fetchMailbox() = this@ChatService.fetchMailbox()
+            override suspend fun logRelayStatus() = this@ChatService.logRelayStatus()
+            override suspend fun announceAndFind() = this@ChatService.announceAndFind()
+            override suspend fun retryFailed() = this@ChatService.retryFailed()
+            override suspend fun announceCapabilities() = caps.announceCapabilities()
+        },
+    )
+
+    private val contactOps = ContactService(
+        contacts, messages, keyExchange, fileStore, sessions, diag,
+        object : ContactHooks {
+            override suspend fun refreshAllowedPeers() = this@ChatService.refreshAllowedPeers()
+            override fun kickWan() = this@ChatService.kickWan()
+            override fun forgetPresence(peerId: String) {
+                lastFound.remove(peerId)
+                _onlinePeers.update { it - peerId }
+            }
+            override fun content(contact: Contact, message: Message) = this@ChatService.content(contact, message)
+        },
+    )
+
+    /** Estado de la conexión a la DHT (WAN). */
+    val wanStatus: StateFlow<WanStatus> = wan.wanStatus
+
     private val _onlinePeers = MutableStateFlow<Set<String>>(emptySet())
+
     /** PeerIDs actualmente conectados (p. ej. encontrados por mDNS en LAN). */
     val onlinePeers: StateFlow<Set<String>> = _onlinePeers.asStateFlow()
 
-    private val _wanStatus = MutableStateFlow(WanStatus.DISABLED)
-    /** Estado de la conexión a la DHT (WAN). */
-    val wanStatus: StateFlow<WanStatus> = _wanStatus.asStateFlow()
-
-    private val _log = MutableStateFlow<List<String>>(emptyList())
-    /** Registro de diagnóstico (últimas ~30 líneas). */
-    val log: StateFlow<List<String>> = _log.asStateFlow()
-
     private val _incoming = MutableSharedFlow<Pair<Contact, Message>>(extraBufferCapacity = 64)
+
     /**
      * Mensajes entrantes ya persistidos (contacto + mensaje). **Observación best-effort**: es
      * un SharedFlow sin replay, así que lo emitido sin suscriptores (o con el búfer lleno) se
@@ -129,6 +183,7 @@ class ChatService @Inject constructor(
 
     private val _callSignals =
         MutableSharedFlow<Pair<Contact, MessageEnvelope.Decoded.Call>>(extraBufferCapacity = 64)
+
     /**
      * Señales de llamada entrantes (invite/accept/…), descifradas. Las consume `CallService`,
      * que por eso debe instanciarse al arrancar el proceso (lo hace `KryptaApplication`): sin
@@ -136,16 +191,8 @@ class ChatService @Inject constructor(
      */
     val callSignals: Flow<Pair<Contact, MessageEnvelope.Decoded.Call>> = _callSignals
 
-    private fun logLine(msg: String) {
-        val line = "${LocalTime.now().withNano(0)}  $msg"
-        runCatching { android.util.Log.i("KryptaDiag", msg) } // a logcat; no-op en tests JVM
-        _log.update { (it + line).takeLast(LOG_LINES) }
-    }
-
     /** Escribe una línea en el panel de diagnóstico desde fuera (p. ej. datos del dispositivo). */
     fun diagnose(msg: String) = logLine(msg)
-
-    private fun short(peerId: String) = if (peerId.length > 10) "…${peerId.takeLast(8)}" else peerId
 
     init {
         // Sobres del buzón: se procesan AQUÍ, síncronos, y solo se confirma (ack → borrado
@@ -168,6 +215,20 @@ class ChatService @Inject constructor(
                 if (msg != null) logLine("← mensaje de ${short(contact?.peerId ?: peerId)} (buzón)")
             }.onFailure {
                 logLine("buzón: sobre ${envelopeId.take(8)} sin persistir (reintentará): ${(it.message ?: "$it").take(60)}")
+            }
+            result.isSuccess
+        }
+        // Mensajes por stream directo: también síncronos, porque lo que devuelve es el acuse que
+        // se contesta al emisor (`/krypta/msg/1.1.0`). Con `false` el emisor lo deja en el
+        // buzón; antes el camino directo no tenía acuse y un fallo al guardar perdía el mensaje
+        // (O-7 de docs/AUDITORIA-2026-10-12.md). Un remitente desconocido o bloqueado devuelve
+        // null sin error: se acusa como guardado, porque no hay nada que reintentar.
+        signaling.setDirectProcessor { peerId, ciphertext ->
+            val result = runCatching { onReceived(peerId, ciphertext) }
+            result.onSuccess { msg ->
+                if (msg != null) logLine("← mensaje de ${short(peerId)}")
+            }.onFailure {
+                logLine("⚠ entrante directo sin persistir (el emisor lo dejará en el buzón): ${(it.message ?: "$it").take(60)}")
             }
             result.isSuccess
         }
@@ -201,11 +262,6 @@ class ChatService @Inject constructor(
         }
     }
 
-    private var wanJob: Job? = null
-
-    @Volatile
-    private var bootstrapAddr: String? = null
-
     private val startedOnce = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
@@ -225,7 +281,7 @@ class ChatService @Inject constructor(
         runCatching { refreshAllowedPeers() }
         runCatching { signaling.bootstrap() }.getOrNull()
             ?.takeIf { it.isNotBlank() }
-            ?.let(::startWan)
+            ?.let(wan::start)
         // En segundo plano y sin bloquear el arranque: nada depende de que termine, porque el
         // historial se lee igual mientras esté a medias.
         scope.launch { runCatching { unsealHistory() } }
@@ -278,7 +334,7 @@ class ChatService @Inject constructor(
     suspend fun setBootstrap(addr: String): BootstrapResult {
         if (addr.isBlank()) {
             signaling.setBootstrap("")
-            stopWan()
+            wan.stop()
             return BootstrapResult.CLEARED
         }
         val normalized = normalizeBootstrapList(addr)
@@ -287,95 +343,8 @@ class ChatService @Inject constructor(
             return BootstrapResult.INVALID
         }
         signaling.setBootstrap(normalized)
-        startWan(normalized)
+        wan.start(normalized)
         return BootstrapResult.OK
-    }
-
-    private fun startWan(bootstrap: String) {
-        bootstrapAddr = bootstrap
-        if (wanJob == null) wanJob = scope.launch { wanLoop() }
-        // Stream ligero de wake: el nodo avisa al instante cuando hay correo en el buzón.
-        scope.launch { runCatching { signaling.startWake(inboxLabels()) } }
-    }
-
-    /** Detiene el bucle WAN y vuelve a DISABLED (solo LAN/mDNS). */
-    private fun stopWan() {
-        wanJob?.cancel()
-        wanJob = null
-        bootstrapAddr = null
-        scope.launch { runCatching { signaling.stopWake() } }
-        _wanStatus.value = WanStatus.DISABLED
-        logLine("WAN: desactivado (solo LAN)")
-    }
-
-    /**
-     * Bucle WAN **auto-reparable**: cada ciclo (re)conecta a la DHT vía el nodo bootstrap
-     * (`connectDht` es idempotente) — esto sana la conexión wss que Cloudflare recicla
-     * (~cada 10 min en plan Free) — y, si hay conexión, anuncia/busca a cada contacto por su
-     * rendezvous del día `HKDF(sharedSecret, fecha)`.
-     */
-    private suspend fun wanLoop() {
-        while (true) {
-            val bootstrap = bootstrapAddr
-            if (bootstrap != null) {
-                // Todo el ciclo bajo un plazo máximo. Cada paso lleva además el suyo (ver
-                // [step]): sin ellos, el 2 sep 2026 se midieron 37 min sin un solo ciclo, con
-                // el buzón lleno y el móvil sin recoger nada — el bucle es secuencial, así que
-                // cualquier llamada de red que se cuelgue congela **toda** la entrega.
-                val cycled = withTimeoutOrNull(CYCLE_BUDGET_MS) { wanCycle(bootstrap) }
-                if (cycled == null) {
-                    _wanStatus.value = WanStatus.ERROR
-                    logLine("ciclo WAN abortado por tiempo (${CYCLE_BUDGET_MS / 1000}s), reintentando")
-                }
-            }
-            // Intervalo adaptativo (batería): si el stream de wake está abierto, los mensajes
-            // llegan al instante empujados por el nodo, así que el bucle puede espaciarse; si no
-            // (LAN-only o wake caído), se mantiene ágil para sondear el buzón y redescubrir.
-            val wakeUp = runCatching { signaling.wakeConnected() }.getOrDefault(false)
-            val interval = if (wakeUp) WAKE_IDLE_MS else REDISCOVER_MS
-            if (wakeUp != lastWakeUp) {
-                lastWakeUp = wakeUp
-                logLine(if (wakeUp) "wake activo: bucle relajado (${WAKE_IDLE_MS / 1000}s)" else "wake inactivo: bucle ágil (${REDISCOVER_MS / 1000}s)")
-            }
-            // Espera interrumpible: kickWan() (p. ej. al cambiar de red) adelanta el ciclo.
-            withTimeoutOrNull(interval) { wanKick.receive() }
-        }
-    }
-
-    /**
-     * Un ciclo del bucle WAN. Cada paso va acotado por [step]: un nodo lento o colgado hace
-     * que se salte **ese** paso, no que se pare la entrega. El orden importa: el buzón se
-     * retira antes del rendezvous porque es lo que entrega mensajes; descubrir peers puede
-     * esperar al siguiente ciclo.
-     */
-    private suspend fun wanCycle(bootstrap: String) {
-        val wasConnected = _wanStatus.value == WanStatus.CONNECTED
-        if (!wasConnected) _wanStatus.value = WanStatus.CONNECTING
-
-        val connected = step("DHT", CONNECT_BUDGET_MS) { signaling.connectDht(bootstrap) }
-        if (connected) {
-            if (!wasConnected) logLine("DHT: conectado")
-            _wanStatus.value = WanStatus.CONNECTED
-        } else {
-            _wanStatus.value = WanStatus.ERROR
-        }
-
-        // El wake se re-arma cada ciclo: StartWake es idempotente en Go, y si la primera
-        // llamada llegó sin host o sin lista de nodos, esta lo levanta en vez de quedarse
-        // sin push para siempre.
-        step("wake", CONNECT_BUDGET_MS) { signaling.startWake(inboxLabels()) }
-
-        // Aunque el DHT no haya conectado: el buzón se retira por dial directo a cada nodo,
-        // y es la vía que entrega los mensajes. Antes iba dentro del `if` del DHT, así que un
-        // fallo al conectar dejaba el correo sin recoger.
-        step("buzón", MAILBOX_BUDGET_MS) { fetchMailbox() }
-
-        if (connected) {
-            step("relay", RELAY_BUDGET_MS) { logRelayStatus() }
-            step("rendezvous", RENDEZVOUS_BUDGET_MS) { announceAndFind() }
-            step("reintentos", RETRY_BUDGET_MS) { retryFailed() }
-            step("capacidades", CAPABILITIES_BUDGET_MS) { announceCapabilities() }
-        }
     }
 
     /**
@@ -403,81 +372,12 @@ class ChatService @Inject constructor(
             if (contact.blocked || contact.sharedSecret == null) continue
             // Un archivo son muchos envíos y no cabe en el presupuesto del paso: va aparte, en
             // el scope, y solo si tiene copia y no se está enviando ya.
-            val file = ownFileOf(contact, message)
-            if (file != null) {
-                if (message.id !in filesWithoutCopy && message.id !in filesInFlight) {
-                    scope.launch { runCatching { resendFile(contact, message, file.first, file.second) } }
-                }
-                continue
-            }
+            if (files.resendInBackground(contact, message)) continue
             messages.updateStatus(message.id, MessageStatus.PENDING)
-            val result = transmit(contact, message.copy(status = MessageStatus.PENDING), wireBytes(contact, message))
+            val result = outbox.transmit(contact, message.copy(status = MessageStatus.PENDING), outbox.wireBytes(contact, message))
             if (result.status == MessageStatus.SENT) sent++
         }
         if (sent > 0) logLine("↻ reenviados $sent de ${failed.size} mensaje(s) pendientes")
-    }
-
-    /**
-     * Anuncia a cada contacto qué versión de protocolo habla este cliente (sobre `V`), **una
-     * sola vez por contacto y por versión**: al recibir el suyo se apunta en `peerProtocol`, y
-     * eso es lo que permitirá encender el ratchet contacto a contacto en vez de esperar a que
-     * todo el mundo actualice (ver `docs/DISENO-ratchet.md` §5).
-     *
-     * Se marca como anunciado **solo si el envío salió** (directo o buzón). Si falla por las
-     * dos vías se reintenta en el próximo ciclo; si sale por buzón, ya está dicho y no se
-     * vuelve a depositar — repetirlo en cada arranque gastaría el cupo del destinatario.
-     *
-     * Un cliente anterior recibe el sobre como `Unsupported` y lo ignora sin pintar nada, que
-     * es lo que hace seguro empezar a anunciarlo desde ya.
-     */
-    internal suspend fun announceCapabilities() {
-        val pendientes = runCatching { contacts.observeAll().first() }.getOrDefault(emptyList())
-            .filter { !it.blocked && it.sharedSecret != null && it.announcedProtocol < PROTOCOL_VERSION }
-        var anunciados = 0
-        for (contact in pendientes) {
-            // Con la versión que tenemos apuntada de él: si nos consta por debajo de lo que ya
-            // nos anunció, somos nosotros quienes la perdimos, y así nos la repite (H-1).
-            val hello = MessageEnvelope.encodeHello(PROTOCOL_VERSION, knows = contact.peerProtocol)
-            val enviado = runCatching { sendRaw(contact, hello) }
-                .isSuccess
-            if (enviado) {
-                contacts.upsert(contact.copy(announcedProtocol = PROTOCOL_VERSION))
-                anunciados++
-            }
-        }
-        // Se registran los dos desenlaces: sin la segunda línea, "no aparece nada" tanto puede
-        // significar "ya estaba dicho" como "falla siempre en silencio", y en el diagnóstico
-        // eso no se puede distinguir.
-        if (anunciados > 0) {
-            logLine("↔ protocolo v$PROTOCOL_VERSION anunciado a $anunciados contacto(s)")
-        } else if (pendientes.isNotEmpty()) {
-            logLine("↔ anuncio de protocolo pendiente para ${pendientes.size} contacto(s)")
-        }
-    }
-
-    /**
-     * Ejecuta un paso del ciclo con plazo y sin dejar que su fallo tumbe el resto. Devuelve
-     * `true` solo si terminó a tiempo y sin excepción. Solo loguea al vencer el plazo (un
-     * paso lento repetido llenaría el diagnóstico).
-     */
-    private suspend fun step(name: String, budgetMs: Long, block: suspend () -> Unit): Boolean {
-        val done = withTimeoutOrNull(budgetMs) { runCatching { block() }.isSuccess }
-        if (done == null) logLine("$name: sin respuesta en ${budgetMs / 1000}s, se salta este ciclo")
-        return done == true
-    }
-
-    @Volatile
-    private var lastWakeUp: Boolean? = null
-
-    private val wanKick = Channel<Unit>(Channel.CONFLATED)
-
-    /**
-     * Adelanta el próximo ciclo del bucle WAN (reconexión + rendezvous + buzón) sin esperar
-     * los 30 s — p. ej. cuando el sistema notifica un cambio de red (WiFi↔datos). No-op si
-     * la WAN está desactivada.
-     */
-    fun kickWan() {
-        wanKick.trySend(Unit)
     }
 
     /**
@@ -487,29 +387,30 @@ class ChatService @Inject constructor(
      * buzón y dispara el aviso. No hace nada si la WAN está desactivada.
      *
      * Arranca antes el host/WAN ([start] es idempotente): si el OEM mató el proceso y lo
-     * revivió **solo la alarma**, nadie llamó a `start()`, así que `bootstrapAddr` estaría
+     * revivió **solo la alarma**, nadie llamó a `start()`, así que `wan.bootstrapAddr` estaría
      * vacío y el nodo nativo ni existiría — el latido era un no-op justo en el escenario
      * para el que se creó. Tras `start()` se releen los nodos guardados por si acaso.
      */
     suspend fun pollOnce() {
-        withTimeoutOrNull(CONNECT_BUDGET_MS) { runCatching { start() } }
-        val bootstrap = bootstrapAddr
-            ?: runCatching { signaling.bootstrap() }.getOrNull()?.takeIf { it.isNotBlank() }
-            ?: return
-        // Con plazo, y el buzón se retira **pase lo que pase** con el DHT. Antes eran dos
-        // llamadas sin plazo y en este orden, así que un dial colgado dejaba al latido sin
-        // llegar nunca a `fetchMailbox()`: la red de seguridad fallaba justo en el escenario
-        // para el que existe (medido en vivo el 2 sep 2026).
-        step("DHT (latido)", CONNECT_BUDGET_MS) { signaling.connectDht(bootstrap) }
-        step("buzón (latido)", MAILBOX_BUDGET_MS) { fetchMailbox() }
+        // Todo bajo [POLL_BUDGET_MS], por debajo de lo que el sistema le da a un receptor de
+        // broadcast (~60 s antes de tratarlo como ANR y, en segundo plano, matar el proceso) y
+        // del wake lock del latido. Con los plazos del ciclo WAN eran hasta 105 s (O-5 de
+        // docs/AUDITORIA-2026-10-12.md): la red de seguridad podía acabar con el proceso que
+        // venía a rescatar.
+        withTimeoutOrNull(POLL_BUDGET_MS) {
+            withTimeoutOrNull(POLL_START_BUDGET_MS) { runCatching { start() } }
+            val bootstrap = wan.bootstrapAddr
+                ?: runCatching { signaling.bootstrap() }.getOrNull()?.takeIf { it.isNotBlank() }
+                ?: return@withTimeoutOrNull
+            // Con plazo, y el buzón se retira **pase lo que pase** con el DHT. Antes eran dos
+            // llamadas sin plazo y en este orden, así que un dial colgado dejaba al latido sin
+            // llegar nunca a `fetchMailbox()`: la red de seguridad fallaba justo en el escenario
+            // para el que existe (medido en vivo el 2 sep 2026).
+            wan.step("DHT (latido)", POLL_CONNECT_BUDGET_MS) { signaling.connectDht(bootstrap) }
+            wan.step("buzón (latido)", POLL_MAILBOX_BUDGET_MS) { fetchMailbox() }
+        } ?: logLine("latido: sin terminar en ${POLL_BUDGET_MS / 1000}s, se corta")
     }
 
-
-    /**
-     * Registra si el host ya tiene una **reserva de relay** (una dirección `/p2p-circuit` entre
-     * sus multiaddrs). Es la condición para ser alcanzable tras NAT: sin ella, el otro contacto
-     * te encuentra por rendezvous pero "sin direcciones" y el envío falla. Solo loguea al cambiar.
-     */
     /**
      * Renueva la reserva de Circuit Relay v2 cada ciclo (mantiene el slot activo en el nodo de
      * infra, para que reenvíe conexiones hacia nosotros tras NAT). La dirección /p2p-circuit ya
@@ -523,7 +424,6 @@ class ChatService @Inject constructor(
             logLine("relay: $state")
         }
     }
-
 
     @Volatile
     private var lastReserveResult: String? = null
@@ -565,24 +465,6 @@ class ChatService @Inject constructor(
         // un contacto entre la petición y la respuesta.
         inboxLabels()
         return labelIndex[label]?.let { contacts.findById(it) }
-    }
-
-    /**
-     * Etiqueta bajo la que depositar para [contact], o cadena vacía para usar el camino
-     * antiguo (direccionado por PeerID).
-     *
-     * Depositar a ciegas solo sirve si **el destinatario** retira por etiquetas: un cliente que
-     * aún no lo haga jamás miraría ese buzón y el mensaje se quedaría ahí hasta caducar. Que el
-     * *nodo* hable v2 no basta. Por eso la decisión es **por contacto**, como la del ratchet:
-     * la retirada por etiquetas entró en el cliente antes que el anuncio de capacidad, así que
-     * quien haya anunciado [BLIND_MIN_PROTOCOL] o más ya sabe recibir a ciegas. Con el resto
-     * se sigue depositando por PeerID, que es lo que el nodo escribe en disco.
-     */
-    private fun outboxLabel(contact: Contact): String {
-        if (!BLIND_DEPOSIT || contact.peerProtocol < BLIND_MIN_PROTOCOL) return ""
-        val secret = contact.sharedSecret ?: return ""
-        val me = runCatching { keyExchange.localPeerId() }.getOrNull() ?: return ""
-        return MailboxLabel.toHex(MailboxLabel.outbox(secret, me, contact.peerId))
     }
 
     /** Interno (no privado) para poder ejercitarlo desde los tests del módulo. */
@@ -639,7 +521,7 @@ class ChatService @Inject constructor(
      */
     private suspend fun pushAllowedPeers(contactIds: List<String>) {
         val nodes = bootstrapPeerIds(
-            bootstrapAddr ?: runCatching { signaling.bootstrap() }.getOrNull().orEmpty(),
+            wan.bootstrapAddr ?: runCatching { signaling.bootstrap() }.getOrNull().orEmpty(),
         )
         val lista = (contactIds + nodes).distinct()
         runCatching { signaling.setAllowedPeers(lista.joinToString("\n")) }
@@ -653,6 +535,7 @@ class ChatService @Inject constructor(
         }
     }
 
+    @Volatile
     private var lastAllowedCount = -1
 
     /**
@@ -678,7 +561,8 @@ class ChatService @Inject constructor(
         pushAllowedPeers(ids)
     }
 
-    private val lastFound = mutableMapOf<String, Boolean>()
+    // Concurrente: lo escribe el bucle WAN y lo limpian bloquear y borrar desde la UI (O-10).
+    private val lastFound = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
 
     /**
      * Retira los mensajes pendientes del buzón del nodo (entrega offline). Cada mensaje
@@ -705,94 +589,13 @@ class ChatService @Inject constructor(
     private var lastMailboxError: String? = null
 
     /**
-     * Salvaguarda de dominio: a un contacto bloqueado no se le envía **nada** (mensajes,
-     * trozos de archivo o señales de llamada). La UI ya lo impide, pero el corte vive aquí
-     * para que ningún camino de envío se lo salte.
-     */
-    private fun requireNotBlocked(contact: Contact) {
-        require(!contact.blocked) { "${contact.displayName} está bloqueado" }
-    }
-
-    /**
-     * ¿Se le escribe a este contacto con ratchet? Depende de **él**, no de la versión que haya
-     * publicada: solo si ha anunciado que sabe recibirlo ([Contact.peerProtocol], sobre `V`).
-     * Así el encendido no necesita que actualice todo el mundo a la vez ni una publicación de
-     * seguimiento que cambie una constante — que es lo que sí necesita el depósito ciego.
-     *
-     * [RATCHET_SEND] queda por encima como interruptor de emergencia.
-     */
-    private fun usesRatchet(contact: Contact): Boolean =
-        RATCHET_SEND && contact.sharedSecret != null && contact.peerProtocol >= RATCHET_MIN_PROTOCOL
-
-    /**
-     * ¿Se le **rellena** el tamaño a este contacto? (ver [Padding]). Mismo criterio que el
-     * ratchet pero con su propio mínimo: el relleno llegó después, y enviárselo a quien no sabe
-     * quitarlo le entregaría el relleno pegado al final del mensaje.
-     *
-     * Solo tiene sentido con ratchet: el camino v1 no tiene dónde marcar que va relleno.
-     */
-    private fun pads(contact: Contact): Boolean =
-        usesRatchet(contact) && contact.peerProtocol >= PADDING_MIN_PROTOCOL
-
-    /**
-     * ¿Las propuestas nuevas para [contact] son **v4**, y se ata la época 0? (protocolo v4,
-     * `docs/DISENO-ratchet.md` §1.12). Con su propio mínimo, como el relleno: a quien anuncie 3 los
-     * bits nuevos le llegarían ignorados y derivaría con el KDF viejo.
-     */
-    private fun kdf4(contact: Contact): Boolean =
-        usesRatchet(contact) && contact.peerProtocol >= KDF4_MIN_PROTOCOL
-
-    /** Un envío ya cifrado: el mensaje persistido (si lo hay) y los bytes que van por la red. */
-    private class Outgoing(val message: Message, val wire: ByteArray)
-
-    /**
-     * Cifra [envelope] con la forma que hable [contact].
-     *
-     * Con ratchet, **el estado avanzado se guarda antes de que los bytes salgan**. El orden no
-     * es un detalle: si se enviara primero y el estado no llegara a guardarse, el siguiente
-     * mensaje reutilizaría la misma clave de mensaje —y con ella el mismo nonce de AES-GCM—,
-     * que es la forma clásica de romper del todo un cifrado autenticado.
-     */
-    private suspend fun seal(contact: Contact, envelope: ByteArray): ByteArray {
-        if (!usesRatchet(contact)) {
-            return cipher.encrypt(requireNotNull(contact.sharedSecret), envelope)
-        }
-        lateinit var wire: ByteArray
-        sessions.send(contact, envelope, pads(contact), kdf4(contact)) { wire = it }
-        return wire
-    }
-
-    /**
-     * Como [seal], pero además persiste el mensaje que construya [build] **en la misma
-     * transacción** que el avance del ratchet: o se guardan los dos, o ninguno.
-     */
-    private suspend fun sealAndPersist(
-        contact: Contact,
-        envelope: ByteArray,
-        build: () -> Message,
-    ): Outgoing {
-        if (!usesRatchet(contact)) {
-            val wire = cipher.encrypt(requireNotNull(contact.sharedSecret), envelope)
-            val message = build()
-            messages.save(message)
-            return Outgoing(message, wire)
-        }
-        lateinit var wire: ByteArray
-        val message = sessions.send(contact, envelope, pads(contact), kdf4(contact)) { ct ->
-            wire = ct
-            build().also { messages.save(it) }
-        }
-        return Outgoing(message, wire)
-    }
-
-    /**
      * Cifra [plaintext] para [contact], lo persiste (PENDING) y lo envía. Si el envío
      * directo falla (peer offline / NAT sin ruta), cae al **buzón** store-and-forward del
      * nodo (entrega offline) → `SENT`. Solo si el buzón también falla queda **FAILED** —
      * nunca se propaga la excepción, para no tumbar la app. Devuelve el estado final.
      */
     suspend fun send(contact: Contact, plaintext: ByteArray, replyTo: String? = null): Message {
-        requireNotBlocked(contact)
+        outbox.requireNotBlocked(contact)
         // Precondición, no valor: quién cifra y con qué depende ya de [seal].
         requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
         // El ciphertext cifra un SOBRE que lleva el id del mensaje, para que el receptor
@@ -800,7 +603,7 @@ class ChatService @Inject constructor(
         // va envuelto en uno de cita, que solo lleva el id del mensaje citado.
         val msgId = UUID.randomUUID().toString()
         val envelope = MessageEnvelope.wrapReply(replyTo, MessageEnvelope.encodeText(msgId, plaintext))
-        val out = sealAndPersist(contact, envelope) {
+        val out = outbox.sealAndPersist(contact, envelope) {
             Message(
                 id = msgId,
                 conversationId = contact.id,
@@ -812,7 +615,7 @@ class ChatService @Inject constructor(
                 status = MessageStatus.PENDING,
             )
         }
-        return transmit(contact, out.message, out.wire)
+        return outbox.transmit(contact, out.message, out.wire)
     }
 
     /**
@@ -820,12 +623,12 @@ class ChatService @Inject constructor(
      * [send] pero el sobre es de tipo imagen; viaja por el mismo camino (directo → buzón).
      */
     suspend fun sendImage(contact: Contact, jpeg: ByteArray, replyTo: String? = null): Message {
-        requireNotBlocked(contact)
+        outbox.requireNotBlocked(contact)
         // Precondición, no valor: quién cifra y con qué depende ya de [seal].
         requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
         val msgId = UUID.randomUUID().toString()
         val envelope = MessageEnvelope.wrapReply(replyTo, MessageEnvelope.encodeImage(msgId, jpeg))
-        val out = sealAndPersist(contact, envelope) {
+        val out = outbox.sealAndPersist(contact, envelope) {
             Message(
                 id = msgId,
                 conversationId = contact.id,
@@ -835,169 +638,7 @@ class ChatService @Inject constructor(
                 status = MessageStatus.PENDING,
             )
         }
-        return transmit(contact, out.message, out.wire)
-    }
-
-    /**
-     * Envía un **archivo** troceado a [contact]: anuncia la meta y manda cada trozo (≤ límite
-     * del buzón) como mensajes cifrados por el camino normal (directo → buzón). Crea UNA
-     * burbuja visible (descriptor). Si algún trozo falla pese a sus reintentos → FAILED.
-     *
-     * **El emisor conserva siempre una copia** (cifrada en reposo, en `krypta_files/sent/`):
-     * [localPath] si ya la trae (nota de voz, GIF) o una que se guarda aquí. Es lo que permite
-     * que reintentar ([retry], [retryFailed]) **reenvíe el archivo de verdad**. Hasta el 21 sep
-     * 2026 los archivos del selector no guardaban copia y reintentar reenviaba solo el
-     * descriptor local: al otro lado aparecía una burbuja con nombre y tamaño y **sin archivo**,
-     * y aquí quedaba como enviado (pasó en vivo con un PDF de 6,5 MB).
-     */
-    suspend fun sendFile(
-        contact: Contact,
-        name: String,
-        mime: String,
-        bytes: ByteArray,
-        localPath: String? = null,
-        replyTo: String? = null,
-    ): Message {
-        requireNotBlocked(contact)
-        // Precondición, no valor: quién cifra y con qué depende ya de [seal].
-        requireNotNull(contact.sharedSecret) { "contact ${contact.id} has no shared secret" }
-        val fileId = UUID.randomUUID().toString()
-        val ownCopy = localPath
-            ?: runCatching { fileStore.saveSent("$fileId-$name", bytes) }.getOrNull()
-        if (ownCopy == null) logLine("⚠ sin copia local de $name: si falla, habrá que volver a adjuntarlo")
-        // La cita va en el descriptor local (burbuja propia) y en la meta que viaja: los
-        // trozos no la llevan, y la burbuja del receptor no nace hasta tenerlos todos.
-        val descriptor = MessageEnvelope.wrapReply(
-            replyTo,
-            MessageEnvelope.encodeFileDescriptor(name, mime, bytes.size.toLong(), ownCopy),
-        )
-        val message = Message(
-            id = fileId,
-            conversationId = contact.id,
-            senderId = SELF,
-            payload = descriptor,
-            timestamp = System.currentTimeMillis(),
-            status = MessageStatus.PENDING,
-        )
-        messages.save(message)
-        filesInFlight.add(fileId)
-        try {
-            return transmitFile(contact, message, name, mime, bytes, replyTo)
-        } finally {
-            filesInFlight.remove(fileId)
-        }
-    }
-
-    /** Archivos que se están enviando ahora mismo: un reintento no debe solaparse con ellos. */
-    private val filesInFlight: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-
-    /** Archivos fallidos sin copia local: reintentarlos solos en cada ciclo no sirve de nada. */
-    private val filesWithoutCopy: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-
-    /**
-     * Manda la meta y todos los trozos del archivo de [message] (su id **es** el `fileId`) y
-     * deja la fila en SENT o FAILED. Reenviar un archivo con el mismo id es seguro: el
-     * receptor guarda cada trozo por índice en su staging (idempotente), así que lo que ya
-     * tenía de un intento anterior se reescribe y lo que faltaba completa el archivo.
-     */
-    private suspend fun transmitFile(
-        contact: Contact,
-        message: Message,
-        name: String,
-        mime: String,
-        bytes: ByteArray,
-        replyTo: String?,
-    ): Message {
-        val fileId = message.id
-        val total = (bytes.size + CHUNK_SIZE - 1) / CHUNK_SIZE
-        return try {
-            sendPiece(
-                contact,
-                MessageEnvelope.wrapReply(
-                    replyTo,
-                    MessageEnvelope.encodeFileMeta(fileId, name, mime, bytes.size.toLong(), total),
-                ),
-            )
-            for (i in 0 until total) {
-                val from = i * CHUNK_SIZE
-                val to = minOf(from + CHUNK_SIZE, bytes.size)
-                sendPiece(contact, MessageEnvelope.encodeFileChunk(fileId, i, bytes.copyOfRange(from, to)))
-            }
-            messages.updateStatus(fileId, MessageStatus.SENT)
-            logLine("→ archivo enviado a ${short(contact.peerId)} ($total trozos)")
-            message.copy(status = MessageStatus.SENT)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            messages.updateStatus(fileId, MessageStatus.FAILED)
-            logLine("✗ archivo no enviado a ${short(contact.peerId)}: ${sendErrorReason(e)}")
-            message.copy(status = MessageStatus.FAILED)
-        }
-    }
-
-    /**
-     * Entrega **una** pieza de un archivo (meta o trozo), con reintentos antes de rendirse.
-     * Un archivo son decenas o cientos de envíos seguidos y bastaba con que **uno** fallara
-     * por las dos vías —un dial que se cae un instante, el buzón del destinatario lleno a
-     * mitad de la ráfaga hasta que lo vacía— para que el archivo entero quedara FALLIDO.
-     *
-     * Se cifra **una vez** y se reenvían los mismos bytes: si un intento llegó aunque diera
-     * error, el receptor lo descarta como repetido (dedup del ratchet) en vez de gastar otra
-     * clave; y el trozo, por índice, es idempotente en su staging.
-     */
-    private suspend fun sendPiece(contact: Contact, envelope: ByteArray) {
-        requireNotBlocked(contact)
-        val wire = seal(contact, envelope)
-        var last: Exception? = null
-        for (attempt in 0..PIECE_RETRY_DELAYS_MS.size) {
-            if (attempt > 0) kotlinx.coroutines.delay(PIECE_RETRY_DELAYS_MS[attempt - 1])
-            try {
-                deliver(contact, wire)
-                return
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                last = e
-            }
-        }
-        throw requireNotNull(last)
-    }
-
-    /** El descriptor de un archivo **propio** persistido (y su cita), o null si no lo es. */
-    private fun ownFileOf(contact: Contact, message: Message): Pair<MessageEnvelope.Decoded.FileDescriptor, String?>? {
-        if (message.senderId != SELF) return null
-        val envelope = runCatching { MessageEnvelope.decode(envelopeOf(contact, message)) }.getOrNull()
-        val replyTo = (envelope as? MessageEnvelope.Decoded.Reply)?.replyTo
-        val inner = (envelope as? MessageEnvelope.Decoded.Reply)?.inner ?: envelope
-        return (inner as? MessageEnvelope.Decoded.FileDescriptor)?.let { it to replyTo }
-    }
-
-    /**
-     * Reenvía un archivo propio desde su copia local: meta + todos los trozos, mismo id.
-     * **Nunca** manda el descriptor: es la burbuja local, no el archivo. Sin copia (un envío
-     * de antes del 21 sep 2026) no hay nada que reenviar y se dice, en vez de fingir.
-     */
-    private suspend fun resendFile(
-        contact: Contact,
-        message: Message,
-        file: MessageEnvelope.Decoded.FileDescriptor,
-        replyTo: String?,
-    ): Message {
-        val bytes = file.path?.let { runCatching { fileStore.read(it) }.getOrNull() }
-        if (bytes == null) {
-            filesWithoutCopy.add(message.id)
-            messages.updateStatus(message.id, MessageStatus.FAILED)
-            logLine("✗ no se puede reenviar ${file.name}: no hay copia local")
-            throw IllegalStateException("No se guardó copia de «${file.name}»: vuelve a adjuntarlo")
-        }
-        if (!filesInFlight.add(message.id)) return message // ya se está enviando
-        try {
-            messages.updateStatus(message.id, MessageStatus.PENDING)
-            logLine("↻ reenviando ${file.name} a ${short(contact.peerId)}")
-            return transmitFile(contact, message.copy(status = MessageStatus.PENDING), file.name, file.mime, bytes, replyTo)
-        } finally {
-            filesInFlight.remove(message.id)
-        }
+        return outbox.transmit(contact, out.message, out.wire)
     }
 
     /**
@@ -1017,7 +658,7 @@ class ChatService @Inject constructor(
         // [peerNegotiates] lo fuerza quien contesta a un invite que traía mitad: eso ya demuestra
         // que el otro la entiende, conste lo que conste.
         val negociada = key?.takeIf { peerNegotiates }
-        sendRaw(contact, MessageEnvelope.encodeCall(kind, callId, System.currentTimeMillis(), negociada))
+        outbox.sendRaw(contact, MessageEnvelope.encodeCall(kind, callId, System.currentTimeMillis(), negociada))
     }
 
     /**
@@ -1068,98 +709,6 @@ class ChatService @Inject constructor(
         logLine("🔄 sesión con ${short(contact.peerId)} reiniciada (linaje $lineage)")
     }
 
-    /** Cifra y envía un sobre "en crudo" (meta/trozo) sin crear un Message: directo → buzón. */
-    private suspend fun sendRaw(contact: Contact, envelope: ByteArray) {
-        requireNotBlocked(contact)
-        deliver(contact, seal(contact, envelope))
-    }
-
-    /** Último reengache por contacto, para no convertir un fallo repetido en una ráfaga. */
-    private val lastRehook = mutableMapOf<String, Long>()
-
-    /** Último relevo por contacto: el disparador no está autenticado, así que va con tope de ritmo. */
-    private val lastRelay = java.util.concurrent.ConcurrentHashMap<String, Long>()
-
-    /**
-     * **Relevo** (R2, `docs/DISENO-ratchet.md` §1.13): [wire] no abrió y reclama una época ≥ 1 de un
-     * linaje mayor que el nuestro, así que el otro está en una sesión que aquí no existe. Se crea una
-     * por encima y se le manda el anuncio por ella, que es lo que hará que la adopte. Cubre W-6 (nos
-     * restauramos con el reloj atrasado) y quita el «sin vuelta atrás» de W-4 (alguien con S lo metió
-     * en un linaje forjado). Como mucho uno por contacto cada [REHOOK_MIN_INTERVAL_MS]: la cabecera
-     * no está autenticada y un nodo podría fabricarla. Solo con contactos v4 (ver dentro). Devuelve
-     * si hubo relevo.
-     */
-    private suspend fun relayIfBehind(contact: Contact, wire: ByteArray): Boolean {
-        // Solo con contactos v4. Tras perder el estado, un segundo relevo puede caer en el mismo
-        // linaje que uno anterior (cabecera + 1, si el otro sigue en la suya); en v3 la cadena de
-        // la época 0 depende solo de S, el linaje y el sentido, así que el primer mensaje repetiría
-        // clave y nonce. En v4 va atada a una propuesta nueva y no pasa. Lo encontró
-        // `RatchetPropertyTest` (semilla 504) el 11 oct 2026.
-        if (!kdf4(contact)) return false
-        val now = System.currentTimeMillis()
-        if (now - (lastRelay[contact.id] ?: 0L) < REHOOK_MIN_INTERVAL_MS) return false
-        val lineage = runCatching { sessions.relay(contact, wire, kdf4(contact), now) }.getOrNull() ?: return false
-        lastRelay[contact.id] = now
-        logLine("↔ relevo con ${short(contact.peerId)}: escribe en un linaje que aquí no está; sesión nueva $lineage")
-        launchHello(
-            contact, estatico = false, limiter = lastRelayHello,
-            enviado = "↔ anuncio por la sesión nueva a ${short(contact.peerId)}",
-            fallido = "↔ anuncio por la sesión nueva a ${short(contact.peerId)} no salió",
-        )
-        return true
-    }
-
-    /** El anuncio del relevo tiene su propio tope: si compartiera el del reengache, podría no salir. */
-    private val lastRelayHello = java.util.concurrent.ConcurrentHashMap<String, Long>()
-
-    /**
-     * **Reengancha** una sesión de ratchet desincronizada mandando cualquier cosa nuestra.
-     *
-     * El caso (encontrado por `RatchetPropertyTest`, ver `docs/DISENO-ratchet.md` §1.9): si uno
-     * de los dos pierde el estado, su linaje nuevo es mayor, y la regla del §1.6 dice que un
-     * linaje **menor se descarta**. El que no se ha enterado sigue escribiendo en el viejo y
-     * **sus mensajes se pierden** hasta que el que reinstaló escriba algo. Aquí somos justo el
-     * que lo sabe —acabamos de fallar al abrir su mensaje—, así que no hace falta esperar a que
-     * el usuario escriba: se le manda el anuncio de capacidades, que ya viaja por el ratchet con
-     * nuestro linaje, y con eso el otro extremo lo adopta y vuelve a ser legible.
-     *
-     * Tres decisiones:
-     * - **Se reutiliza el sobre `V`** en vez de inventar uno: un cliente anterior ya lo ignora
-     *   limpiamente como `Unsupported`, así que no hay nada que negociar.
-     * - **Va lanzado en el `scope`**, no en línea: el camino del buzón es síncrono (el acuse
-     *   depende de que esto vuelva), y bloquearlo con una llamada de red retrasaría la entrega.
-     * - **Un reengache por contacto cada [REHOOK_MIN_INTERVAL_MS]**: cualquiera de tus contactos
-     *   podría mandar basura a propósito, y sin tope eso nos haría emitir un mensaje por cada
-     *   una. Uno cada pocos minutos basta para el caso real y no se puede usar como altavoz.
-     */
-    private fun rehook(contact: Contact) {
-        if (!usesRatchet(contact)) {
-            if (contact.peerProtocol < RATCHET_MIN_PROTOCOL) {
-                // Nos escribe por ratchet y aquí consta que no lo habla: la versión que nos
-                // anunció la **perdimos nosotros** (borramos el contacto y lo volvimos a añadir,
-                // importamos un .krbk). Hasta el 14 sep 2026 esto se callaba, y sus mensajes se
-                // perdían para siempre (H-1 de docs/REVISION-protocolo-2026-09-14.md). Se le
-                // dice qué tenemos apuntado, por la clave estática —sin sesión es lo único que
-                // seguro abre—, y con eso nos repite su anuncio.
-                launchHello(
-                    contact, estatico = true, limiter = lastRehook,
-                    enviado = "↔ anuncio a ${short(contact.peerId)}: escribe por ratchet y constaba v${contact.peerProtocol}",
-                    fallido = "↔ anuncio a ${short(contact.peerId)} no salió; se reintenta al próximo fallo",
-                )
-            } else {
-                // Se registra el motivo: "no salió ningún reengache" tanto puede ser esto como el
-                // tope de abajo, y sin distinguirlos no hay forma de diagnosticarlo.
-                logLine("↔ sin reengache para ${short(contact.peerId)}: el envío por ratchet está apagado")
-            }
-            return
-        }
-        launchHello(
-            contact, estatico = false, limiter = lastRehook,
-            enviado = "↔ reengache enviado a ${short(contact.peerId)} (su linaje no cuadraba)",
-            fallido = "↔ reengache a ${short(contact.peerId)} no salió; se reintenta al próximo fallo",
-        )
-    }
-
     /**
      * Sonda del gate de llamadas (Fase 7a): mide el RTT al nodo bootstrap — ida y vuelta a
      * través de Cloudflare ≈ latencia one-way de un frame de audio relayed entre dos
@@ -1180,71 +729,13 @@ class ChatService @Inject constructor(
      * cual. Devuelve el mensaje con su estado final, o null si no existe.
      */
     suspend fun retry(contact: Contact, messageId: String): Message? {
-        requireNotBlocked(contact)
+        outbox.requireNotBlocked(contact)
         val message = messages.findById(messageId) ?: return null
         // Un archivo no se reintenta reenviando su fila: la fila es el descriptor local.
-        ownFileOf(contact, message)?.let { (file, replyTo) -> return resendFile(contact, message, file, replyTo) }
+        files.retry(contact, message)?.let { return it }
         messages.updateStatus(messageId, MessageStatus.PENDING)
         logLine("↻ reintentando a ${short(contact.peerId)}")
-        return transmit(contact, message.copy(status = MessageStatus.PENDING), wireBytes(contact, message))
-    }
-
-    /**
-     * Bytes listos para la red de un mensaje ya persistido. Una fila de la v8 en adelante
-     * guarda el sobre en claro y se cifra aquí; una anterior guarda ya el ciphertext de la
-     * clave estática y se reenvía tal cual, que es exactamente lo que se hacía antes.
-     */
-    private suspend fun wireBytes(contact: Contact, message: Message): ByteArray =
-        if (message.encrypted) message.payload else seal(contact, message.payload)
-
-    /** El sobre en claro de un mensaje persistido, descifrando solo si es una fila antigua. */
-    private fun envelopeOf(contact: Contact, message: Message): ByteArray =
-        if (message.encrypted) cipher.decrypt(requireNotNull(contact.sharedSecret), message.payload)
-        else message.payload
-
-    /** Transmite un mensaje ya persistido: directo → buzón (offline) → FAILED. Nunca lanza. */
-    private suspend fun transmit(contact: Contact, message: Message, ciphertext: ByteArray): Message =
-        try {
-            signaling.send(contact, ciphertext)
-            messages.updateStatus(message.id, MessageStatus.SENT)
-            logLine("→ enviado a ${short(contact.peerId)}")
-            message.copy(status = MessageStatus.SENT)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            sendViaMailbox(contact, message, ciphertext, e)
-        }
-
-    /** Fallback offline: deposita el ciphertext en el buzón del nodo → SENT, o FAILED. */
-    private suspend fun sendViaMailbox(
-        contact: Contact,
-        message: Message,
-        ciphertext: ByteArray,
-        directError: Exception,
-    ): Message = try {
-        signaling.sendOffline(contact, ciphertext, outboxLabel(contact))
-        messages.updateStatus(message.id, MessageStatus.SENT)
-        logLine("→ buzón para ${short(contact.peerId)} (offline)")
-        message.copy(status = MessageStatus.SENT)
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        messages.updateStatus(message.id, MessageStatus.FAILED)
-        logLine(
-            "✗ no enviado a ${short(contact.peerId)}: ${sendErrorReason(directError)}; " +
-                "buzón: ${sendErrorReason(e)}"
-        )
-        message.copy(status = MessageStatus.FAILED)
-    }
-
-    /** Traduce el error de libp2p a algo legible en el panel de diagnóstico. */
-    private fun sendErrorReason(e: Throwable): String {
-        val msg = e.message ?: e.toString()
-        return when {
-            "no addresses" in msg || "all dials failed" in msg || "failed to dial" in msg ->
-                "sin ruta al contacto (NAT/relay pendiente)"
-            else -> msg.take(120)
-        }
+        return outbox.transmit(contact, message.copy(status = MessageStatus.PENDING), outbox.wireBytes(contact, message))
     }
 
     /**
@@ -1299,12 +790,20 @@ class ChatService @Inject constructor(
         mailboxId: String?,
         ts: Long?,
     ): Message? {
-        val recibido = runCatching {
+        // Solo «no se pudo abrir» ([RatchetException], el único error de `Ratchet.decrypt`) cae al
+        // camino v1. Cualquier otro —Room al guardar, el staging de un trozo, leer el estado—
+        // **se propaga**: así el buzón no confirma y el nodo lo reentrega. Hasta el 12 oct 2026
+        // un `runCatching` lo tragaba todo, caía a `openLegacy` (que no abre un sobre de
+        // ratchet), devolvía null y el sobre se confirmaba y se perdía (O-1 de
+        // docs/AUDITORIA-2026-10-12.md).
+        val recibido = try {
             sessions.receive(contact, ciphertext, kdf4(contact)) { plain -> persistEnvelope(contact, plain, mailboxId, ts) }
-        }.getOrElse { return openLegacy(contact, ciphertext, mailboxId, ts, parecíaRatchet = true) }
+        } catch (e: RatchetException) {
+            return openLegacy(contact, ciphertext, mailboxId, ts, parecíaRatchet = true)
+        }
         return when (recibido) {
             is RatchetSessions.Received.Opened -> {
-                learnFromRatchet(contact, ciphertext)
+                caps.learnFromRatchet(contact, ciphertext)
                 recibido.restartedTo?.let { recordSessionRestart(contact, it) }
                 recibido.value
             }
@@ -1312,30 +811,6 @@ class ChatService @Inject constructor(
             // entregado y su clave, gastada.
             RatchetSessions.Received.Duplicate -> null
         }
-    }
-
-    /**
-     * Lo que **demuestra** un sobre de ratchet que abre: que el contacto habla al menos la v2, y
-     * si venía relleno, la v3. La cabecera ya está autenticada —es el AAD del AEAD que acaba de
-     * validar—, así que sin el secreto compartido no hay nada que fingir.
-     *
-     * Cura a quien se quedó apuntado por debajo por el hallazgo H-2 antes del arreglo (una copia
-     * vieja del contacto guardada encima de su anuncio): sin esto, esa pareja seguiría en la clave
-     * estática hasta la siguiente versión del protocolo, porque el anuncio no se repite.
-     */
-    private suspend fun learnFromRatchet(contact: Contact, wire: ByteArray) {
-        val header = Ratchet.Header.decode(wire) ?: return
-        val demostrada = when {
-            // Un sobre que abre con los bits v4 demuestra v4: van en el AAD, no se pueden fingir sin S.
-            header.nextV4 || header.epochV4 -> KDF4_MIN_PROTOCOL
-            header.padded -> PADDING_MIN_PROTOCOL
-            else -> RATCHET_MIN_PROTOCOL
-        }
-        // Releída: si el propio sobre era un anuncio, ya la ha subido dentro de la transacción.
-        val apuntada = contacts.findById(contact.id)?.peerProtocol ?: return
-        if (apuntada >= demostrada) return
-        contacts.raisePeerProtocol(contact.id, demostrada)
-        logLine("↔ ${short(contact.peerId)} escribe por ratchet: se apunta v$demostrada")
     }
 
     /** Camino v1: clave estática del contacto. */
@@ -1358,123 +833,10 @@ class ChatService @Inject constructor(
             // Si venía con cabecera de ratchet, lo más probable es que sus linajes estén
             // desincronizados y el otro esté escribiendo en uno que aquí ya no vale. Nosotros
             // sí lo sabemos: reengancharlo (ver [rehook]).
-            if (parecíaRatchet && !relayIfBehind(contact, ciphertext)) rehook(contact)
+            if (parecíaRatchet && !caps.relayIfBehind(contact, ciphertext)) caps.rehook(contact)
             return null
         }
         return persistEnvelope(contact, plain, mailboxId, ts)
-    }
-
-    /** Última vez que se le repitió el anuncio a cada contacto (ver [onHello]); acota el eco. */
-    private val lastHello = java.util.concurrent.ConcurrentHashMap<String, Long>()
-
-    /**
-     * Lo que dice un anuncio `V` del contacto, y qué hacer con ello. Tres reglas, de la revisión
-     * del protocolo del 14 sep 2026 (`docs/REVISION-protocolo-2026-09-14.md`):
-     *
-     * - **La versión apuntada solo sube** (H-3). Un anuncio con una versión menor se ignora: si
-     *   no, quien tenga el secreto compartido podría devolver la conversación a la clave
-     *   estática con un solo sobre y **leer en pasivo** todo lo que viniera después, sin romper
-     *   nada que se notara. No hay caso legítimo que lo necesite: Android no instala una versión
-     *   menor encima sin desinstalar, y desinstalar cambia la identidad.
-     * - **Si nos tiene apuntados por debajo de lo que ya le dijimos, se le repite** (H-1). Es la
-     *   señal de que lo perdió: borró el contacto y lo volvió a añadir, o importó un `.krbk`. El
-     *   anuncio sale una vez por versión, así que antes no había forma de recuperarlo: seguíamos
-     *   escribiéndole por un ratchet cuya sesión ya no tenía y **todo se perdía**. Se repite por
-     *   la **clave estática**, que es lo único que seguro puede abrir sin sesión.
-     * - **Si acabamos de saber que habla ratchet, se le escribe algo por ratchet** (H-1, segunda
-     *   mitad): quien perdió la sesión tiene que adoptar nuestro linaje nuevo **antes** de
-     *   escribirnos, o lo primero que mande irá por su sesión vieja.
-     *
-     * Las respuestas van lanzadas (el camino del buzón es síncrono) y con tope por contacto.
-     */
-    private suspend fun onHello(contact: Contact, hello: MessageEnvelope.Decoded.Hello) {
-        val antes = contact.peerProtocol
-        val ahora = maxOf(antes, hello.protocol)
-        when {
-            hello.protocol > antes -> {
-                contacts.raisePeerProtocol(contact.id, hello.protocol)
-                logLine("↔ ${short(contact.peerId)} habla protocolo v${hello.protocol}")
-            }
-            hello.protocol < antes -> logLine(
-                "↔ ${short(contact.peerId)} anuncia v${hello.protocol} y consta v$antes: se ignora (la versión no baja)",
-            )
-        }
-        val actualizado = contact.copy(peerProtocol = ahora)
-        val conocida = hello.knows
-        when {
-            conocida != null && conocida < PROTOCOL_VERSION && contact.announcedProtocol >= PROTOCOL_VERSION ->
-                launchHello(
-                    actualizado, estatico = true, limiter = lastHello,
-                    enviado = "↔ anuncio repetido a ${short(contact.peerId)} (nos tenía como v$conocida)",
-                    fallido = "↔ anuncio a ${short(contact.peerId)} no salió; se repite al próximo aviso",
-                )
-            antes < RATCHET_MIN_PROTOCOL && ahora >= RATCHET_MIN_PROTOCOL && usesRatchet(actualizado) ->
-                launchHello(
-                    actualizado, estatico = false, limiter = lastHello,
-                    enviado = "↔ primer sobre por ratchet a ${short(contact.peerId)}",
-                    fallido = "↔ primer sobre por ratchet a ${short(contact.peerId)} no salió",
-                )
-        }
-    }
-
-    /**
-     * Un invite sin mitad de clave de [contact], que consta que negocia: nos tiene apuntados como
-     * antiguos. Se le repite nuestro anuncio por la clave estática, con el mismo tope que el resto
-     * de anuncios, para que la próxima llamada negocie.
-     */
-    fun reannounceForCall(contact: Contact) = launchHello(
-        contact, estatico = true, limiter = lastHello,
-        enviado = "↔ anuncio repetido a ${short(contact.peerId)} (llamó sin negociar la clave)",
-        fallido = "↔ anuncio a ${short(contact.peerId)} no salió; se repite en la próxima llamada",
-    )
-
-    /**
-     * Envía nuestro anuncio `V` —con la versión que tenemos apuntada de [contact]— **lanzado**, y
-     * como mucho uno por contacto cada [REHOOK_MIN_INTERVAL_MS] según [limiter]: cualquiera de
-     * tus contactos podría provocarlo a propósito, y sin tope serviría de altavoz. [estatico] =
-     * por la clave estática, que el otro abre aunque haya perdido la sesión del ratchet.
-     */
-    private fun launchHello(
-        contact: Contact,
-        estatico: Boolean,
-        limiter: MutableMap<String, Long>,
-        enviado: String,
-        fallido: String,
-    ) {
-        val now = System.currentTimeMillis()
-        val last = limiter[contact.id] ?: 0L
-        if (now - last < REHOOK_MIN_INTERVAL_MS) return
-        limiter[contact.id] = now
-        scope.launch {
-            val hello = MessageEnvelope.encodeHello(PROTOCOL_VERSION, knows = contact.peerProtocol)
-            val ok = runCatching {
-                if (estatico) sendStatic(contact, hello) else sendRaw(contact, hello)
-            }.isSuccess
-            logLine(if (ok) enviado else fallido)
-            // Si no salió, que el próximo aviso pueda volver a intentarlo en vez de esperar.
-            if (!ok) limiter.remove(contact.id)
-        }
-    }
-
-    /**
-     * Como [sendRaw] pero **siempre con la clave estática**, hable o no ratchet el contacto.
-     * Solo para anuncios de capacidad dirigidos a quien puede haber perdido la sesión, porque es
-     * lo único que seguro puede abrir; nunca lleva contenido del usuario.
-     */
-    private suspend fun sendStatic(contact: Contact, envelope: ByteArray) {
-        requireNotBlocked(contact)
-        deliver(contact, cipher.encrypt(requireNotNull(contact.sharedSecret), envelope))
-    }
-
-    /** Directo y, si no hay ruta, al buzón; si también falla, propaga. */
-    private suspend fun deliver(contact: Contact, ciphertext: ByteArray) {
-        try {
-            signaling.send(contact, ciphertext)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            signaling.sendOffline(contact, ciphertext, outboxLabel(contact))
-        }
     }
 
     /**
@@ -1496,12 +858,12 @@ class ChatService @Inject constructor(
 
         when (decoded) {
             is MessageEnvelope.Decoded.Read -> {
-                markOutgoingRead(contact.id, decoded.ids)
+                receipts.markOutgoingRead(contact.id, decoded.ids)
                 return null
             }
             is MessageEnvelope.Decoded.Hello -> {
                 // Nos dice qué versión habla y qué tiene apuntado de nosotros. No crea burbuja.
-                onHello(contact, decoded)
+                caps.onHello(contact, decoded)
                 return null
             }
             is MessageEnvelope.Decoded.FileMeta -> {
@@ -1540,15 +902,15 @@ class ChatService @Inject constructor(
             else -> null
         } ?: mailboxId ?: UUID.randomUUID().toString()
         // El id lo elige el emisor y es la clave primaria (Room guarda con REPLACE), así que
-        // antes de escribir hay que descartar dos colisiones:
+        // un id que ya existe **no se reescribe nunca**. Cubre tres casos:
         //  - el eco de un mensaje propio (un contacto que apunta a tu propio PeerID): no
         //    sobrescribas tu copia saliente con la versión entrante;
         //  - un id que ya pertenece a OTRA conversación: nadie debe poder pisar, ni por error
-        //    ni a propósito, el mensaje de un tercero (auditoría A-9).
-        val existing = messages.findById(msgId)
-        if (existing != null && (existing.senderId == SELF || existing.conversationId != contact.id)) {
-            return null
-        }
+        //    ni a propósito, el mensaje de un tercero (auditoría A-9);
+        //  - el **mismo** mensaje otra vez: con el acuse de la entrega directa (O-7), uno que
+        //    se guardó pero cuyo acuse se perdió vuelve por el buzón. Ya está; reescribirlo lo
+        //    volvía a marcar como no leído y volvía a sonar.
+        if (messages.findById(msgId) != null) return null
         val message = Message(
             id = msgId,
             conversationId = contact.id,
@@ -1592,114 +954,6 @@ class ChatService @Inject constructor(
         return message
     }
 
-    /**
-     * Marca como READ nuestros mensajes salientes **de esa conversación** cuyo id venga en el
-     * acuse. Exigir la conversación importa porque los ids del acuse los elige quien lo
-     * envía: sin esa condición, un contacto podría marcar como leídos mensajes dirigidos a
-     * otro (auditoría A-9).
-     */
-    private suspend fun markOutgoingRead(conversationId: String, ids: List<String>) {
-        for (id in ids) {
-            val m = messages.findById(id)
-            if (m != null && m.senderId == SELF && m.conversationId == conversationId &&
-                m.status != MessageStatus.READ
-            ) {
-                messages.updateStatus(id, MessageStatus.READ)
-            }
-        }
-    }
-
-    /**
-     * Ids ya acusados, para no reenviar el mismo acuse cada vez que se abre el chat. Es una
-     * caché **acotada** (LRU): antes crecía sin techo mientras viviera el proceso. Perderla
-     * (al morir el proceso, o al desalojar una entrada) solo provoca un acuse repetido, que
-     * es inocuo: [markOutgoingRead] ignora el que ya está en READ.
-     */
-    private val ackedReceipts = object : LinkedHashMap<String, Unit>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Unit>?) =
-            size > MAX_ACKED_RECEIPTS
-    }
-
-    /**
-     * Envía un **acuse de lectura** de los mensajes recibidos de [contact] que aún no se han
-     * acusado (best-effort: directo, y si falla, buzón). Se llama al abrir/ver la conversación;
-     * el emisor pondrá esos mensajes en READ. No persiste nada ni crea burbujas.
-     */
-    suspend fun markConversationRead(contact: Contact) {
-        // Vista local: limpia el badge de no leídos aunque el acuse de red falle.
-        runCatching { messages.markIncomingRead(contact.id) }
-        // A un bloqueado no se le acusa nada: el historial se puede seguir leyendo aquí, pero
-        // él no debe recibir ninguna señal (ni siquiera un ✓✓) de este dispositivo.
-        if (contact.blocked) return
-        val secret = contact.sharedSecret ?: return
-        val received = runCatching { messages.observeConversation(contact.id).first() }
-            .getOrDefault(emptyList())
-            .filter { it.senderId == contact.id }
-            .map { it.id }
-        val newIds = received.filter { it !in ackedReceipts.keys }
-        if (newIds.isEmpty()) return
-        val ciphertext = seal(contact, MessageEnvelope.encodeRead(newIds))
-        val ok = runCatching { signaling.send(contact, ciphertext); true }.getOrDefault(false) ||
-            runCatching { signaling.sendOffline(contact, ciphertext, outboxLabel(contact)); true }.getOrDefault(false)
-        if (ok) newIds.forEach { ackedReceipts[it] = Unit }
-    }
-
-    fun observeContacts(): Flow<List<Contact>> = contacts.observeAll()
-
-    /** PeerID de este dispositivo (para compartir con quien te quiera añadir). */
-    fun myPeerId(): String = keyExchange.localPeerId()
-
-    /** Contacto guardado con ese PeerID, si lo hay (el PeerID es la clave primaria). */
-    suspend fun findContact(peerId: String): Contact? = contacts.findById(peerId)
-
-    /**
-     * Da de alta (o actualiza) un contacto. El secreto compartido se calcula por ECDH
-     * (X25519) a partir de nuestra identidad y la clave pública embebida en su PeerID, así
-     * que basta con el PeerID — sin passphrase ni claves que pegar. Si el PeerID cambia
-     * respecto a uno ya guardado, la verificación previa deja de valer (se resetea).
-     *
-     * Añadirse a **uno mismo** se rechaza: el PeerID propio y el del contacto se copian y
-     * pegan por el mismo canal, así que pegar el propio por error es fácil — y el resultado
-     * era una conversación con uno mismo indistinguible de un contacto real (pasó en vivo el
-     * 23 jul 2026: un contacto nuevo heredó el chat del auto-envío de pruebas porque el
-     * PeerID pegado era el del propio teléfono, y los mensajes nunca llegaban a nadie).
-     */
-    suspend fun addContact(displayName: String, peerId: String): Contact {
-        require(peerId != keyExchange.localPeerId()) {
-            "Ese es tu propio PeerID: pide a tu contacto el suyo"
-        }
-        val existing = contacts.findById(peerId)
-        val contact = Contact(
-            id = peerId, // 1:1: el PeerID identifica la conversación
-            displayName = displayName,
-            peerId = peerId,
-            publicKey = ByteArray(0),
-            sharedSecret = keyExchange.sharedSecretWith(peerId),
-            verified = existing?.verified ?: false,
-            // Volver a dar de alta un PeerID que ya estaba (renombrar) no es empezar de cero: ni
-            // desbloquea a quien se bloqueó (H-6) ni olvida qué versión anunció o qué se le
-            // anunció (H-2, docs/REVISION-protocolo-2026-09-14.md). Solo borrar el contacto lo hace.
-            blocked = existing?.blocked ?: false,
-            peerProtocol = existing?.peerProtocol ?: 0,
-            announcedProtocol = existing?.announcedProtocol ?: 0,
-        )
-        contacts.upsert(contact)
-        // Para que pueda marcarnos ya, sin esperar al próximo ciclo WAN.
-        refreshAllowedPeers()
-        // Y para anunciarnos cuanto antes: si es alguien a quien borramos y volvemos a añadir, lo
-        // que nos escriba se pierde hasta que ese anuncio salga y nos conteste (H-1).
-        kickWan()
-        return contact
-    }
-
-    /**
-     * Número de seguridad anti-MITM con [contact] (estilo Signal): hash simétrico de ambos
-     * PeerIDs. Los dos contactos deben ver el mismo; cotejarlo fuera de banda descarta que
-     * alguien haya sustituido un PeerID en el canal por el que se compartió. Ver [SafetyNumber].
-     */
-    fun safetyNumber(contact: Contact): String =
-        SafetyNumber.compute(keyExchange.localPeerId(), contact.peerId)
-
     /** Qué protección lleva hoy lo que se le envía a un contacto. */
     enum class Protection {
         /** Clave estática (v1): la versión del contacto aún no consta. */
@@ -1722,71 +976,20 @@ class ChatService @Inject constructor(
         else -> Protection.STATIC
     }
 
-    /** Marca (o desmarca) [contact] como verificado tras cotejar el número de seguridad. */
-    suspend fun setVerified(contact: Contact, verified: Boolean) {
-        contacts.upsert(contact.copy(verified = verified))
-    }
-
-    /**
-     * Bloquea (o desbloquea) a [contact]. Todo local y sin cambio de protocolo: se deja de
-     * anunciar su rendezvous ([announceAndFind]), lo que llegue de él se descarta sin
-     * persistir ni avisar ([onReceived]) y no se le envía nada ([requireNotBlocked]). El
-     * bloqueado **no recibe ninguna señal**: sus mensajes le quedan como enviados, igual que
-     * si este dispositivo estuviera apagado. El chat y el contacto se conservan — para
-     * borrarlos están [clearConversation] y [deleteContact].
-     */
-    suspend fun setBlocked(contact: Contact, blocked: Boolean) {
-        contacts.upsert(contact.copy(blocked = blocked))
-        // Un bloqueado sale de la lista en el acto: deja de poder abrirnos conexión.
-        refreshAllowedPeers()
-        if (blocked) {
-            // Sin rendezvous ya no se le va a ver: que el punto verde no se quede pegado.
-            lastFound.remove(contact.peerId)
-            _onlinePeers.update { it - contact.peerId }
-        }
-        val what = if (blocked) "🚫 contacto bloqueado" else "contacto desbloqueado"
-        logLine("$what: ${short(contact.peerId)}")
-    }
-
-    /**
-     * Vacía el chat de [contact] **solo en este dispositivo**: borra sus mensajes de Room y
-     * los archivos locales asociados (adjuntos recibidos, copias de notas de voz enviadas).
-     * El contacto se conserva. Sin cambio de protocolo: al otro lado no le afecta.
-     */
-    suspend fun clearConversation(contact: Contact) {
-        val all = runCatching { messages.observeConversation(contact.id).first() }
-            .getOrDefault(emptyList())
-        for (m in all) {
-            val c = runCatching { content(contact, m) }.getOrNull()
-            if (c is MessageContent.File) {
-                runCatching { fileStore.deleteLocal(m.id, c.localPath) }
-            }
-        }
-        messages.deleteConversation(contact.id)
-        logLine("🗑 chat vaciado (${all.size} mensaje(s)) de ${short(contact.peerId)}")
-    }
-
-    /**
-     * Elimina [contact] y todo su chat (mensajes + archivos) de este dispositivo. El bucle
-     * WAN relee los contactos de Room en cada ciclo ([announceAndFind]), así que el
-     * rendezvous del contacto cesa solo, sin reiniciar el host. Re-añadirlo por PeerID
-     * vuelve a derivar el mismo secreto (la verificación habrá que repetirla).
-     */
-    suspend fun deleteContact(contact: Contact) {
-        clearConversation(contact)
-        // La sesión del ratchet se va con el contacto: volver a añadirlo arranca un linaje
-        // nuevo, y quedársela sería guardar material de una conversación que ya no existe.
-        // Vaciar el chat, en cambio, NO la toca: vaciar no es romper la sesión.
-        runCatching { sessions.forget(contact) }
-        contacts.delete(contact.id)
-        refreshAllowedPeers()
-        lastFound.remove(contact.peerId)
-        _onlinePeers.update { it - contact.peerId }
-        logLine("🗑 contacto eliminado: ${short(contact.peerId)}")
-    }
-
     fun observeConversation(conversationId: String): Flow<List<Message>> =
         messages.observeConversation(conversationId)
+
+    /** Los [limit] más recientes de la conversación: la ventana que pinta el chat (O-9). */
+    fun observeRecent(conversationId: String, limit: Int): Flow<List<Message>> =
+        messages.observeRecent(conversationId, limit)
+
+    /** Tamaño de ventana que incluye el mensaje [id] (0 si no es de esa conversación). */
+    suspend fun windowToInclude(conversationId: String, id: String): Int =
+        messages.countSince(conversationId, id)
+
+    /** Un mensaje de [conversationId] por id, o null (citas fuera de la ventana cargada). */
+    suspend fun findMessage(conversationId: String, id: String): Message? =
+        messages.findById(id)?.takeIf { it.conversationId == conversationId }
 
     /** Último mensaje por conversación (lista de conversaciones). */
     fun observeLastMessages(): Flow<List<Message>> = messages.observeLastMessages()
@@ -1800,7 +1003,7 @@ class ChatService @Inject constructor(
      * (legado), devuelve el texto descifrado tal cual. Para imágenes usa [content].
      */
     fun decrypt(contact: Contact, message: Message): ByteArray {
-        val plain = envelopeOf(contact, message)
+        val plain = outbox.envelopeOf(contact, message)
         val decoded = MessageEnvelope.decode(plain)
         return when (val d = (decoded as? MessageEnvelope.Decoded.Reply)?.inner ?: decoded) {
             is MessageEnvelope.Decoded.Text -> d.body
@@ -1822,7 +1025,7 @@ class ChatService @Inject constructor(
      * una sola vez: la UI necesita las dos cosas por mensaje al pintar la conversación.
      */
     fun decodeMessage(contact: Contact, message: Message): DecodedMessage {
-        val plain = envelopeOf(contact, message)
+        val plain = outbox.envelopeOf(contact, message)
         val decoded = MessageEnvelope.decode(plain)
         val replyTo = (decoded as? MessageEnvelope.Decoded.Reply)?.replyTo
         val content = when (val d = (decoded as? MessageEnvelope.Decoded.Reply)?.inner ?: decoded) {
@@ -1857,6 +1060,60 @@ class ChatService @Inject constructor(
             null -> "Mensaje nuevo"
         }
 
+    // --- Delegados: la API de siempre, ahora en sus piezas -----------------------------------
+
+    /**
+     * Adelanta el próximo ciclo del bucle WAN (reconexión + rendezvous + buzón) sin esperar
+     * los 30 s — p. ej. cuando el sistema notifica un cambio de red (WiFi↔datos). No-op si
+     * la WAN está desactivada.
+     */
+    fun kickWan() = wan.kick()
+
+    /** Ver [CapabilityNegotiator.announceCapabilities]. Interno para los tests del módulo. */
+    internal suspend fun announceCapabilities() = caps.announceCapabilities()
+
+    /** Ver [CapabilityNegotiator.reannounceForCall]. */
+    fun reannounceForCall(contact: Contact) = caps.reannounceForCall(contact)
+
+    /** Envía un archivo troceado. Ver [FileTransfer.sendFile]. */
+    suspend fun sendFile(
+        contact: Contact,
+        name: String,
+        mime: String,
+        bytes: ByteArray,
+        localPath: String? = null,
+        replyTo: String? = null,
+    ): Message = files.sendFile(contact, name, mime, bytes, localPath, replyTo)
+
+    /** Acusa la lectura de lo que estaba sin leer. Ver [ReadReceipts.markConversationRead]. */
+    suspend fun markConversationRead(contact: Contact) = receipts.markConversationRead(contact)
+
+    fun observeContacts(): Flow<List<Contact>> = contactOps.observeContacts()
+
+    /** PeerID de este dispositivo (para compartir con quien te quiera añadir). */
+    fun myPeerId(): String = contactOps.myPeerId()
+
+    /** Contacto guardado con ese PeerID, si lo hay (el PeerID es la clave primaria). */
+    suspend fun findContact(peerId: String): Contact? = contactOps.findContact(peerId)
+
+    /** Ver [ContactService.addContact]. */
+    suspend fun addContact(displayName: String, peerId: String): Contact = contactOps.addContact(displayName, peerId)
+
+    /** Número de seguridad anti-MITM con [contact]. Ver [ContactService.safetyNumber]. */
+    fun safetyNumber(contact: Contact): String = contactOps.safetyNumber(contact)
+
+    /** Marca (o desmarca) [contact] como verificado. */
+    suspend fun setVerified(contact: Contact, verified: Boolean) = contactOps.setVerified(contact, verified)
+
+    /** Bloquea (o desbloquea) a [contact]. Ver [ContactService.setBlocked]. */
+    suspend fun setBlocked(contact: Contact, blocked: Boolean) = contactOps.setBlocked(contact, blocked)
+
+    /** Vacía el chat de [contact] solo en este dispositivo. Ver [ContactService.clearConversation]. */
+    suspend fun clearConversation(contact: Contact) = contactOps.clearConversation(contact)
+
+    /** Elimina [contact] y todo su chat. Ver [ContactService.deleteContact]. */
+    suspend fun deleteContact(contact: Contact) = contactOps.deleteContact(contact)
+
     // `internal` (no `private`): los tests del módulo fijan la versión de protocolo que se
     // anuncia, y una constante de protocolo que nadie comprueba se desincroniza sola.
     internal companion object {
@@ -1866,11 +1123,6 @@ class ChatService @Inject constructor(
         // Texto de la fila local de llamada perdida (no viaja por la red).
         const val MISSED_CALL_TEXT = "📞 Llamada perdida"
 
-        /**
-         * Id de la fila de llamada perdida de `(contacto, callId)`: el mismo cada vez, y dentro de
-         * un hash con el contacto para que un `callId` elegido por el otro no pueda coincidir con
-         * el id de ningún otro mensaje, de esta conversación o de otra.
-         */
         /**
          * Líneas del Diagnóstico que se guardan (en memoria, se pierden al cerrar la app). Eran 30, y
          * un archivo por trozos o una tanda del buzón las desplazaba en segundos (12 oct 2026).
@@ -1888,6 +1140,11 @@ class ChatService @Inject constructor(
                 .digest("krypta-session-restart-v1\u0000$contactId\u0000$lineage".toByteArray(Charsets.UTF_8))
                 .joinToString("") { "%02x".format(it) }
 
+        /**
+         * Id de la fila de llamada perdida de `(contacto, callId)`: el mismo cada vez, y dentro de
+         * un hash con el contacto para que un `callId` elegido por el otro no pueda coincidir con
+         * el id de ningún otro mensaje, de esta conversación o de otra.
+         */
         fun missedCallId(contactId: String, callId: String): String =
             MessageDigest.getInstance("SHA-256")
                 .digest("krypta-missed-call-v1\u0000$contactId\u0000$callId".toByteArray(Charsets.UTF_8))
@@ -1910,16 +1167,20 @@ class ChatService @Inject constructor(
         const val RENDEZVOUS_BUDGET_MS = 45_000L
         const val RETRY_BUDGET_MS = 30_000L
         const val CYCLE_BUDGET_MS = 150_000L
+
+        // Latido (O-5): la suma cabe en [POLL_BUDGET_MS], y ese en el wake lock del receptor
+        // (`HeartbeatReceiver.WAKELOCK_MS`) y en el plazo de un broadcast en segundo plano.
+        const val POLL_START_BUDGET_MS = 10_000L
+        const val POLL_CONNECT_BUDGET_MS = 15_000L
+        const val POLL_MAILBOX_BUDGET_MS = 20_000L
+        const val POLL_BUDGET_MS = 45_000L
         // Reintentos de FALLIDOS por ciclo: suficiente para vaciar una racha corta sin
         // convertir el ciclo en una tormenta de envíos tras una caída larga.
         const val MAX_RETRIES_PER_CYCLE = 10
-        // Tope de la caché de acuses ya enviados (ver ackedReceipts).
-        const val MAX_ACKED_RECEIPTS = 500
-        /**
-         * Interruptor del **depósito ciego** (ver [outboxLabel]). Se enciende cuando la versión
-         * que sabe recibir por etiquetas esté repartida entre los contactos; hasta entonces,
-         * depositar a ciegas sería depositar donde el otro no mira.
-         */
+        /** Ids por acuse: ~3,7 KB, dentro del tramo de 4 KiB del relleno (O-2). */
+        const val RECEIPT_BATCH = 100
+        /** Acuses pendientes de reintento por contacto, como mucho. */
+        const val MAX_PENDING_RECEIPTS = 1000
         /**
          * Versión de protocolo que habla este cliente y que se anuncia a cada contacto (sobre
          * `V`). La 1 es implícita: no la anuncia nadie, es "lo que había antes".

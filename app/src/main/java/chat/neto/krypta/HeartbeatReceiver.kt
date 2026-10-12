@@ -54,7 +54,9 @@ class HeartbeatReceiver : BroadcastReceiver() {
         private const val INTERVAL_MS = 2 * 60 * 1000L
         // Margen para que el sistema termine de desmontar el proceso antes de relanzarlo.
         private const val RESTART_DELAY_MS = 3_000L
-        private const val WAKELOCK_MS = 25_000L
+        // Cubre todo `ChatService.pollOnce` (`POLL_BUDGET_MS`, 45 s) con margen. Era de 25 s con
+        // un latido que podía tardar 105 s: la CPU podía dormirse a mitad de la retirada (O-5).
+        private const val WAKELOCK_MS = 55_000L
 
         private fun pendingIntent(context: Context): PendingIntent =
             PendingIntent.getBroadcast(

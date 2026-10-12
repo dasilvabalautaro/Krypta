@@ -35,6 +35,8 @@ object KryptaNotifications {
     const val CHANNEL_CALLS = "krypta_calls_v1"
     const val ONGOING_ID = 1
     const val CALL_ID = 2
+    /** El aviso único del modo [NotificationContent.NOTHING], común a todos los contactos. */
+    const val ANONYMOUS_ID = 3
 
     /** Extra del Intent de MainActivity: id del contacto cuya conversación abrir. */
     const val EXTRA_OPEN_CONTACT = "krypta.open_contact"
@@ -45,6 +47,9 @@ object KryptaNotifications {
      * la notificación. El texto plano no se persiste en ningún sitio.
      */
     private val recent = mutableMapOf<String, MutableList<Pair<Long, String>>>()
+
+    /** Mensajes sin abrir por contacto, sin tope (el hilo de arriba solo guarda [MAX_LINES]). */
+    private val unseen = mutableMapOf<String, Int>()
 
     private const val MAX_LINES = 6
 
@@ -101,6 +106,13 @@ object KryptaNotifications {
      * varios mensajes sin leer se ven las últimas [MAX_LINES] líneas y el conteo, y **cada
      * mensaje nuevo vuelve a sonar** (sin `setOnlyAlertOnce`), que es el comportamiento
      * esperado en una mensajería.
+     *
+     * [content] decide cuánto se enseña (ver [NotificationPrivacy]): con
+     * [NotificationContent.NAME_ONLY] el texto no sale de la app —solo el nombre y cuántos—, y con
+     * [NotificationContent.NOTHING] tampoco el nombre: un único aviso de Krypta para todos, que no
+     * deja contar contactos por el número de notificaciones. Y en cualquier modo la **versión
+     * pública** —la que se ve en la pantalla de bloqueo si el sistema oculta lo sensible— no lleva
+     * ni nombre ni texto (O-4 de docs/AUDITORIA-2026-10-12.md).
      */
     fun notifyMessage(
         context: Context,
@@ -108,38 +120,77 @@ object KryptaNotifications {
         contactName: String,
         text: String,
         timestamp: Long = System.currentTimeMillis(),
+        content: NotificationContent = NotificationContent.NAME_AND_MESSAGE,
     ) {
-        val lines = synchronized(recent) {
+        val (lines, ofContact, total) = synchronized(recent) {
             val list = recent.getOrPut(contactId) { mutableListOf() }
-            list.add(timestamp to text)
+            // El texto solo se guarda si se va a enseñar: en los otros modos basta con contar.
+            list.add(timestamp to if (content == NotificationContent.NAME_AND_MESSAGE) text else "")
             while (list.size > MAX_LINES) list.removeAt(0)
-            list.toList()
+            unseen[contactId] = (unseen[contactId] ?: 0) + 1
+            Triple(list.toList(), unseen.getValue(contactId), unseen.values.sum())
         }
-        val sender = Person.Builder().setName(contactName).setImportant(true).build()
-        val style = Notification.MessagingStyle(Person.Builder().setName("Tú").build())
-            .setConversationTitle(contactName)
-        for ((ts, line) in lines) style.addMessage(line, ts, sender)
-
-        val notification = Notification.Builder(context, CHANNEL_MESSAGES)
+        val builder = Notification.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_stat_krypta)
-            .setStyle(style)
-            .setContentTitle(contactName)
-            .setContentText(text)
             .setWhen(timestamp)
             .setShowWhen(true)
-            .setNumber(lines.size)
-            .setContentIntent(openAppIntent(context, contactId, requestCode = contactId.hashCode()))
             .setCategory(Notification.CATEGORY_MESSAGE)
             .setAutoCancel(true)
-            .build()
-        context.getSystemService(NotificationManager::class.java)
-            .notify(contactId.hashCode(), notification)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicMessageVersion(context, timestamp))
+        val id = when (content) {
+            NotificationContent.NAME_AND_MESSAGE -> {
+                val sender = Person.Builder().setName(contactName).setImportant(true).build()
+                val style = Notification.MessagingStyle(Person.Builder().setName("Tú").build())
+                    .setConversationTitle(contactName)
+                for ((ts, line) in lines) style.addMessage(line, ts, sender)
+                builder.setStyle(style)
+                    .setContentTitle(contactName)
+                    .setContentText(text)
+                    .setNumber(lines.size)
+                    .setContentIntent(openAppIntent(context, contactId, requestCode = contactId.hashCode()))
+                contactId.hashCode()
+            }
+            NotificationContent.NAME_ONLY -> {
+                builder.setContentTitle(contactName)
+                    .setContentText(countText(ofContact))
+                    .setNumber(ofContact)
+                    .setContentIntent(openAppIntent(context, contactId, requestCode = contactId.hashCode()))
+                contactId.hashCode()
+            }
+            NotificationContent.NOTHING -> {
+                builder.setContentTitle(context.getString(R.string.app_name))
+                    .setContentText(countText(total))
+                    .setNumber(total)
+                    .setContentIntent(openAppIntent(context, contactId = null, requestCode = ANONYMOUS_ID))
+                ANONYMOUS_ID
+            }
+        }
+        context.getSystemService(NotificationManager::class.java).notify(id, builder.build())
     }
+
+    /** Lo que se ve en la pantalla de bloqueo cuando el sistema oculta lo sensible: nada tuyo. */
+    private fun publicMessageVersion(context: Context, timestamp: Long): Notification =
+        Notification.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(R.drawable.ic_stat_krypta)
+            .setContentTitle(context.getString(R.string.app_name))
+            .setContentText("Mensaje nuevo")
+            .setWhen(timestamp)
+            .build()
+
+    internal fun countText(n: Int): String = if (n <= 1) "Mensaje nuevo" else "$n mensajes nuevos"
 
     /** Cancela la notificación de [contactId] (al abrir su chat) y olvida su hilo. */
     fun cancel(context: Context, contactId: String) {
-        synchronized(recent) { recent.remove(contactId) }
-        context.getSystemService(NotificationManager::class.java).cancel(contactId.hashCode())
+        val quedan = synchronized(recent) {
+            recent.remove(contactId)
+            unseen.remove(contactId)
+            unseen.isNotEmpty()
+        }
+        val nm = context.getSystemService(NotificationManager::class.java)
+        nm.cancel(contactId.hashCode())
+        // El aviso anónimo es de todos: solo se retira cuando ya no queda nada que contar.
+        if (!quedan) nm.cancel(ANONYMOUS_ID)
     }
 
     /**
@@ -157,7 +208,10 @@ object KryptaNotifications {
      * icono. Por eso la segunda pasada relee las activas y barre lo que quede en el canal.
      */
     fun cancelAllMessages(context: Context) {
-        synchronized(recent) { recent.clear() }
+        synchronized(recent) {
+            recent.clear()
+            unseen.clear()
+        }
         val nm = context.getSystemService(NotificationManager::class.java)
         runCatching {
             val onMessagesChannel = { sbn: android.service.notification.StatusBarNotification ->
@@ -178,21 +232,27 @@ object KryptaNotifications {
      * (era el caso) una llamada con la pantalla apagada o bloqueada solo dejaba un aviso
      * discreto en la bandeja en vez de tomar la pantalla como cualquier teléfono.
      */
-    fun notifyIncomingCall(context: Context, contactName: String) {
+    fun notifyIncomingCall(
+        context: Context,
+        contactName: String,
+        content: NotificationContent = NotificationContent.NAME_AND_MESSAGE,
+    ) {
+        // Una llamada no tiene texto que ocultar, pero el nombre sí: con "nada" no se dice quién.
+        val shownName = if (content == NotificationContent.NOTHING) context.getString(R.string.app_name) else contactName
         val fullScreen = openAppIntent(context, contactId = null, requestCode = CALL_ID)
         val answer = CallActionReceiver.pendingIntent(context, CallActionReceiver.ACTION_ANSWER)
         val decline = CallActionReceiver.pendingIntent(context, CallActionReceiver.ACTION_DECLINE)
         val builder = Notification.Builder(context, CHANNEL_CALLS)
             .setSmallIcon(R.drawable.ic_stat_krypta)
             .setContentTitle("📞 Llamada entrante")
-            .setContentText(contactName)
+            .setContentText(shownName)
             .setContentIntent(fullScreen)
             .setFullScreenIntent(fullScreen, true)
             .setCategory(Notification.CATEGORY_CALL)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOngoing(true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val caller = Person.Builder().setName(contactName).setImportant(true).build()
+            val caller = Person.Builder().setName(shownName).setImportant(true).build()
             builder.setStyle(Notification.CallStyle.forIncomingCall(caller, decline, answer))
         } else {
             val icon = android.graphics.drawable.Icon.createWithResource(context, R.drawable.ic_stat_krypta)

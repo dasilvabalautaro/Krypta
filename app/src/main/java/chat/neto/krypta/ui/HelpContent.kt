@@ -140,7 +140,18 @@ object HelpContent {
             answer = "Muchos móviles “congelan” las apps para ahorrar batería y eso corta la " +
                 "recepción. Ve a Ajustes → Recepción en segundo plano, pulsa “Ajustes del " +
                 "sistema” y permite a Krypta: batería sin restricciones, inicio automático y " +
-                "notificaciones. Con eso los avisos llegan aunque no tengas la app abierta.",
+                "notificaciones. Con eso los avisos llegan aunque no tengas la app abierta. " +
+                "En algunos modelos el sistema congela la app igualmente y los mensajes " +
+                "aparecen al abrirla: no se pierden, el nodo los guarda hasta 7 días.",
+        ),
+        HelpItem(
+            category = "Privacidad y seguridad",
+            question = "¿Se ve el texto de mis mensajes en los avisos?",
+            answer = "Por defecto, sí: el aviso muestra quién escribe y el mensaje, y ese texto " +
+                "sale de Krypta (se ve en la pantalla de bloqueo y lo pueden leer las apps con " +
+                "acceso a notificaciones, como un reloj). En Ajustes → Contenido de los avisos " +
+                "puedes elegir “Solo nombre” o “Nada”. Con el bloqueo de la app activado, el " +
+                "texto no se muestra nunca.",
         ),
         HelpItem(
             category = "Privacidad y seguridad",

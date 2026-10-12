@@ -152,4 +152,41 @@ class ContactUpsertSqlTest {
         guardar(peerProtocol = 0)
         assertEquals(0, fila().peerProtocol)
     }
+
+    // --- Escrituras de un solo campo (O-3 de docs/AUDITORIA-2026-10-12.md) ------------------
+
+    /** Verificar, bloquear y apuntar el anuncio tocan **solo** su columna. */
+    @Test
+    fun `verificar bloquear y apuntar el anuncio solo tocan su columna`() {
+        guardar(peerProtocol = 3, nombre = "Bob", verified = false, blocked = false, announced = 2)
+
+        ejecutar(ContactDao.SET_VERIFIED_SQL, mapOf("id" to id, "verified" to 1))
+        ejecutar(ContactDao.SET_BLOCKED_SQL, mapOf("id" to id, "blocked" to 1))
+        ejecutar(ContactDao.MARK_ANNOUNCED_SQL, mapOf("id" to id, "protocol" to 4))
+
+        val f = fila()
+        assertEquals(1, f.verified)
+        assertEquals(1, f.blocked)
+        assertEquals(4, f.announced)
+        assertEquals("Bob", f.nombre)
+        assertEquals(3, f.peerProtocol)
+        assertArrayEquals(byteArrayOf(1, 2, 3), f.publicKey)
+    }
+
+    /** Como `peerProtocol`, lo que ya anunciamos no baja. */
+    @Test
+    fun `apuntar un anuncio menor no baja el apuntado`() {
+        guardar(peerProtocol = 0, announced = 4)
+        ejecutar(ContactDao.MARK_ANNOUNCED_SQL, mapOf("id" to id, "protocol" to 2))
+        assertEquals(4, fila().announced)
+    }
+
+    /** Sobre un contacto que no existe no crean nada: son UPDATE, no altas. */
+    @Test
+    fun `las escrituras de un campo no crean contactos`() {
+        ejecutar(ContactDao.SET_VERIFIED_SQL, mapOf("id" to "12D3KooWNadie", "verified" to 1))
+        ejecutar(ContactDao.SET_BLOCKED_SQL, mapOf("id" to "12D3KooWNadie", "blocked" to 1))
+        ejecutar(ContactDao.MARK_ANNOUNCED_SQL, mapOf("id" to "12D3KooWNadie", "protocol" to 4))
+        assertEquals(0, filas())
+    }
 }

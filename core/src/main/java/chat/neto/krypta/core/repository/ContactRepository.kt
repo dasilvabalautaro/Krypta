@@ -40,4 +40,20 @@ interface ContactRepository {
         val current = findById(id) ?: return
         if (protocol > current.peerProtocol) upsert(current.copy(peerProtocol = protocol))
     }
+
+    // Escrituras de **un solo campo** (O-3 de docs/AUDITORIA-2026-10-12.md). [upsert] reescribe
+    // la fila entera tal como venga la copia, y una copia leída antes de un cambio lo deshacía:
+    // el anuncio de capacidades del ciclo WAN guardaba su instantánea después de enviar, y si en
+    // esos segundos el usuario verificaba o bloqueaba al contacto, la verificación o el bloqueo
+    // se perdían sin aviso. Cada operación toca ahora solo lo suyo. Sin cuerpo por defecto a
+    // propósito: un "leer y reescribir" aquí reintroduciría la misma ventana.
+
+    /** Marca (o desmarca) el contacto como verificado. No toca nada más. */
+    suspend fun setVerified(id: String, verified: Boolean)
+
+    /** Bloquea (o desbloquea) el contacto. No toca nada más. */
+    suspend fun setBlocked(id: String, blocked: Boolean)
+
+    /** Apunta que ya le anunciamos [protocol]; como `peerProtocol`, nunca baja. */
+    suspend fun markAnnounced(id: String, protocol: Int)
 }

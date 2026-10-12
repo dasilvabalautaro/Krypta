@@ -5,7 +5,12 @@ nodo además de la presencia (el conjunto entero de etiquetas del suscriptor, at
 que es la correlación en vivo del §6.1 en un solo paso. No cambia ningún mecanismo: es algo que
 el depósito ciego nunca ocultó y que no estaba escrito.
 
-**Última actualización:** 14 de septiembre de 2026 — **revisión del protocolo**. Se arreglaron dos
+**Última actualización:** 12 de octubre de 2026 — **auditoría interna de arquitectura y código**
+([AUDITORIA-2026-10-12.md](AUDITORIA-2026-10-12.md)): la entrega directa pasa a tener acuse y el
+buzón deja de confirmar lo que el ratchet no pudo guardar (§1), y se documenta que los avisos sacan
+texto de la app, con el ajuste que lo limita (§7).
+
+**Anterior:** 14 de septiembre de 2026 — **revisión del protocolo**. Se arreglaron dos
 fallos de implementación del ratchet (H-0: clave y nonce repetidos con operaciones simultáneas;
 H-1: mensajes perdidos para siempre tras volver a añadir un contacto) y se declararon dos límites de
 diseño frente a quien roba una identidad y actúa (§9, puntos 11 y 12;
@@ -45,6 +50,15 @@ libp2p, incluido el salto al relay) y la de aplicación (AES-GCM extremo a extre
 la termina el nodo de infraestructura cuando actúa de relay o de buzón; **la segunda no la
 termina nadie más que los dos móviles**. Todo lo que sigue trata de qué pasa cuando alguien
 ataca cada una de esas capas o lo que las rodea.
+
+**Entrega** (12 oct 2026, O-1 y O-7 de [AUDITORIA-2026-10-12.md](AUDITORIA-2026-10-12.md)): por las
+dos vías, el móvil que recibe **guarda antes de confirmar**. Por el buzón, solo confirma (y el nodo
+solo borra) lo que guardó, también cuando el fallo ocurre dentro de la transacción del ratchet. Por
+la vía directa (`/krypta/msg/1.1.0`) contesta un byte de acuse tras guardar, y sin ese acuse el
+emisor lo deja en el buzón. Hasta esa fecha la vía directa daba por enviado lo que solo se había
+escrito en el stream: si el receptor no llegaba a guardarlo, se perdía sin que nadie lo supiera.
+Con un receptor anterior, que solo habla `1.0.0`, sigue siendo así. Detalle normativo en
+[ESPECIFICACION-protocolo.md](ESPECIFICACION-protocolo.md) §3.1 (P16).
 
 ---
 
@@ -406,6 +420,18 @@ Notas:
   recientes, sin proyección a pantallas no seguras. Solo en el chat, que es donde está el
   contenido. Una captura que el usuario haga desde el propio chat sale del ámbito E2EE, y así
   se dice en la ayuda.
+- **Los avisos sacan texto de la app** (documentado el 12 oct 2026, O-4 de
+  [AUDITORIA-2026-10-12.md](AUDITORIA-2026-10-12.md)). Un aviso de mensaje lleva, por defecto, el
+  nombre del contacto y el **texto descifrado**, y lo que se entrega al `NotificationManager` ya
+  no es de Krypta: lo lee cualquier app con acceso a notificaciones (relojes, launchers,
+  "asistentes"), queda en el historial de notificaciones del sistema si el usuario lo tiene
+  activado y, según el ajuste de pantalla de bloqueo del móvil, se ve con el teléfono bloqueado.
+  Desde el 12 oct 2026: (a) la **versión pública** de cada aviso —la que el sistema enseña cuando
+  oculta lo sensible— no lleva ni nombre ni texto; (b) en Ajustes → **Contenido de los avisos** se
+  elige *Todo*, *Solo nombre* o *Nada* (en *Nada* hay un único aviso de Krypta para todos, que no
+  deja contar contactos por el número de notificaciones); (c) con el **bloqueo de la app**
+  activado nunca se enseña el texto, porque la cortina se saltaba la promesa del bloqueo. Lo que
+  no cambia: en el modo por defecto el texto sí sale, igual que en cualquier mensajería.
 
 ---
 
@@ -415,7 +441,7 @@ El nodo es infraestructura pública: cualquiera de internet puede hablarle. Lo q
 
 | Superficie | Límite |
 |---|---|
-| Stream de mensajes `/krypta/msg/1.0.0` | Lectura acotada a 1 MiB (móvil y nodo) |
+| Stream de mensajes `/krypta/msg/1.1.0` (y `1.0.0`) | Lectura acotada a 1 MiB (móvil y nodo); en 1.1.0, la espera del acuse acotada a 20 s |
 | Depósito en buzón | Blob ≤ 64 KiB; 200 mensajes / 5 MiB por destinatario; TTL 7 días |
 | Depósito en buzón, **por remitente** | Un remitente puede llenar el buzón solo si es el único que ha depositado; en cuanto hay otro, ninguno pasa de la mitad, y si el buzón se llena se desaloja lo más antiguo de quien se pasó de su reparto (`mailbox.store`) |
 | Retirada del buzón | Solo entrega los sobres cuyo `to` es el PeerID autenticado del stream |

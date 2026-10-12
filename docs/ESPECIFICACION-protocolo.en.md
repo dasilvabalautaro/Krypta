@@ -23,7 +23,7 @@ here, in the same change.
 
 ## 0. Scope, notation and primitives
 
-**In scope:** identity and shared secret (§2), application envelope (§3), v1 transport (§4) and v2
+**In scope:** identity and shared secret (§2), application envelope and delivery (§3), v1 transport (§4) and v2
 transport, the epoch-based ratchet (§5), padding (§6), capability negotiation (§7), calls (§8),
 blind-mailbox labels (§9), rendezvous (§10), safety number and `.krbk` backup (§11).
 
@@ -109,6 +109,27 @@ arrives. No format changed.
 A type `A`–`Z` unknown to this version decodes as `Unsupported` and is dropped without rendering
 anything. Bytes that are not shaped like an envelope decode as `null`, and the upper layer treats
 them as legacy text (messages from before envelopes existed).
+
+### 3.1 Delivery and acknowledgement (since 12 Oct 2026)
+
+A wire envelope (v1 or v2) travels one of two ways: **direct**, one libp2p stream per envelope, or
+through the node's **mailbox**. On both, the receiver **stores before acknowledging**:
+
+- **Mailbox**: the receiver acks only the envelopes it stored; the rest come back on the next
+  fetch. This already held; since 12 Oct 2026 it also holds when storing fails **inside** the
+  ratchet transaction (before, that error was treated as "does not open" and the envelope was acked:
+  O-1 of [AUDITORIA-2026-10-12.md](AUDITORIA-2026-10-12.md), Spanish).
+- **Direct**: `/krypta/msg/1.1.0`. The sender writes the envelope and closes its half; the receiver
+  reads it (at most 1 MiB), stores it and answers **one byte**: `0x01` stored (or discarded on
+  purpose: unknown or blocked sender), `0x00` not stored. The sender counts the envelope as sent
+  **only** on `0x01`; on `0x00`, no answer within 20 s or a dropped stream, it deposits it in the
+  mailbox. The sender offers 1.1.0 and `/krypta/msg/1.0.0` in the same negotiation: with an older
+  receiver 1.0.0 is negotiated, which has no ack and counts as sent once written (as before).
+
+Since an envelope can arrive twice (ack lost → also through the mailbox), the receiver **never
+rewrites an id it already has** (`T`/`I` by their `<id>`, the rest by the mailbox id): the duplicate
+is acked and is not marked unread again nor notified again. With v2, the digest of §5.9 also
+discards it before decrypting.
 
 ---
 
@@ -568,6 +589,7 @@ protocol has yet had formal analysis or external review** (see
 | **P13** | The node's disk does not link mailbox labels to PeerIDs | A1 (dump) | Tested on the node | Go `TestMailboxV2NoGuardaNiRemitenteNiDestinatario` ("stores neither sender nor recipient"), `TestMailboxV2LaEtiquetaEsLaLlave` ("the label is the key"), [DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) |
 | **P14** | Domain separation between all derivations from `S` | — | By inspection | The `info` labels of §4, §5.2, §8, §9 and §10, all distinct |
 | **P15** | A genuine `invite` rings at most once and leaves at most one missed-call row, whoever delivers it and however many times | A1 | Tested since 15 Sep 2026, **conditional**: if the process restarts within 10 min 45 s it can ring once more (W-14), and clearing the chat deletes the row and with it its memory | `CallServiceTest` (7 H-7 tests), `ChatServiceTest` |
+| **P16** | An envelope the sender counts as sent was **stored** at the receiver (direct with ack) or in the node's mailbox; if the receiver could not store it, the mailbox delivers it again | — | Tested since 12 Oct 2026, **conditional**: with a receiver that only speaks `/krypta/msg/1.0.0`, "sent" over direct still means "written" | Go `TestEntregaDirecta*`, `TestUnEmisorAnteriorSigueEntregando`; `ChatServiceTest` ("un directo que no se pudo guardar no se acusa", "por ratchet un fallo al guardar no se confirma") |
 
 ---
 
@@ -609,6 +631,7 @@ protocol has yet had formal analysis or external review** (see
 | Calls | `CallService.kt`, `ChatService.recordMissedCall` | `CallServiceTest`, `ChatServiceTest`, Go `TestCallStreamEcho`, `TestVideoStreamEcho` |
 | Transport under calls (W-8) | go-libp2p: TLS 1.3 or Noise by default, also inside the relay circuit | Go `TestTransporteRechazaBytesManipulados`, `TestRelayNoVeLoQueViajaPorElCircuito`, `TestRelayMessagingLocal` |
 | Blind mailbox | `MailboxLabel.kt`, `ChatService` (`outboxLabel`, `inboxLabels`), `infra/node/mailbox.go` | `MailboxLabelTest`, `ChatServiceTest`, Go `TestMailboxV2NoGuardaNiRemitenteNiDestinatario`, `TestMailboxV2LaEtiquetaEsLaLlave` |
+| Delivery and ack (§3.1) | `bridge.go` (`SendMessage`, `SetMessageHandler`, `ProtocolIDAck`), `ChatService` (`setDirectProcessor`, `openRatchet`, `persistEnvelope`) | Go `TestEntregaDirecta*`, `TestUnEmisorAnteriorSigueEntregando`, `ChatServiceTest` |
 | Rendezvous | `RendezvousService.kt` | `RendezvousServiceTest` |
 | Safety number | `SafetyNumber.kt`, `QrCode` | `SafetyNumberTest`, `QrCodeTest` |
 | `.krbk` | `IdentityBackup.kt`, `BackupManager.kt` | `IdentityBackupTest`, `ParserFuzzTest` |

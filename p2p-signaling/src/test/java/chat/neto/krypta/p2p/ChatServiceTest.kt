@@ -82,7 +82,10 @@ class ChatServiceTest {
         /** Intentos de entrega que fallan por las dos vías (directo y buzón) antes de ir bien. */
         var flakyAttempts = 0
         val sentAll = mutableListOf<ByteArray>()
+        /** Se ejecuta en mitad de cada envío directo: para meter acciones del usuario en esa ventana. */
+        var duringSend: (suspend () -> Unit)? = null
         override suspend fun send(contact: Contact, ciphertext: ByteArray) {
+            duringSend?.invoke()
             if (failOnSend || flakyAttempts > 0) error("failed to dial ${contact.peerId}: no addresses")
             sentCiphertext = ciphertext
             sentAll.add(ciphertext)
@@ -101,8 +104,11 @@ class ChatServiceTest {
         var fetchCalls = 0
         /** Etiquetas pedidas en la última retirada (una por línea). */
         var fetchedLabels: String = ""
+        /** Simula un nodo que acepta la retirada y no contesta nunca. */
+        var hangOnFetch = false
         override suspend fun fetchMailbox(labels: String): Int {
             fetchCalls++
+            if (hangOnFetch) kotlinx.coroutines.awaitCancellation()
             fetchedLabels = labels
             return mailboxPending.also { mailboxPending = 0 }
         }
@@ -112,6 +118,11 @@ class ChatServiceTest {
         override suspend fun stopWake() { wakeRunning = false }
         var wakeUp = false
         override suspend fun wakeConnected(): Boolean = wakeUp
+        /** Procesador de los directos registrado por ChatService (lo que contesta el acuse). */
+        var registeredDirectProcessor: (suspend (String, ByteArray) -> Boolean)? = null
+        override fun setDirectProcessor(processor: suspend (fromPeerId: String, ciphertext: ByteArray) -> Boolean) {
+            registeredDirectProcessor = processor
+        }
         /** Procesador registrado por ChatService: los tests lo invocan como haría el fetch. */
         var registeredMailboxProcessor: (suspend (String, ByteArray, String, Long, String) -> Boolean)? = null
         override fun setMailboxProcessor(
@@ -131,6 +142,12 @@ class ChatServiceTest {
         var failOnSave = false
         override fun observeConversation(conversationId: String): Flow<List<Message>> =
             flowOf(saved.filter { it.conversationId == conversationId })
+        override fun observeRecent(conversationId: String, limit: Int): Flow<List<Message>> =
+            flowOf(saved.filter { it.conversationId == conversationId }.sortedBy { it.timestamp }.takeLast(limit))
+        override suspend fun countSince(conversationId: String, id: String): Int {
+            val target = saved.find { it.id == id && it.conversationId == conversationId } ?: return 0
+            return saved.count { it.conversationId == conversationId && it.timestamp >= target.timestamp }
+        }
         override fun observeLastMessages(): Flow<List<Message>> =
             flowOf(
                 saved.groupBy { it.conversationId }
@@ -157,9 +174,21 @@ class ChatServiceTest {
             val i = saved.indexOfFirst { it.id == id }
             if (i >= 0) saved[i] = saved[i].copy(status = status)
         }
-        override suspend fun markIncomingRead(conversationId: String) {
+        override suspend fun markIncomingRead(conversationId: String): List<String> {
+            val ids = saved.filter {
+                it.conversationId == conversationId && it.senderId == conversationId &&
+                    it.status == MessageStatus.DELIVERED
+            }.map { it.id }
             saved.replaceAll {
                 if (it.conversationId == conversationId && it.senderId == conversationId) {
+                    it.copy(status = MessageStatus.READ)
+                } else it
+            }
+            return ids
+        }
+        override suspend fun markOutgoingRead(conversationId: String, senderId: String, ids: List<String>) {
+            saved.replaceAll {
+                if (it.id in ids && it.conversationId == conversationId && it.senderId == senderId) {
                     it.copy(status = MessageStatus.READ)
                 } else it
             }
@@ -180,6 +209,15 @@ class ChatServiceTest {
         override suspend fun findById(id: String) = store[id]
         override suspend fun findByPeerId(peerId: String) = store.values.find { it.peerId == peerId }
         override suspend fun delete(id: String) { store.remove(id) }
+        override suspend fun setVerified(id: String, verified: Boolean) {
+            store[id]?.let { store[id] = it.copy(verified = verified) }
+        }
+        override suspend fun setBlocked(id: String, blocked: Boolean) {
+            store[id]?.let { store[id] = it.copy(blocked = blocked) }
+        }
+        override suspend fun markAnnounced(id: String, protocol: Int) {
+            store[id]?.let { store[id] = it.copy(announcedProtocol = maxOf(it.announcedProtocol, protocol)) }
+        }
     }
 
     private class FakeKeyExchange(private val me: String = "12D3KooWSelf") : KeyExchange {
@@ -297,12 +335,14 @@ class ChatServiceTest {
         // Sin sobre (legado): el id del Message cae al del buzón (mailboxId) → dedup por id.
         val ciphertext = cipher.encrypt(secret, "del buzón".toByteArray())
         val first = chat.onReceived(contact.peerId, ciphertext, mailboxId = "mbx-001", ts = 1234L)!!
-        val again = chat.onReceived(contact.peerId, ciphertext, mailboxId = "mbx-001", ts = 1234L)!!
+        // La reentrega ya está guardada: null, que la confirma en el buzón sin volver a avisar
+        // (antes se reescribía y volvía a quedar sin leer; ver O-7).
+        val again = chat.onReceived(contact.peerId, ciphertext, mailboxId = "mbx-001", ts = 1234L)
 
         assertEquals("mbx-001", first.id)
         assertEquals(1234L, first.timestamp) // conserva la hora del depósito
-        assertEquals(first.id, again.id)
-        assertEquals(1, messages.saved.size) // upsert idéntico, sin duplicados
+        assertNull(again)
+        assertEquals(1, messages.saved.size) // sin duplicados
         assertEquals(MessageStatus.DELIVERED, messages.saved.single().status)
     }
 
@@ -2663,5 +2703,250 @@ class ChatServiceTest {
         assertTrue("sigue bloqueado", guardado.blocked)
         assertEquals(ChatService.PROTOCOL_VERSION, guardado.peerProtocol)
         assertEquals("no hace falta volver a anunciarse", ChatService.PROTOCOL_VERSION, guardado.announcedProtocol)
+    }
+
+    // --- Ack-tras-persistir también por ratchet (O-1, auditoría del 12 oct 2026) ------------
+
+    /**
+     * El camino del ratchet **no puede confirmar al nodo lo que no se guardó**. Hasta el 12 oct
+     * 2026 el `runCatching` de `openRatchet` envolvía también la persistencia: un fallo de Room
+     * caía a `openLegacy`, que no abre un sobre de ratchet, devolvía null y el buzón lo daba por
+     * procesado — el nodo lo borraba y el mensaje se perdía. Los tests de arriba solo cubrían v1.
+     */
+    @Test
+    fun `por ratchet un fallo al guardar no se confirma y la reentrega lo guarda`() = runTest {
+        val signaling = FakeSignaling()
+        val messages = FakeMessages()
+        ChatService(signaling, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        val processor: suspend (String, ByteArray, String, Long) -> Boolean =
+            { p, c, i, t -> signaling.registeredMailboxProcessor!!(p, c, i, t, "") }
+        val (ratchet, estado) = emisorRatchet()
+        val wire = ratchet.encrypt(estado, MessageEnvelope.encodeText("rtc-p", "hola".toByteArray())).ciphertext
+
+        messages.failOnSave = true
+        assertFalse("con Room fallando no se confirma", processor(contact.peerId, wire, "env-p", 1L))
+        assertTrue(messages.saved.isEmpty())
+        assertTrue("un fallo al guardar no es un linaje desincronizado: nada de reengaches", signaling.sentAll.isEmpty())
+
+        messages.failOnSave = false
+        assertTrue(processor(contact.peerId, wire, "env-p", 1L))
+        assertEquals("rtc-p", messages.saved.single().id)
+    }
+
+    /** Lo mismo con un trozo de archivo por ratchet: si no se pudo poner en staging, vuelve. */
+    @Test
+    fun `por ratchet un trozo que no se pudo guardar vuelve y completa el archivo`() = runTest {
+        conRatchet {
+            val contactoDeA = contact.copy(peerProtocol = 2)
+            val contactoDeB = Contact(
+                id = "contacto-a", displayName = "Yo", peerId = "12D3KooWSelf",
+                publicKey = ByteArray(0), sharedSecret = secret, peerProtocol = 2,
+            )
+            val sigA = FakeSignaling()
+            val sigB = FakeSignaling()
+            val fsB = FakeFileStore()
+            val msgsB = FakeMessages()
+            val a = parte("12D3KooWSelf", contactoDeA, sigA, scope = backgroundScope)
+            parte("12D3KooWBob", contactoDeB, sigB, messages = msgsB, fileStore = fsB, scope = backgroundScope)
+            val processor: suspend (String, ByteArray, String, Long) -> Boolean =
+                { p, c, i, t -> sigB.registeredMailboxProcessor!!(p, c, i, t, "") }
+
+            val bytes = ByteArray(60 * 1024) { (it % 251).toByte() }
+            kotlinx.coroutines.runBlocking {
+                a.sendFile(contactoDeA, "doc.pdf", "application/pdf", bytes)
+                val envs = sigA.sentAll.toList()
+                assertEquals(3, envs.size)
+                assertTrue(processor("12D3KooWSelf", envs[0], "e0", 1L))
+                assertTrue(processor("12D3KooWSelf", envs[1], "e1", 2L))
+                fsB.failOnChunk = true
+                assertFalse("el trozo sin guardar no se confirma", processor("12D3KooWSelf", envs[2], "e2", 3L))
+                fsB.failOnChunk = false
+                assertTrue(processor("12D3KooWSelf", envs[2], "e2", 3L))
+            }
+            assertArrayEquals(bytes, fsB.assembled)
+            assertEquals(1, msgsB.saved.size)
+        }
+    }
+
+    // --- Escrituras de un solo campo (O-3, auditoría del 12 oct 2026) -----------------------
+
+    /**
+     * El anuncio de capacidades guardaba **su copia entera** del contacto después de enviar. Si
+     * mientras salía el usuario verificaba o bloqueaba al contacto —el caso natural: acabas de
+     * añadirlo y lo verificas por QR con la otra persona delante—, la copia vieja lo deshacía.
+     */
+    @Test
+    fun `verificar o bloquear mientras sale el anuncio de capacidades no se pierde`() = runTest {
+        val signaling = FakeSignaling()
+        val contacts = FakeContacts(listOf(contact))
+        val chat = ChatService(signaling, cipher, FakeMessages(), contacts, FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        signaling.duringSend = {
+            signaling.duringSend = null
+            chat.setVerified(contact, true)
+            chat.setBlocked(contact, true)
+        }
+
+        chat.announceCapabilities()
+
+        val guardado = contacts.findById(contact.id)!!
+        assertTrue("la verificación hecha durante el anuncio debe quedar", guardado.verified)
+        assertTrue("el bloqueo hecho durante el anuncio debe quedar", guardado.blocked)
+        assertEquals(ChatService.PROTOCOL_VERSION, guardado.announcedProtocol)
+    }
+
+    /** Y al revés: verificar desde una copia vieja no deshace el anuncio ya apuntado. */
+    @Test
+    fun `verificar desde una copia vieja no borra lo anunciado`() = runTest {
+        val contacts = FakeContacts(listOf(contact))
+        val chat = ChatService(FakeSignaling(), cipher, FakeMessages(), contacts, FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        val copiaVieja = contacts.findById(contact.id)!!
+        chat.announceCapabilities()
+
+        chat.setVerified(copiaVieja, true)
+
+        assertEquals(ChatService.PROTOCOL_VERSION, contacts.findById(contact.id)!!.announcedProtocol)
+    }
+
+    // --- Acuses de lectura acotados (O-2, auditoría del 12 oct 2026) ------------------------
+
+    private fun recibidos(messages: FakeMessages, n: Int, desde: Int = 0) {
+        for (k in desde until desde + n) {
+            messages.saved.add(
+                Message(
+                    id = "in-$k", conversationId = contact.id, senderId = contact.id,
+                    payload = MessageEnvelope.encodeText("in-$k", "h".toByteArray()),
+                    timestamp = k.toLong(), status = MessageStatus.DELIVERED,
+                ),
+            )
+        }
+    }
+
+    /** Ids que viajan en los acuses que salieron por [signaling] (v1: se abren con la clave estática). */
+    private fun idsAcusados(signaling: FakeSignaling): List<String> =
+        signaling.sentAll.flatMap { wire ->
+            (MessageEnvelope.decode(cipher.decrypt(secret, wire)) as MessageEnvelope.Decoded.Read).ids
+        }
+
+    /**
+     * El acuse llevaba **todos** los ids recibidos del historial, menos los de una caché de 500
+     * que moría con el proceso: con 2.000 mensajes eran 74 KB al abrir el chat (más que el blob
+     * máximo del buzón), 55 KB con cada mensaje nuevo y otra vez 74 KB tras cada reinicio. Y su
+     * tamaño le decía al nodo cuántos mensajes llevaba la conversación.
+     */
+    @Test
+    fun `el acuse solo cita lo no leido, en lotes, y no se repite tras reiniciar`() = runTest {
+        val messages = FakeMessages()
+        recibidos(messages, 2000)
+        val signaling = FakeSignaling()
+        val chat = ChatService(signaling, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+
+        chat.markConversationRead(contact)
+        assertEquals("se acusa cada no leído una vez", 2000, idsAcusados(signaling).toSet().size)
+        assertTrue(
+            "ningún acuse cerca del tope del buzón",
+            signaling.sentAll.all { it.size <= 4 * 1024 },
+        )
+
+        signaling.sentAll.clear()
+        chat.markConversationRead(contact)
+        assertTrue("una segunda llamada sin nada nuevo no manda nada", signaling.sentAll.isEmpty())
+
+        // Proceso nuevo sobre la misma base: lo leído ya no se vuelve a acusar.
+        val sig2 = FakeSignaling()
+        val chat2 = ChatService(sig2, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        recibidos(messages, 1, desde = 5000)
+        chat2.markConversationRead(contact)
+        assertEquals(listOf("in-5000"), idsAcusados(sig2))
+    }
+
+    /** Un acuse que no sale por ninguna vía no se pierde: sale con el siguiente. */
+    @Test
+    fun `un acuse que no salio se manda con el siguiente`() = runTest {
+        val messages = FakeMessages()
+        recibidos(messages, 3)
+        val signaling = FakeSignaling().apply { failOnSend = true; failOnMailbox = true }
+        val chat = ChatService(signaling, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+
+        chat.markConversationRead(contact)
+        assertEquals("el badge se limpia aunque el acuse falle", 0, messages.saved.count { it.status == MessageStatus.DELIVERED })
+
+        signaling.failOnSend = false
+        recibidos(messages, 1, desde = 3)
+        chat.markConversationRead(contact)
+        assertEquals(setOf("in-0", "in-1", "in-2", "in-3"), idsAcusados(signaling).toSet())
+    }
+
+    // --- El latido cabe en los plazos del sistema (O-5, auditoría del 12 oct 2026) ---------
+
+    /**
+     * Con la red colgada en los dos pasos, `pollOnce` sumaba hasta 105 s; un receptor de
+     * broadcast tiene ~60 s y el wake lock del latido era de 25 s. Ahora termina dentro de
+     * [ChatService.POLL_BUDGET_MS] pase lo que pase.
+     */
+    @Test
+    fun `el latido termina dentro de su presupuesto aunque todo cuelgue`() = runTest {
+        val signaling = FakeSignaling().apply {
+            bootstrapAddr = validAddr
+            hangOnConnect = true
+            hangOnFetch = true
+        }
+        val chat = ChatService(signaling, cipher, FakeMessages(), FakeContacts(emptyList()), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+
+        val inicio = testScheduler.currentTime
+        chat.pollOnce()
+        val duro = testScheduler.currentTime - inicio
+
+        assertTrue("el latido tardó ${duro} ms", duro <= ChatService.POLL_BUDGET_MS)
+        assertTrue("aun así lo intentó todo", signaling.connectCalls > 0 && signaling.fetchCalls > 0)
+        assertTrue(ChatService.POLL_BUDGET_MS < 60_000L)
+    }
+
+    // --- Acuse de la entrega directa (O-7, auditoría del 12 oct 2026) -----------------------
+
+    /**
+     * Lo que devuelve el procesador de los directos es el acuse que se contesta al emisor por
+     * `/krypta/msg/1.1.0`: `false` si no se pudo guardar, y entonces el emisor lo deja en el
+     * buzón. Antes los directos iban a un Flow asíncrono y el emisor los daba por entregados al
+     * escribirlos, pasara lo que pasara después.
+     */
+    @Test
+    fun `un directo que no se pudo guardar no se acusa, y uno guardado si`() = runTest {
+        val signaling = FakeSignaling()
+        val messages = FakeMessages()
+        ChatService(signaling, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        val directo = signaling.registeredDirectProcessor!!
+
+        messages.failOnSave = true
+        val wire = cipher.encrypt(secret, MessageEnvelope.encodeText("d-1", "hola".toByteArray()))
+        assertFalse("sin guardar no se acusa", directo(contact.peerId, wire))
+
+        messages.failOnSave = false
+        assertTrue(directo(contact.peerId, wire))
+        assertEquals("d-1", messages.saved.single().id)
+
+        // Un desconocido no se guarda, pero se acusa: no hay nada que reintentar.
+        assertTrue(directo("12D3KooWExtrano", wire))
+    }
+
+    /**
+     * Con acuse, un directo que se guardó pero cuyo acuse se perdió vuelve por el buzón. Ese
+     * duplicado no puede volver a marcar el mensaje como no leído ni volver a sonar.
+     */
+    @Test
+    fun `un mensaje repetido no vuelve a sonar ni a quedar sin leer`() = runTest {
+        val signaling = FakeSignaling()
+        val messages = FakeMessages()
+        val chat = ChatService(signaling, cipher, messages, FakeContacts(listOf(contact)), FakeKeyExchange(), RendezvousService(), FakeFileStore(), backgroundScope, testSessions(FakeKeyExchange()))
+        var avisos = 0
+        chat.setIncomingNotifier { _, _ -> avisos++ }
+        val sobre = MessageEnvelope.encodeText("d-2", "hola".toByteArray())
+
+        assertTrue(signaling.registeredDirectProcessor!!(contact.peerId, cipher.encrypt(secret, sobre)))
+        chat.markConversationRead(contact)
+        // El mismo mensaje, cifrado otra vez (otro nonce), por el buzón.
+        assertTrue(signaling.registeredMailboxProcessor!!(contact.peerId, cipher.encrypt(secret, sobre), "env-d2", 5L, ""))
+
+        assertEquals(1, avisos)
+        assertEquals(MessageStatus.READ, messages.findById("d-2")!!.status)
     }
 }

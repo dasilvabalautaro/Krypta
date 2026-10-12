@@ -133,9 +133,24 @@ class Libp2pNode @Inject constructor(
     @Volatile
     private var node: Node? = null
 
-    // Reenvía los mensajes entrantes (stream libp2p) al Flow de eventos del nodo.
+    /**
+     * Procesador SÍNCRONO de los mensajes que llegan por stream directo (lo registra la capa de
+     * señalización), como [mailboxProcessor]: debe persistir y devolver `true`, o `false` si no
+     * pudo. Lo que devuelva es el acuse que el bridge contesta al emisor por `/krypta/msg/1.1.0`;
+     * con `false` el emisor lo deja en el buzón (O-7 de docs/AUDITORIA-2026-10-12.md).
+     */
+    @Volatile
+    var directProcessor: ((from: String, data: ByteArray) -> Boolean)? = null
+
+    // Llega en un hilo de Go con el stream abierto: procesar aquí (bloqueando) es lo que permite
+    // contestar el acuse después de guardar. Sin procesador registrado se cae al Flow de
+    // eventos, como antes, y se da por guardado (no hay a quién preguntar).
     private val messageHandler = MessageHandler { from, data ->
-        _events.trySend(NodeEvent.StreamData(from, data))
+        directProcessor?.let { runCatching { it(from, data) }.getOrDefault(false) }
+            ?: run {
+                _events.trySend(NodeEvent.StreamData(from, data))
+                true
+            }
     }
 
     // Notifica conexiones de peers (p. ej. descubiertos por mDNS en LAN).

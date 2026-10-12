@@ -61,6 +61,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import chat.neto.krypta.AppLock
 import chat.neto.krypta.KryptaNotifications
+import chat.neto.krypta.NotificationContent
+import chat.neto.krypta.NotificationPrivacy
 import chat.neto.krypta.ThemeMode
 import chat.neto.krypta.ThemePreference
 import chat.neto.krypta.p2p.WanStatus
@@ -327,6 +329,47 @@ fun SettingsScreen(
                 }
             }
 
+            SettingsCard("Contenido de los avisos") {
+                val chosen by NotificationPrivacy.content.collectAsState()
+                val lockOn by AppLock.enabled.collectAsState()
+                Text(
+                    "Lo que muestra un aviso sale de Krypta: se ve en la pantalla de bloqueo y lo " +
+                        "pueden leer las apps con acceso a notificaciones (un reloj, por ejemplo).",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                    val options = listOf(
+                        NotificationContent.NAME_AND_MESSAGE to "Todo",
+                        NotificationContent.NAME_ONLY to "Solo nombre",
+                        NotificationContent.NOTHING to "Nada",
+                    )
+                    options.forEachIndexed { index, (value, label) ->
+                        SegmentedButton(
+                            selected = chosen == value,
+                            onClick = { NotificationPrivacy.setContent(context, value) },
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
+                        ) {
+                            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+                Text(
+                    when (NotificationPrivacy.effective(chosen, lockOn)) {
+                        NotificationContent.NAME_AND_MESSAGE -> "Se ve quién escribe y el mensaje."
+                        NotificationContent.NAME_ONLY ->
+                            if (lockOn && chosen == NotificationContent.NAME_AND_MESSAGE) {
+                                "Con el bloqueo de la app activado, el texto no se muestra: solo quién escribe."
+                            } else {
+                                "Se ve quién escribe, pero no el mensaje."
+                            }
+                        NotificationContent.NOTHING -> "Solo «Mensaje nuevo», sin decir de quién."
+                    },
+                    modifier = Modifier.padding(top = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+
             SettingsCard("Apariencia") {
                 Text(
                     "Tema de la app. “Sistema” sigue el modo claro/oscuro del móvil.",
@@ -412,6 +455,7 @@ fun SettingsScreen(
                         KryptaNotifications.notifyMessage(
                             context, "diag-test", "Prueba de aviso",
                             "Si ves esto con sonido y banner, ¡listo!",
+                            content = NotificationPrivacy.current(context),
                         )
                     }
                     SettingsActionButton(

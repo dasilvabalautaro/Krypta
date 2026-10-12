@@ -178,8 +178,22 @@ una conexión P2P propia. Recomendaciones:
 - En móviles con fama de "matar apps en segundo plano" (Xiaomi, TECNO/Transsion,
   Huawei…), usa el botón **"Ajustes de recepción en 2.º plano"** de la lista de contactos
   para abrir los ajustes específicos del fabricante y desactivar la restricción.
-- Aunque todo lo anterior falle, hay un latido de seguridad cada ~2 minutos que reintenta
-  la entrega, así que en el peor caso un mensaje tarda un par de minutos en notificarse.
+- Hay además un latido de seguridad cada ~2 minutos que reintenta la entrega. **Pero no lo
+  arregla todo**: algunos móviles (comprobado en un TECNO con HiOS) congelan el proceso y
+  suprimen también ese latido, y ahí los mensajes no se avisan hasta que abres la app — se ha
+  medido una noche entera. No se pierden: el nodo los guarda hasta 7 días.
+
+**Qué enseña un aviso.** Por defecto, el nombre del contacto y el texto del mensaje, igual que
+cualquier mensajería. Ese texto **sale de Krypta**: se ve en la pantalla de bloqueo (según cómo
+tengas configurado el sistema) y lo pueden leer las apps con acceso a notificaciones, como la de un
+reloj. En **Ajustes → Contenido de los avisos** puedes elegir:
+
+- **Todo**: quién escribe y el mensaje.
+- **Solo nombre**: quién escribe y cuántos mensajes, sin el texto.
+- **Nada**: un único aviso "Krypta · Mensaje nuevo", sin decir de quién.
+
+Con el **bloqueo de la app** activado, el texto no se enseña nunca, elijas lo que elijas. Y en la
+pantalla de bloqueo, cuando el sistema oculta lo sensible, el aviso no lleva ni nombre ni texto.
 
 ### 2.8 Copia de seguridad de tu identidad
 
@@ -363,8 +377,11 @@ protocolo ≥ 2; para el resto, con PeerID de origen y destino. Detalle completo
 
 1. `ChatService` cifra un `MessageEnvelope` (incluye el id del mensaje del emisor) y lo
    persiste en Room como `PENDING`.
-2. Intenta **enviar directo** por el stream libp2p (`/krypta/msg/1.0.0`). Si funciona → `SENT`.
-3. Si falla, **deposita el ciphertext en el buzón** del nodo (`/krypta/mbx/put/1.0.0`) → `SENT`.
+2. Intenta **enviar directo** por el stream libp2p (`/krypta/msg/1.1.0`): el otro móvil lo guarda
+   y contesta un acuse; solo con ese acuse → `SENT`. Si el otro tiene una versión anterior, se
+   negocia `/krypta/msg/1.0.0`, sin acuse, como antes del 12 oct 2026.
+3. Si falla (o no llega el acuse), **deposita el ciphertext en el buzón** del nodo
+   (`/krypta/mbx/put/1.0.0`) → `SENT`.
    El nodo solo guarda blobs opacos, con cuota (≤200 msgs / 5 MiB por destinatario, blob
    ≤64 KiB, TTL 7 días) y autentica la operación con la identidad libp2p del stream (un GET
    solo devuelve tus propios envelopes; el remitente lo fija el nodo, no falsificable).

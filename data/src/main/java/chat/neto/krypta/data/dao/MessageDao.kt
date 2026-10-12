@@ -17,6 +17,14 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp ASC")
     fun observeConversation(conversationId: String): Flow<List<MessageEntity>>
 
+    // Ventana de los [limit] más recientes, en orden cronológico (lo que pinta el chat; O-9).
+    @Query(OBSERVE_RECENT_SQL)
+    fun observeRecent(conversationId: String, limit: Int): Flow<List<MessageEntity>>
+
+    // Cuántos mensajes hay desde [id] hasta el final: el tamaño de ventana que lo incluye.
+    @Query(COUNT_SINCE_SQL)
+    suspend fun countSince(conversationId: String, id: String): Int
+
     // GROUP BY + MAX(timestamp): SQLite garantiza que las columnas sueltas salen de la
     // fila que da el máximo → el mensaje más reciente de cada conversación.
     @Query(
@@ -58,6 +66,32 @@ interface MessageDao {
     )
     suspend fun markIncomingRead(conversationId: String, read: MessageStatus)
 
+    // Ids de los entrantes aún sin leer: los que hay que acusar al abrir el chat.
+    @Query(
+        "SELECT id FROM messages " +
+            "WHERE conversationId = :conversationId AND senderId = :conversationId AND status = :delivered"
+    )
+    suspend fun unreadIncomingIds(conversationId: String, delivered: MessageStatus): List<String>
+
+    // Acuse recibido: los salientes citados pasan a READ, solo los de esa conversación.
+    @Query(
+        "UPDATE messages SET status = :read " +
+            "WHERE conversationId = :conversationId AND senderId = :senderId " +
+            "AND status != :read AND id IN (:ids)"
+    )
+    suspend fun markReadByIds(conversationId: String, senderId: String, ids: List<String>, read: MessageStatus)
+
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     suspend fun deleteConversation(conversationId: String)
+
+    companion object {
+        // En constantes para que `MessageWindowSqlTest` ejecute en la JVM las mismas cadenas.
+        const val OBSERVE_RECENT_SQL =
+            "SELECT * FROM (SELECT * FROM messages WHERE conversationId = :conversationId " +
+                "ORDER BY timestamp DESC LIMIT :limit) ORDER BY timestamp ASC"
+
+        const val COUNT_SINCE_SQL =
+            "SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId AND timestamp >= " +
+                "(SELECT timestamp FROM messages WHERE id = :id AND conversationId = :conversationId)"
+    }
 }

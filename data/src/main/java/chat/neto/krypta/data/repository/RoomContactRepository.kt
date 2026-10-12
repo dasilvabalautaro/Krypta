@@ -42,6 +42,12 @@ class RoomContactRepository @Inject constructor(
     override suspend fun raisePeerProtocol(id: String, protocol: Int) =
         dao.raisePeerProtocol(id, protocol)
 
+    override suspend fun setVerified(id: String, verified: Boolean) = dao.setVerified(id, verified)
+
+    override suspend fun setBlocked(id: String, blocked: Boolean) = dao.setBlocked(id, blocked)
+
+    override suspend fun markAnnounced(id: String, protocol: Int) = dao.markAnnounced(id, protocol)
+
     override suspend fun findById(id: String): Contact? = dao.findById(id)?.let(::toDomain)
 
     override suspend fun findByPeerId(peerId: String): Contact? =

@@ -74,6 +74,13 @@ object AppLock {
         ProcessLifecycleOwner.get().lifecycle.addObserver(visibilityObserver)
     }
 
+    /**
+     * ¿Está activado? Vale también en un proceso que no ha pasado por [init] —uno revivido por el
+     * latido, donde no hay Activity— leyendo la preferencia. Lo usa [NotificationPrivacy].
+     */
+    fun isEnabled(context: Context): Boolean =
+        if (initialized) _enabled.value else settings(context).getBoolean(KEY_ENABLED, false)
+
     fun setEnabled(context: Context, value: Boolean) {
         settings(context).edit().putBoolean(KEY_ENABLED, value).apply()
         _enabled.value = value

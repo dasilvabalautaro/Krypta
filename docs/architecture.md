@@ -2,34 +2,37 @@
 
 > Documento vivo. Refleja **lo que existe en el repo ahora**, no el diseño objetivo
 > completo (ese está en [PLAN-senalizacion-descentralizada.md](PLAN-senalizacion-descentralizada.md)).
-> Última actualización: 10 sep 2026 — **cifrado en reposo y ratchet**. La base va cifrada
-> entera (SQLCipher, DB v6→v9), los adjuntos también (`FileVault`), el historial se guarda
-> como sobre en claro dentro de esa base, y el **doble ratchet por épocas**
-> ([DISENO-ratchet.md](DISENO-ratchet.md)) está desplegado con el envío **encendido** — pero
-> solo con los contactos que lo anuncian, y **sin prueba en dos móviles todavía**
-> ([PRUEBAS-PENDIENTES §16](PRUEBAS-PENDIENTES.md)). Antes (8 sep): el secreto compartido sale
-> de la base y se deriva al leer; e implementación de la
-> [auditoría del 7 sep](AUDITORIA-2026-09-07.md): rendezvous de una sola pasada + ventana de
-> solape, identidad en el Android Keystore, reparto justo del buzón y límites finitos del
-> relay, topes de recepción de archivos, reconciliación de envíos fallidos; y el modelo de
-> seguridad por fin escrito en [security-model.md](security-model.md).
+> Última actualización: **12 oct 2026** — arreglos de la
+> [auditoría interna del 12 oct](AUDITORIA-2026-10-12.md): la **entrega directa con acuse**
+> (`/krypta/msg/1.1.0`), el buzón que ya no confirma lo que el ratchet no pudo guardar, los
+> acuses de lectura acotados a lo no leído, el chat **por ventanas**, la base que se abre en la
+> primera consulta y no al inyectar, el ajuste de **contenido de los avisos**, y el reparto de
+> `ChatService` (2.100 líneas) y de `ChatViewModel` en piezas con una sola responsabilidad (ver
+> `:p2p-signaling` y `:app` abajo). Base **v10**, protocolo **v4**.
+>
+> Antes: 10 sep 2026 — cifrado en reposo (SQLCipher, `FileVault`) y doble ratchet por épocas
+> ([DISENO-ratchet.md](DISENO-ratchet.md)); 8 sep — implementación de la
+> [auditoría del 7 sep](AUDITORIA-2026-09-07.md) y [security-model.md](security-model.md).
 
 ## Resumen
 
-Krypta es una mensajería P2P E2EE para **WAN** en Android nativo (Kotlin + Compose).
-El proyecto está en fase de **esqueleto multi-módulo**: compila, la inyección de
-dependencias (Hilt) funciona, persiste con Room y arranca en dispositivo. La lógica de
-red (libp2p, DHT, relay, buzón, wake) está como `TODO` mapeado a las fases del plan.
+Krypta es una mensajería P2P E2EE para **WAN** en Android nativo (Kotlin + Compose). Lo que
+describe este documento **funciona de extremo a extremo**: identidad Ed25519 → secreto por ECDH
+X25519 → doble ratchet por épocas (con el v1 de clave estática para quien no lo anuncia) →
+libp2p (DHT + rendezvous + Circuit Relay v2 + DCUtR) → buzón E2EE (ciego por etiquetas) → wake
+→ aviso; llamadas de voz y vídeo; todo en reposo cifrado. Las fases del plan y lo que falta están
+en [PLAN-senalizacion-descentralizada.md](PLAN-senalizacion-descentralizada.md); lo que solo está
+probado en un móvil, en [PRUEBAS-PENDIENTES.md](PRUEBAS-PENDIENTES.md).
 
 ## Módulos Gradle
 
 | Módulo | Namespace | Responsabilidad | Estado |
 |--------|-----------|-----------------|--------|
-| `:app` | `chat.neto.krypta` | UI Compose Material 3 con identidad teal (conversaciones · chat · ajustes), `ChatViewModel` (`@HiltViewModel`), `KryptaApplication`/`MainActivity`, `KryptaForegroundService` (nodo + wake vivos con la app cerrada, notificaciones) | UI rediseñada (jul 2026) |
-| `:core` | `chat.neto.krypta.core` | Dominio puro: interfaces SOLID + modelos. Sin Android components ni framework de DI | Definido |
-| `:data` | `chat.neto.krypta.data` | Persistencia Room (**DB v9**, cifrada con SQLCipher, migraciones reales) + repos + `DataModule` (Hilt) | Funcional |
-| `:native-bridge` | `chat.neto.krypta.nativebridge` | Wrapper Kotlin/JNI sobre el AAR de go-libp2p + Foreground Service | **Host libp2p funcional** (spike) |
-| `:p2p-signaling` | `chat.neto.krypta.p2p` | Rendezvous (HKDF real) + orquestación de señalización | Parcial |
+| `:app` | `chat.neto.krypta` | UI Compose Material 3 (lista · chat · llamada · ajustes · ayuda), tres ViewModels por pantalla (`ChatViewModel`, `CallViewModel`, `SettingsViewModel`), `KryptaApplication`/`MainActivity`, `KryptaForegroundService`, `IncomingNotifier` (dueño de los avisos), almacén de adjuntos cifrado (`DiskFileStore` + `FileVault`) y motores de audio/vídeo | Funcional |
+| `:core` | `chat.neto.krypta.core` | Dominio puro: interfaces + modelos. Sin Android ni DI | Estable |
+| `:data` | `chat.neto.krypta.data` | Room (**DB v10**, cifrada con SQLCipher, migraciones reales y probadas) + repos + `DataModule` (Hilt) | Funcional |
+| `:native-bridge` | `chat.neto.krypta.nativebridge` | Wrapper Kotlin/JNI sobre el AAR de go-libp2p (`Libp2pNode`) + identidad envuelta en el Keystore | Funcional |
+| `:p2p-signaling` | `chat.neto.krypta.p2p` | Dominio de mensajería: `ChatService` y sus piezas, ratchet, llamadas, rendezvous, buzón ciego, copia `.krbk` | Funcional |
 
 ### Grafo de dependencias
 
@@ -66,6 +69,18 @@ desacoplados y testeables.
   enviado/leído/no enviado", y un mensaje **no enviado** es tocable para **reintentar**).
 
 ### `:app` (UI)
+- **Tres ViewModels, uno por pantalla** (12 oct 2026, §5 de la auditoría): `ChatViewModel`
+  (lista de conversaciones y chat), `CallViewModel` (llamada en curso, voz y vídeo) y
+  `SettingsViewModel` (identidad, nodos, red local, copia de seguridad, diagnóstico). Antes uno
+  solo servía a todo. `ChatScreens.kt` también se partió: navegación y componentes compartidos en
+  `KryptaApp.kt`, la burbuja y sus adjuntos en `MessageBubble.kt`.
+- **El chat se carga por tramos de 100** (O-9): al llegar arriba se añade el tramo anterior, y
+  tocar la cita de un mensaje que no está cargado agranda la ventana hasta él y salta. Los acuses
+  se piden con cada **último mensaje** nuevo, no con el tamaño de la lista, que con la ventana
+  llena ya no cambia.
+- **Contenido de los avisos** (O-4): `NotificationPrivacy` (*Todo* / *Solo nombre* / *Nada*, pref
+  en `krypta_settings`); con el bloqueo de la app activado nunca sale el texto, y la versión
+  pública de cada aviso (pantalla de bloqueo) no lleva ni nombre ni texto.
 - `ChatViewModel` (`@HiltViewModel`) sobre `ChatService`: `contacts` (StateFlow),
   `messages(contact)` (descifra para mostrar), `send`, `addContact`.
 - `KryptaForegroundService` — **servicio en primer plano real** (Fase 5): `startForeground`
@@ -152,7 +167,7 @@ desacoplados y testeables.
   ventana pre-Compose en `values{,-night}/themes.xml` (sin destello al arrancar), icono de
   launcher propio (burbuja+candado sobre teal, adaptativo + monochrome) y back predictivo
   (`enableOnBackInvokedCallback` + `BackHandler`). Tres pantallas, navegación por estado
-  en `KryptaApp` (`ui/ChatScreens.kt`):
+  en `KryptaApp` (`ui/KryptaApp.kt`; hasta el 12 oct 2026 en `ui/ChatScreens.kt`):
   - **Lista de conversaciones** (`ui/ConversationsScreen.kt`): avatar con inicial y color
     estable por PeerID (+ punto "en línea"), **vista previa del último mensaje descifrado**
     (`ChatService.notificationText`) con icono de estado (reloj/✓/✓✓, teal = leído),
@@ -272,6 +287,34 @@ desacoplados y testeables.
   tránsito todo es ciphertext.
 
 ### `:p2p-signaling`
+
+**Cómo está repartido `ChatService` (12 oct 2026, §5 de la
+[auditoría del 12 oct](AUDITORIA-2026-10-12.md)).** Había llegado a 2.100 líneas con siete
+responsabilidades; ahora es el lazo **cifrar → persistir → enviar / recibir → abrir → persistir**
+(envío de texto e imagen, la recepción entera, el buzón, el rendezvous y el filtro de conexiones)
+y delega el resto en piezas internas que construye él mismo, de modo que su API pública y sus
+constructores no cambiaron (todos los tests siguen pasando sin tocarlos):
+
+| Pieza | Qué hace |
+|---|---|
+| `Outbox` | Toda la salida: `seal` / `sealAndPersist` (v1 o ratchet, con el avance guardado antes de que salgan los bytes), `deliver` y `transmit` (directo → buzón → FAILED), etiqueta del buzón ciego |
+| `ProtocolGates` | `usesRatchet` / `pads` / `kdf4`: qué forma lleva cada contacto según lo que anunció |
+| `FileTransfer` | Envío de archivos troceados, la copia propia y el reenvío desde ella |
+| `ReadReceipts` | Acuses de lectura: mandar los de lo que se acaba de leer (en lotes de 100) y aplicar los que llegan (una sentencia por lote) |
+| `CapabilityNegotiator` | Sobre `V`, versión apuntada que solo sube, reengache y relevo de linaje |
+| `WanLoop` | El bucle WAN con sus presupuestos por paso; los pasos los pone `ChatService` (`WanSteps`) |
+| `ContactService` | Alta, verificación, bloqueo, vaciar y borrar (escrituras de una sola columna, O-3) |
+| `DiagnosticsLog` | El registro del panel de Diagnóstico, compartido por todas |
+| `CpuContext` | Dónde corre el cifrado: `Dispatchers.Default` en la app (inyectado), el hilo del test en la JVM |
+
+**Entrega y acuse (12 oct 2026, O-1 y O-7).** Por las dos vías, el receptor guarda antes de
+confirmar: el procesador del buzón y el nuevo **procesador directo**
+(`ISignalingService.setDirectProcessor`) son síncronos y devuelven si se guardó. Por directo eso es
+el byte de acuse de `/krypta/msg/1.1.0`; sin él, el emisor deja el sobre en el buzón. Un
+`RatchetException` («no abre») es lo único que cae al camino v1: cualquier otro error al recibir se
+propaga, y así no se confirma. Un id que ya existe no se reescribe nunca (el duplicado que trae
+un acuse perdido se confirma sin volver a avisar). Ver
+[ESPECIFICACION-protocolo.md](ESPECIFICACION-protocolo.md) §3.1.
 - `RendezvousService` — **implementación real** de `HKDF-SHA256` (RFC 5869):
   `rendezvous = HKDF(shared_secret, info="krypta-rdv:"+fecha)` → 32 bytes. Rotativo por
   día y no enumerable sin el secreto. Cubierto por `RendezvousServiceTest`.
@@ -634,10 +677,14 @@ desacoplados y testeables.
   notifican por `PeerHandler`→`NodeEvent.Connected`. **DHT/rendezvous (WAN, camino real)**:
   `startDht()` inicializa Kademlia y conecta a bootstrap; `advertise(rdv)` y `findPeers(rdv)`
   publican y descubren bajo la clave de rendezvous (los bytes HKDF se pasan hex-encoded a Go).
-  **Mensajería**: `sendMessage(peerId, bytes)` abre un stream libp2p
-  (`/krypta/msg/1.0.0`, con `network.WithAllowLimitedConn` para poder abrirlo sobre conexiones
-  de relay, que son "limited") y entrega el blob; los mensajes entrantes llegan vía
-  `MessageHandler` y se reemiten como `NodeEvent.StreamData` en el `Flow` de eventos.
+  **Mensajería**: `sendMessage(peerId, bytes)` abre un stream libp2p ofreciendo
+  `/krypta/msg/1.1.0` y `/krypta/msg/1.0.0` (con `network.WithAllowLimitedConn` para poder
+  abrirlo sobre conexiones de relay, que son "limited"). Con 1.1.0 espera el **acuse** del
+  receptor (un byte, 20 s como mucho) y solo vuelve bien si dice que lo guardó; con un receptor
+  que solo habla 1.0.0 entrega como antes. Los mensajes entrantes llegan vía `MessageHandler`, que
+  desde el 12 oct 2026 **devuelve un `Boolean`**: `Libp2pNode.directProcessor` los procesa en el
+  hilo de Go y lo que devuelve es el acuse (sin procesador, se reemiten como
+  `NodeEvent.StreamData`). Go `TestEntregaDirecta*`.
   **La lectura del stream entrante está acotada** (6 sep 2026): `io.LimitReader(s,
   maxIncomingMessage+1)` y corte por encima de **1 MiB**. Ese stream lo puede abrir cualquier
   peer que sepa marcar al móvil —quién envía no se comprueba en Go, sino en Kotlin
@@ -676,8 +723,19 @@ desacoplados y testeables.
   `ChatService` (:p2p-signaling), que este módulo no ve por el grafo de dependencias.
 
 ### `:data`
+- **La base se abre en la primera consulta, no al inyectarla** (12 oct 2026, O-8):
+  `DeferredOpenHelperFactory` aplaza desenvolver la frase-clave con el Keystore, convertir una base
+  en claro antigua y cargar SQLCipher hasta que Room pide la base, cosa que hace fuera del hilo
+  principal. Antes ocurría al construir Room, es decir, en `Application.onCreate` y en el hilo
+  principal (`DeferredOpenHelperFactoryTest`, instrumentado en `:data`).
+- **El chat se lee por ventanas** (12 oct 2026, O-9): `MessageDao.observeRecent(conversationId,
+  limit)` da los N más recientes en orden cronológico y `countSince` el tamaño de ventana que
+  incluye un mensaje (saltar a una cita antigua). El SQL vive en constantes que
+  `MessageWindowSqlTest` ejecuta en la JVM. `ContactDao` gana `setVerified` / `setBlocked` /
+  `markAnnounced` de una sola columna (O-3, `ContactUpsertSqlTest`), y `MessageRepository`,
+  `markIncomingRead` que devuelve lo que acaba de marcar y `markOutgoingRead` por lotes (O-2).
 - Room: `MessageEntity` + `ContactEntity` + `RatchetSessionEntity` / `RatchetSeenEntity`,
-  `MessageDao` / `ContactDao` / `RatchetDao` (Flow + suspend), `KryptaDatabase` (**v9**,
+  `MessageDao` / `ContactDao` / `RatchetDao` (Flow + suspend), `KryptaDatabase` (**v10**,
   `exportSchema=true` → `data/schemas/`), `Converters` (enum `MessageStatus` ↔ String).
   Desde la **v8** `messages.payload` guarda el **sobre en claro** (con `encrypted` marcando las
   filas anteriores, que aún son ciphertext de la clave estática y se convierten en segundo
@@ -881,34 +939,21 @@ dentro del WebSocket → Cloudflare no lee (E2EE) ni suplanta.
   - El nodo Catalina ahora publica también `/tcp/8081/ws` (para Cloudflare). Falta la prueba
     real **vía `wss` por Cloudflare Tunnel** y con **2 móviles** (queda para el despliegue).
 
-## Próximos pasos (según el plan)
+## Próximos pasos
 
-> **Recordatorio de objetivo:** Krypta es para **WAN**. mDNS es solo un atajo para la prueba
-> LAN inmediata; el descubrimiento real es **DHT + rendezvous** (ya implementado en el bridge,
-> pendiente de desplegar la infra y de orquestarlo por contacto en el cliente).
+Lo hecho ya no se lista aquí: está en las secciones de arriba y en
+[PLAN-senalizacion-descentralizada.md](PLAN-senalizacion-descentralizada.md). Lo que queda, por
+orden:
 
-1. **Desplegar el nodo en la Mac Catalina vía Cloudflare Tunnel** (sección WSS de
-   [infra/node/README.md](../infra/node/README.md)): `krypta.neto.chat` → `localhost:8081`, y
-   pegar `/dns4/krypta.neto.chat/tcp/443/wss/p2p/<PeerID>` en "Nodo WAN". Pruebas con 2 móviles
-   (LAN por mDNS, WAN por el nodo).
-2. **DCUtR + endurecer relay (gate NAT)**: con 2 teléfonos en **CGNAT** de operadoras
-   distintas, medir conexión directa (DCUtR) vs fallback a relay. El relay ya está activo en
-   el nodo; falta validar/instrumentar. Bloqueado por hardware (2 SIMs).
-3. **DCUtR en celular (gate NAT)**: medir upgrade directo vs. relay con 2 SIMs CGNAT.
-4. **Ahorro de batería fino**: bajar el ritmo del `wanLoop` cuando el wake está conectado
-   (hoy 30 s fijos; con wake+exención de Doze podría espaciarse bastante).
-5. **QR del número de seguridad** (mejora UX de la verificación anti-MITM ya existente):
-   escanear en vez de leer 60 dígitos — requiere CameraX + lector.
-6. ~~**Ventana de solape** del rendezvous en el cambio de día (UTC).~~ **Hecho** (8 sep 2026):
-   `RendezvousService.rendezvousWindow` usa las dos claves contiguas durante 2 h a cada lado de
-   la medianoche UTC. Iba en el mismo cambio que la corrección del anuncio de rendezvous, que
-   hasta entonces republicaba las claves viejas para siempre y tapaba el agujero.
-7. **Fase 1 (infra)**: desplegar ~5 nodos fijos (hoy hay 3: VPS de São Paulo + Mac + Windows).
-8. ~~**Depósito ciego en el buzón**~~: que el nodo deje de ver el PeerID de emisor y destinatario
-   en claro (etiqueta derivada del secreto compartido, como el rendezvous). **Hecho y encendido
-   por contacto el 12 sep 2026** (`ChatService.BLIND_MIN_PROTOCOL = 2`: se deposita bajo
-   etiqueta a quien anuncie protocolo ≥ 2, por PeerID al resto) — ver
-   [DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) §6. Falta la prueba con dos móviles.
-9. **Redespliegue de los nodos**: los cambios de `infra/node` (reparto justo, límites del relay,
-   tope de wake, lectura acotada del 6 sep) **no están en producción hasta redesplegar**
-   (`deploy-vps.sh`, `deploy-catalina.sh`, copia del `.exe` en el PC).
+1. **Entrega en segundo plano en móviles que congelan procesos** (Transsion/HiOS): sin arreglo
+   dentro de la app; decidir si bloquea la salida a producción
+   ([PRUEBAS-PENDIENTES.md](PRUEBAS-PENDIENTES.md) §13, [PLAY-STORE.md](PLAY-STORE.md)).
+2. **Pruebas con dos móviles** de lo que solo se ha visto en uno: ratchet en sus casos límite
+   (§16), protocolo v4 (§19), los arreglos del 12 oct (§20).
+3. **Gate de NAT** (Fase 0): medir con dos SIM de operadoras distintas cuánto acaba en conexión
+   directa (DCUtR) y cuánto en relay. Bloqueado por hardware.
+4. **Más operadores de nodo**: hoy son dos VPS del mismo operador
+   ([PLAN-privacidad-y-confianza.md](PLAN-privacidad-y-confianza.md) §4.5).
+5. **Tests de los ViewModels**: el reparto por pantalla los hace posibles, pero `ChatService` es
+   una clase concreta de otro módulo y sus dobles de test viven en el `test` de `:p2p-signaling`;
+   falta compartirlos (`testFixtures`) o una interfaz en `:core`.

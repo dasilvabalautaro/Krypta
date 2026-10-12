@@ -37,6 +37,18 @@ interface ContactDao {
     @Query(RAISE_PEER_PROTOCOL_SQL)
     suspend fun raisePeerProtocol(id: String, protocol: Int)
 
+    /** Solo `verified` (O-3): verificar desde una copia vieja no debe reescribir nada más. */
+    @Query(SET_VERIFIED_SQL)
+    suspend fun setVerified(id: String, verified: Boolean)
+
+    /** Solo `blocked` (O-3). */
+    @Query(SET_BLOCKED_SQL)
+    suspend fun setBlocked(id: String, blocked: Boolean)
+
+    /** Sube `announcedProtocol` si [protocol] es mayor; no toca nada más (O-3). */
+    @Query(MARK_ANNOUNCED_SQL)
+    suspend fun markAnnounced(id: String, protocol: Int)
+
     @Query("SELECT * FROM contacts WHERE id = :id")
     suspend fun findById(id: String): ContactEntity?
 
@@ -62,5 +74,12 @@ interface ContactDao {
 
         const val RAISE_PEER_PROTOCOL_SQL =
             "UPDATE contacts SET peerProtocol = MAX(peerProtocol, :protocol) WHERE id = :id"
+
+        const val SET_VERIFIED_SQL = "UPDATE contacts SET verified = :verified WHERE id = :id"
+
+        const val SET_BLOCKED_SQL = "UPDATE contacts SET blocked = :blocked WHERE id = :id"
+
+        const val MARK_ANNOUNCED_SQL =
+            "UPDATE contacts SET announcedProtocol = MAX(announcedProtocol, :protocol) WHERE id = :id"
     }
 }

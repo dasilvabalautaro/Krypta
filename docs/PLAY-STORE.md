@@ -29,6 +29,19 @@ casillas según se vayan cerrando; lo que está hecho lleva la fecha de verifica
 > y ciclo WAN a 180 s porque el wake se sostiene): el aviso **llegó y sonó con la app en
 > segundo plano**. Es **una muestra**, no una regresión cerrada: antes de publicar hay que
 > repetir la medición de CPU de §13 con la app cerrada.
+>
+> ❌ **3-4 oct 2026: volvió a pasar** con el build del 21 sep: **8 horas sin un solo ciclo WAN** con
+> el proceso vivo, el servicio en primer plano y el bucket en EXEMPTED, y el latido disparado 43
+> veces en 13 días donde tocaban unos 9.000 (detalle en PRUEBAS-PENDIENTES §13). La muestra buena
+> del 10 sep **no se sostiene**. No se pierde nada (el buzón guarda 7 días), pero lo de la noche
+> esperó a que se abriera la app.
+>
+> **Estado al 12 oct 2026** (O-6 de [AUDITORIA-2026-10-12.md](AUDITORIA-2026-10-12.md)): las dos
+> condiciones que el propio proyecto se puso para publicar **siguen sin cumplirse**: (a) la
+> medición de CPU con la app cerrada (§13, «Prueba de no regresión») y (b) probar en 2-3 móviles de **otras
+> marcas** si el fallo es de Transsion o general. La decisión es del autor: esperar a (a) y (b), o
+> publicar sabiendo que en algunos móviles los mensajes llegan al abrir la app. Mientras tanto, la
+> ayuda dentro de la app ya lo avisa ("No me llegan los mensajes con la app cerrada").
 
 ## Registro de versiones generadas
 

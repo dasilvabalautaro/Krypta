@@ -7,15 +7,12 @@ import chat.neto.krypta.KryptaNotifications
 import chat.neto.krypta.core.model.Contact
 import chat.neto.krypta.core.model.MessageContent
 import chat.neto.krypta.core.model.MessageStatus
-import chat.neto.krypta.p2p.BootstrapResult
-import chat.neto.krypta.p2p.CallPhase
-import chat.neto.krypta.p2p.CallService
-import chat.neto.krypta.p2p.CallState
 import chat.neto.krypta.p2p.ChatService
 import chat.neto.krypta.p2p.WanStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +20,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -73,12 +72,14 @@ data class ConversationItem(
     val unread: Int,
 )
 
+/**
+ * La **lista de conversaciones** y el **chat**: contactos, mensajes, envíos y acciones sobre un
+ * contacto. Hasta el 12 oct 2026 servía también a la llamada y a Ajustes; eso está ahora en
+ * [CallViewModel] y [SettingsViewModel] (§5 de docs/AUDITORIA-2026-10-12.md).
+ */
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val chat: ChatService,
-    private val calls: CallService,
-    private val video: chat.neto.krypta.video.MediaCodecVideoEngine,
-    private val backup: chat.neto.krypta.p2p.BackupManager,
     private val notifier: chat.neto.krypta.IncomingNotifier,
     private val files: chat.neto.krypta.core.FileStore,
     @ApplicationContext private val context: Context,
@@ -89,93 +90,6 @@ class ChatViewModel @Inject constructor(
      * no lee ficheros: los pide aquí y descifra el almacén.
      */
     suspend fun readAttachment(path: String): ByteArray? = runCatching { files.read(path) }.getOrNull()
-
-    /** Estado de la llamada en curso (IDLE = sin llamada; la UI superpone CallScreen si no). */
-    val callState: StateFlow<CallState> = calls.state
-
-    private val _callMuted = MutableStateFlow(false)
-    val callMuted: StateFlow<Boolean> = _callMuted.asStateFlow()
-    private val _callSpeaker = MutableStateFlow(false)
-    val callSpeaker: StateFlow<Boolean> = _callSpeaker.asStateFlow()
-
-    fun startCall(contact: Contact) {
-        viewModelScope.launch { runCatching { calls.startCall(contact) } }
-    }
-
-    fun acceptCall() {
-        viewModelScope.launch { runCatching { calls.accept() } }
-    }
-
-    fun rejectCall() {
-        viewModelScope.launch { runCatching { calls.reject() } }
-    }
-
-    fun hangupCall() {
-        viewModelScope.launch { runCatching { calls.hangup() } }
-    }
-
-    fun toggleCallMute() {
-        _callMuted.value = !_callMuted.value
-        calls.setMuted(_callMuted.value)
-    }
-
-    fun toggleCallSpeaker() {
-        _callSpeaker.value = !_callSpeaker.value
-        calls.setSpeakerphone(_callSpeaker.value)
-    }
-
-    // --- Vídeo en llamada (Fase 7c) --------------------------------------------------------
-
-    /** El usuario quiere enviar cámara: el UI muestra el PiP y, con su Surface lista, arranca. */
-    private val _videoWanted = MutableStateFlow(false)
-    val videoWanted: StateFlow<Boolean> = _videoWanted.asStateFlow()
-
-    /** Rotaciones para que el UI gire el render remoto y el PiP propio. */
-    val remoteVideoRotation: StateFlow<Int> = video.remoteRotation
-    val localVideoRotation: StateFlow<Int> = video.localRotation
-
-    /** Botón 🎥: pide encender (el arranque real espera a la Surface del PiP) o apaga. */
-    fun toggleVideo() {
-        if (_videoWanted.value) {
-            _videoWanted.value = false
-            viewModelScope.launch {
-                runCatching { calls.stopVideo() }
-                runCatching { video.stopCapture() }
-            }
-        } else {
-            _videoWanted.value = true
-        }
-    }
-
-    /** El PiP propio ya tiene Surface: abre el canal de vídeo y enciende la cámara. */
-    fun onPreviewSurfaceReady(surface: android.view.Surface) {
-        if (!_videoWanted.value || callState.value.videoSending) return
-        viewModelScope.launch {
-            val ok = runCatching { calls.startVideo() }.getOrDefault(false)
-            if (!ok) {
-                _videoWanted.value = false
-                return@launch
-            }
-            runCatching {
-                video.startCapture(surface) { frame -> calls.sendVideoFrame(frame) }
-            }.onFailure {
-                _videoWanted.value = false
-                calls.stopVideo()
-                _error.value = "No se pudo encender la cámara"
-            }
-        }
-    }
-
-    /** El UI entrega/retira la Surface donde pintar el vídeo remoto. */
-    fun setRemoteVideoSurface(surface: android.view.Surface?) {
-        video.setRemoteSurface(surface)
-    }
-
-    /** 7d: alterna cámara frontal/trasera durante el envío de vídeo. */
-    fun switchCamera() {
-        // Default: reiniciar cámara+encoder hace un join breve del hilo de drenado.
-        viewModelScope.launch(Dispatchers.Default) { runCatching { video.switchCamera() } }
-    }
 
     val contacts: StateFlow<List<Contact>> =
         chat.observeContacts().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -209,136 +123,96 @@ class ChatViewModel @Inject constructor(
             .flowOn(Dispatchers.Default) // el preview descifra AES por conversación
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val _myPeerId = MutableStateFlow("")
-    /** PeerID propio, para compartir con quien te quiera añadir. */
-    val myPeerId: StateFlow<String> = _myPeerId.asStateFlow()
-
     /** PeerIDs conectados ahora mismo (mDNS LAN en pruebas; DHT/rendezvous en WAN). */
     val onlinePeers: StateFlow<Set<String>> = chat.onlinePeers
 
-    private val _bootstrap = MutableStateFlow("")
-    /** Multiaddr del nodo bootstrap WAN (vacío = solo LAN/mDNS). */
-    val bootstrap: StateFlow<String> = _bootstrap.asStateFlow()
-
-    private val _lanDiscovery = MutableStateFlow(false)
-
-    /** ¿Descubrimiento en la red local (mDNS)? Apagado de serie; ver `security-model.md` §5.1. */
-    val lanDiscovery: StateFlow<Boolean> = _lanDiscovery.asStateFlow()
-
-    private val _bootstrapError = MutableStateFlow<String?>(null)
-    /** Mensaje de error del campo bootstrap (null = sin error). */
-    val bootstrapError: StateFlow<String?> = _bootstrapError.asStateFlow()
-
     /** Diagnóstico: estado de la conexión WAN y registro de eventos en vivo. */
     val wanStatus: StateFlow<WanStatus> = chat.wanStatus
-    val diagnostics: StateFlow<List<String>> = chat.log
 
     init {
-        viewModelScope.launch(Dispatchers.IO) {
-            _myPeerId.value = chat.myPeerId()
-            _bootstrap.value = chat.bootstrap().orEmpty()
-            _lanDiscovery.value = chat.lanDiscovery()
-            runCatching { chat.start() } // arranca host + descubrimiento (LAN + WAN si hay bootstrap)
-        }
-        // Al terminar cada llamada, vuelve el micro/altavoz a su estado por defecto y apaga
-        // cámara/decoder de vídeo.
-        viewModelScope.launch {
-            calls.state.collect {
-                if (it.phase == CallPhase.IDLE || it.phase == CallPhase.ENDED) {
-                    _callMuted.value = false
-                    _callSpeaker.value = false
-                    if (_videoWanted.value || it.phase == CallPhase.ENDED) {
-                        _videoWanted.value = false
-                        runCatching { video.stopAll() }
-                    }
-                }
-            }
-        }
-        // Frames de vídeo remotos → decoder (pinta en la Surface que entregó el UI).
-        viewModelScope.launch(Dispatchers.Default) {
-            calls.remoteVideoFrames.collect { frame ->
-                runCatching { video.onRemoteFrame(frame) }
-            }
-        }
-    }
-
-    /** Guarda el nodo bootstrap WAN y arranca el descubrimiento por rendezvous. */
-    /** Activa o desactiva el mDNS. Surte efecto en el momento, en los dos sentidos. */
-    fun setLanDiscovery(enabled: Boolean) {
-        viewModelScope.launch {
-            runCatching { chat.setLanDiscovery(enabled) }
-            _lanDiscovery.value = chat.lanDiscovery()
-        }
-    }
-
-    fun setBootstrap(addr: String) {
-        viewModelScope.launch {
-            when (runCatching { chat.setBootstrap(addr) }.getOrNull()) {
-                BootstrapResult.INVALID ->
-                    _bootstrapError.value =
-                        "Multiaddr inválido (uno por línea). " +
-                            "Ej: /ip4/216.128.169.83/tcp/4001/p2p/<PeerID>"
-                else -> {
-                    _bootstrapError.value = null
-                    _bootstrap.value = addr.trim()
-                }
-            }
-        }
+        // Arranca host + descubrimiento (LAN + WAN si hay bootstrap). Idempotente: el servicio en
+        // primer plano y el latido también lo llaman.
+        viewModelScope.launch(Dispatchers.IO) { runCatching { chat.start() } }
     }
 
     /**
      * Flujo de mensajes de la conversación, descifrados para mostrar. En dos pasadas: primero
      * cada mensaje, después las **citas**, que se resuelven contra los mensajes ya mapeados
-     * (por la red viaja solo el id del citado). Como la fuente es un Flow de la conversación
-     * entera, una cita a un mensaje que aún no había llegado se completa sola en cuanto llega.
+     * (por la red viaja solo el id del citado). Como la fuente es un Flow, una cita a un mensaje
+     * que aún no había llegado se completa sola en cuanto llega.
      *
-     * Dos cosas importantes aquí, ambas de la auditoría (A-2):
+     * **Por ventanas** ([window] = cuántos de los más recientes; O-9 de
+     * docs/AUDITORIA-2026-10-12.md): Room reemite la consulta con **cualquier** cambio de la
+     * tabla —un mensaje de otro chat, un ✓✓—, y cargar la conversación entera, con las fotos en
+     * línea, en cada reemisión hacía que el coste creciera con la historia del chat. La pantalla
+     * agranda la ventana al llegar arriba. Una cita a un mensaje que quedó fuera se resuelve
+     * aparte, por id.
+     *
+     * Dos cosas importantes más, ambas de la auditoría (A-2):
      *  - **`flowOn(Dispatchers.Default)`**: cada mensaje es un decodificado de sobre (y, en
      *    las filas anteriores a la v8, además un descifrado AES-GCM). Sin esto se ejecutaba en
-     *    el hilo del colector, que es el principal, y el coste crece con el historial: un chat
-     *    largo bloqueaba la UI.
-     *  - **caché por mensaje** ([decodedCache]): Room reemite la conversación **entera** cada
-     *    vez que cambia algo (un mensaje nuevo, un ✓✓), así que sin caché cada cambio volvía a
-     *    decodificar todo el historial. El contenido guardado de un id no cambia nunca, así
-     *    que la caché es segura y basta con la clave (id + huella del payload).
+     *    el hilo del colector, que es el principal.
+     *  - **caché por mensaje** ([decodedCache]): sin ella cada reemisión volvía a decodificar
+     *    toda la ventana. El contenido guardado de un id no cambia nunca, así que la caché es
+     *    segura y basta con la clave (id + huella del payload).
      *
      * La llamada desde Compose debe ir dentro de un `remember`: este método construye un Flow
      * nuevo en cada invocación y `collectAsState` reinicia la colección con cada instancia.
      */
-    fun messages(contact: Contact): Flow<List<DisplayMessage>> =
-        chat.observeConversation(contact.id).map { list ->
-            val decoded = list.map { m ->
-                val mine = m.senderId != contact.id
-                val d = decodeCached(contact, m)
-                when (val c = d?.content) {
-                    is MessageContent.Image ->
-                        DisplayMessage(
-                            m.id, text = "", image = c.jpeg, mine = mine, status = m.status,
-                            timestamp = m.timestamp,
-                        )
-                    is MessageContent.File ->
-                        DisplayMessage(
-                            m.id, text = "", mine = mine, status = m.status,
-                            file = FileInfo(c.name, c.mime, c.size, c.localPath),
-                            timestamp = m.timestamp,
-                        )
-                    is MessageContent.Text ->
-                        DisplayMessage(
-                            m.id, text = c.text, mine = mine, status = m.status,
-                            timestamp = m.timestamp,
-                        )
-                    null ->
-                        DisplayMessage(
-                            m.id, text = "[cifrado]", mine = mine, status = m.status,
-                            timestamp = m.timestamp,
-                        )
-                } to d?.replyTo
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun messages(contact: Contact, window: Flow<Int>): Flow<List<DisplayMessage>> =
+        window.distinctUntilChanged()
+            .flatMapLatest { limit -> chat.observeRecent(contact.id, limit) }
+            .map { list ->
+                val decoded = list.map { m -> toDisplay(contact, m) }
+                val byId = decoded.associate { (msg, _) -> msg.id to msg }
+                decoded.map { (msg, replyTo) ->
+                    if (replyTo == null) msg
+                    else msg.copy(quoted = quoteOf(contact, replyTo, byId[replyTo] ?: outsideWindow(contact, replyTo)))
+                }
             }
-            val byId = decoded.associate { (msg, _) -> msg.id to msg }
-            decoded.map { (msg, replyTo) ->
-                if (replyTo == null) msg else msg.copy(quoted = quoteOf(contact, replyTo, byId[replyTo]))
-            }
-        }.flowOn(Dispatchers.Default)
+            .flowOn(Dispatchers.Default)
+
+    /** Tamaño de ventana que incluye el mensaje [id] (saltar a una cita antigua); 0 si no está. */
+    suspend fun windowToInclude(contact: Contact, id: String): Int =
+        runCatching { chat.windowToInclude(contact.id, id) }.getOrDefault(0)
+
+    /** Un mensaje citado que quedó fuera de la ventana cargada, buscado por id. */
+    private suspend fun outsideWindow(contact: Contact, id: String): DisplayMessage? =
+        runCatching { chat.findMessage(contact.id, id) }.getOrNull()?.let { toDisplay(contact, it).first }
+
+    /** Un mensaje guardado, listo para pintar, y el id del que cita (si es una respuesta). */
+    private fun toDisplay(
+        contact: Contact,
+        m: chat.neto.krypta.core.model.Message,
+    ): Pair<DisplayMessage, String?> {
+        val mine = m.senderId != contact.id
+        val d = decodeCached(contact, m)
+        val display = when (val c = d?.content) {
+            is MessageContent.Image ->
+                DisplayMessage(
+                    m.id, text = "", image = c.jpeg, mine = mine, status = m.status,
+                    timestamp = m.timestamp,
+                )
+            is MessageContent.File ->
+                DisplayMessage(
+                    m.id, text = "", mine = mine, status = m.status,
+                    file = FileInfo(c.name, c.mime, c.size, c.localPath),
+                    timestamp = m.timestamp,
+                )
+            is MessageContent.Text ->
+                DisplayMessage(
+                    m.id, text = c.text, mine = mine, status = m.status,
+                    timestamp = m.timestamp,
+                )
+            null ->
+                DisplayMessage(
+                    m.id, text = "[cifrado]", mine = mine, status = m.status,
+                    timestamp = m.timestamp,
+                )
+        }
+        return display to d?.replyTo
+    }
 
     /**
      * Decodifica [m] reutilizando el resultado anterior si ya se decodificó ese mismo mensaje.
@@ -525,6 +399,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private val _error = MutableStateFlow<String?>(null)
+
     /** Último error de usuario (p. ej. PeerID inválido al añadir contacto). */
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -570,65 +445,6 @@ class ChatViewModel @Inject constructor(
             runCatching { chat.deleteContact(contact) }
                 .onFailure { _error.value = "No se pudo eliminar el contacto" }
             KryptaNotifications.cancel(context, contact.id)
-        }
-    }
-
-    /**
-     * Sonda del gate de llamadas (Fase 7a): apunta los códecs de audio del móvil y mide el
-     * RTT al nodo; ambos salen por el panel de diagnóstico.
-     */
-    fun probeCallLatency() {
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching { chat.diagnose("🎙 ${AudioCodecs.summary()}") }
-            runCatching { chat.latencyProbe() }
-        }
-    }
-
-    // --- Respaldo de identidad ---------------------------------------------------------
-
-    private val _backupMessage = MutableStateFlow<String?>(null)
-    /** Resultado del último export/import fallido o export OK (para un toast). */
-    val backupMessage: StateFlow<String?> = _backupMessage.asStateFlow()
-
-    fun clearBackupMessage() { _backupMessage.value = null }
-
-    private val _restoredPeerId = MutableStateFlow<String?>(null)
-    /** PeerID recién importado, pendiente de reiniciar Krypta (dispara el diálogo). */
-    val restoredPeerId: StateFlow<String?> = _restoredPeerId.asStateFlow()
-
-    /** Cifra identidad + contactos con [passphrase] y lo escribe en [uri] (SAF). */
-    fun exportBackup(passphrase: String, uri: android.net.Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                val blob = backup.export(passphrase.toCharArray())
-                context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(blob) }
-                    ?: error("no se pudo abrir el destino")
-            }.onSuccess {
-                _backupMessage.value = "Copia de identidad exportada ✓"
-            }.onFailure {
-                _backupMessage.value = "No se pudo exportar la copia"
-            }
-        }
-    }
-
-    /** Lee [uri], descifra con [passphrase] y restaura identidad + contactos. */
-    fun importBackup(passphrase: String, uri: android.net.Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                val blob = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: error("no se pudo leer el archivo")
-                require(blob.size <= 1_000_000) { "demasiado grande para ser un respaldo" }
-                backup.import(passphrase.toCharArray(), blob)
-            }.onSuccess { result ->
-                _restoredPeerId.value = result.peerId
-            }.onFailure {
-                _backupMessage.value =
-                    if (it is chat.neto.krypta.p2p.IdentityBackup.InvalidBackup) {
-                        "Passphrase incorrecta o archivo no válido"
-                    } else {
-                        "No se pudo importar la copia"
-                    }
-            }
         }
     }
 

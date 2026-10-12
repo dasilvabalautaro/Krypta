@@ -19,6 +19,7 @@ import chat.neto.krypta.data.MIGRATION_8_9
 import chat.neto.krypta.data.MIGRATION_9_10
 import chat.neto.krypta.data.crypto.DatabaseEncryption
 import chat.neto.krypta.data.crypto.DatabaseKey
+import chat.neto.krypta.data.crypto.DeferredOpenHelperFactory
 import chat.neto.krypta.data.crypto.KeyPrefs
 import chat.neto.krypta.data.crypto.KeystoreVault
 import chat.neto.krypta.data.crypto.SqlCipher
@@ -52,13 +53,19 @@ object DatabaseModule {
             prefs = SharedKeyPrefs(context.getSharedPreferences("krypta_db", Context.MODE_PRIVATE)),
             vault = KeystoreVault(),
         )
-        val passphrase = key.passphrase()
-        // Conversion de la base en claro que dejaron las versiones anteriores. Va aqui, antes
-        // de que Room la abra, y es idempotente: si ya esta cifrada no hace nada.
-        DatabaseEncryption.encryptInPlace(context.getDatabasePath("krypta.db"), passphrase)
+        // Todo lo caro (Keystore, conversion, carga de SQLCipher) se aplaza a la primera
+        // consulta, que Room hace fuera del hilo principal: construir Room ocurre al inyectar
+        // cualquier repositorio, tambien en Application.onCreate (O-8 de la auditoria del 12 oct).
+        val factory = DeferredOpenHelperFactory {
+            val passphrase = key.passphrase()
+            // Conversion de la base en claro que dejaron las versiones anteriores. Va aqui, antes
+            // de que Room la abra, y es idempotente: si ya esta cifrada no hace nada.
+            DatabaseEncryption.encryptInPlace(context.getDatabasePath("krypta.db"), passphrase)
+            SqlCipher.openHelperFactory(passphrase)
+        }
 
         return Room.databaseBuilder(context, KryptaDatabase::class.java, "krypta.db")
-            .openHelperFactory(SqlCipher.openHelperFactory(passphrase))
+            .openHelperFactory(factory)
             // Migraciones reales: preservan contactos + mensajes al subir de versión.
             .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
             // Red de seguridad solo para la v1 antigua (sin migración definida); v2+ migra.

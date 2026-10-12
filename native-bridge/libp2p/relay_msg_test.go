@@ -13,7 +13,7 @@ import (
 // recvHandler capta el último mensaje recibido para aserciones.
 type recvHandler struct{ got chan []byte }
 
-func (r *recvHandler) OnMessage(from string, data []byte) { r.got <- data }
+func (r *recvHandler) OnMessage(from string, data []byte) bool { r.got <- data; return true }
 
 // TestRelayMessagingLocal valida el camino COMPLETO de relay sin Cloudflare: un host relay
 // (como el nodo de infra) + dos nodos cliente que reservan slot; A envía a B a través del relay

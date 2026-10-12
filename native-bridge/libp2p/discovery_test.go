@@ -98,7 +98,7 @@ func TestSharedSecretSymmetry(t *testing.T) {
 
 type capture struct{ ch chan string }
 
-func (c *capture) OnMessage(from string, data []byte) { c.ch <- string(data) }
+func (c *capture) OnMessage(from string, data []byte) bool { c.ch <- string(data); return true }
 
 // TestMessageExchange proves the full client path: B discovers A under a rendezvous and
 // then sends A a message over a libp2p stream, which A's handler receives.

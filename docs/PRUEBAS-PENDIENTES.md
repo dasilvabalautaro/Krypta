@@ -564,7 +564,7 @@ en segundo plano**. Observado desde fuera a la vez: el TECNO mantenía conexión
 Lo honesto: es **una muestra**, en el móvil que fallaba, y no se ha repetido la medición de CPU
 de esta sección con la app cerrada. La decisión de abajo **no se revierte todavía**; lo que
 cambia es que deja de ser un hallazgo bloqueante y pasa a "prueba de no regresión antes de
-publicar" (punto 4 de la lista de abajo).
+publicar" (punto 3 de la lista «Pendiente» de abajo).
 
 ### ❌ Vuelve a pasar: noche del 3 al 4 oct 2026 (build del 21 sep)
 
@@ -606,12 +606,14 @@ saberlo. Eso pesa en la ficha de la tienda y en el aviso al usuario, no solo en 
      recoge que la colaboradora, con otro modelo, **sí recibía**. Sería publicar con un aviso
      claro y la guía de ajustes. **Antes de decidir esto hay que confirmarlo en 2–3 móviles de
      marcas distintas**, porque si el problema es general, la app no cumple su promesa.
-2. - [ ] Confirmar si el fallo es **específico del TECNO** (la §1 dice que la colaboradora, con
+### Pendiente (numerado aparte de las opciones de arriba; antes iban en una sola lista 1-2-3-2-3-4)
+
+1. - [ ] Confirmar si el fallo es **específico del TECNO** (la §1 dice que la colaboradora, con
      otro modelo, **sí recibía**) — es lo que decide si esto bloquea la publicación para todos
      o solo es una nota de compatibilidad para móviles Transsion.
-3. - [ ] Avisar al usuario cuando un mensaje lleva demasiado en "enviado" sin confirmar (hoy
+2. - [ ] Avisar al usuario cuando un mensaje lleva demasiado en "enviado" sin confirmar (hoy
      caduca en silencio a los 7 días). **No abordado**: es cambio de producto, no de este fallo.
-4. - [ ] **Prueba de no regresión, obligatoria antes de publicar**: repetir la medición de
+3. - [ ] **Prueba de no regresión, obligatoria antes de publicar**: repetir la medición de
      arriba (depositar la sonda + muestrear 4 min con la app cerrada) y ver el buzón a 0 **sin
      abrir la app**. Con dos móviles, además, §12.1.
 
@@ -972,6 +974,41 @@ JVM (`RatchetCompromisoTest`, y `RatchetPropertyTest` con v4 y con la transició
      atrasado**, importar el `.krbk` y que A escriba dos mensajes. El primero puede perderse; el
      segundo tiene que llegar. En el Diagnóstico de B debe salir `↔ relevo con …` y en el de A el
      aviso de sesión reiniciada. Después, volver a la hora automática.
+
+---
+
+## 20. Arreglos de la auditoría del 12 oct 2026 — **PENDIENTE**
+
+Del 12 oct 2026 ([AUDITORIA-2026-10-12.md](AUDITORIA-2026-10-12.md)). Todo está cubierto en la JVM
+(y el acuse directo con tests Go entre dos nodos de verdad), y el build arranca en el TECNO con sus
+datos. Lo que falta es verlo entre dos móviles. **Los dos necesitan el build del 12 oct** (APK arm64
+de depuración `22bdc8d8…8c30`, el de `~/Desktop/krypta-arm64-debug.apk`) salvo en el paso 2, que
+prueba justo la convivencia.
+
+1. - [ ] **Acuse de la entrega directa (O-7).** Con los dos en línea, mandar un texto: debe salir
+     `→ enviado a …` en el emisor y `← mensaje de …` en el receptor, y **ninguna** línea
+     `entrante directo sin persistir`. Después, con el receptor en el chat, cortarle la red un
+     instante mientras el otro escribe: lo que no llegue a guardarse tiene que acabar llegando por
+     el buzón (`→ buzón para …`), sin duplicados ni avisos dobles.
+2. - [ ] **Convivencia con un build anterior (O-7).** Con B en el build del 11 oct (solo habla
+     `/krypta/msg/1.0.0`) y A en el nuevo, escribirse en los dos sentidos por la vía directa. Todo
+     debe llegar: A negocia 1.0.0 con B y da el mensaje por enviado al escribirlo, como antes.
+3. - [ ] **Acuses de lectura (O-2).** En un chat con muchos mensajes recibidos, abrirlo: los ✓✓ del
+     otro lado deben ponerse en «leído». Cerrar y volver a abrir Krypta (o forzar su cierre) y abrir
+     el mismo chat: **no** debe salir otro acuse (en el Diagnóstico del otro, ningún mensaje nuevo
+     marcado como leído).
+4. - [ ] **Contenido de los avisos (O-4).** En Ajustes → Contenido de los avisos, probar los tres
+     modos con un mensaje real y el móvil bloqueado: *Todo* (nombre y texto, según el ajuste de
+     pantalla de bloqueo del sistema), *Solo nombre* (nombre y «Mensaje nuevo»/«N mensajes
+     nuevos») y *Nada* («Krypta · Mensaje nuevo», un solo aviso aunque escriban dos contactos).
+     Con el **bloqueo de la app** activado y *Todo* elegido, el texto no debe salir.
+5. - [ ] **Ventana del chat (O-9).** En un chat de más de 100 mensajes, subir hasta arriba: deben
+     cargarse los anteriores sin saltar la posición. Tocar la cita de un mensaje antiguo que no esté
+     cargado: debe cargar hasta él, saltar y resaltarlo. Un mensaje nuevo con el chat abierto lo
+     tiene que bajar al final y marcarse como leído.
+6. - [ ] **Arranque (O-8).** Con la base ya cifrada: abrir Krypta en frío varias veces y desde una
+     notificación; debe abrir sin pausa y con los datos. (Comprobado el 12 oct 2026 en el TECNO:
+     arranca, lista las conversaciones con sus vistas previas y dice «conectado».)
 
 ---
 

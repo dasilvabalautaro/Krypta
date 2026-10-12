@@ -20,7 +20,7 @@ se cumple va **declarado** (§13), para que nadie gaste horas redescubriéndolo.
 
 ## 0. Alcance, notación y primitivas
 
-**Dentro:** identidad y secreto compartido (§2), sobre de aplicación (§3), transporte v1 (§4) y v2
+**Dentro:** identidad y secreto compartido (§2), sobre de aplicación y entrega (§3), transporte v1 (§4) y v2
 —el ratchet por épocas— (§5), relleno (§6), negociación de capacidades (§7), llamadas (§8),
 etiquetas del buzón ciego (§9), rendezvous (§10), número de seguridad y copia `.krbk` (§11).
 
@@ -106,6 +106,27 @@ receptor descarta cualquier `D` que llegue. No cambia ningún formato.
 Un tipo `A`–`Z` que la versión no conoce decodifica como `Unsupported` y se descarta sin pintar
 nada. Unos bytes sin forma de sobre decodifican como `null`, y la capa superior los trata como texto
 legado (mensajes anteriores a que existieran los sobres).
+
+### 3.1 Entrega y acuse (desde el 12 oct 2026)
+
+Un sobre de red (v1 o v2) viaja por una de dos vías: **directo**, un stream libp2p por sobre, o por
+el **buzón** del nodo. En las dos, el receptor **guarda antes de confirmar**:
+
+- **Buzón**: el receptor confirma (ack) solo los sobres que guardó; el resto vuelve en la siguiente
+  retirada. Esto ya regía; desde el 12 oct 2026 también cuando el guardado falla **dentro** de la
+  transacción del ratchet (antes ese error se trataba como «no abre» y el sobre se confirmaba: O-1
+  de [AUDITORIA-2026-10-12.md](AUDITORIA-2026-10-12.md)).
+- **Directo**: `/krypta/msg/1.1.0`. El emisor escribe el sobre y cierra su mitad; el receptor lo
+  lee (como mucho 1 MiB), lo guarda y contesta **un byte**: `0x01` guardado (o descartado a
+  propósito: remitente desconocido o bloqueado), `0x00` no guardado. El emisor da el sobre por
+  enviado **solo** con `0x01`; con `0x00`, sin respuesta en 20 s o con el stream caído, lo deja en
+  el buzón. El emisor ofrece 1.1.0 y `/krypta/msg/1.0.0` en la misma negociación: con un receptor
+  anterior se negocia 1.0.0, que no tiene acuse y se da por enviado al escribirlo (como antes).
+
+Como un sobre puede llegar dos veces (acuse perdido → también por el buzón), el receptor **no
+reescribe nunca un id que ya tiene** (`T`/`I` por su `<id>`, el resto por el id del buzón): el
+duplicado se confirma y no vuelve a marcarse como no leído ni a avisar. Con v2, además, la huella
+del §5.9 lo descarta antes de descifrar.
 
 ---
 
@@ -561,6 +582,7 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 | **P13** | El disco del nodo no liga etiquetas del buzón con PeerIDs | A1 (volcado) | Probada en el nodo | Go `TestMailboxV2NoGuardaNiRemitenteNiDestinatario`, `TestMailboxV2LaEtiquetaEsLaLlave`, [DISENO-buzon-ciego.md](DISENO-buzon-ciego.md) |
 | **P14** | Separación de dominio entre todas las derivaciones de `S` | — | Por inspección | Etiquetas `info` de §4, §5.2, §8, §9 y §10, todas distintas |
 | **P15** | Un `invite` genuino hace sonar como mucho una vez y deja como mucho una fila de llamada perdida, lo entregue quien lo entregue y cuantas veces | A1 | Probada desde el 15 sep 2026, **condicionada**: si el proceso se reinicia dentro de los 10 min 45 s puede sonar una vez más (W-14), y vaciar el chat borra la fila y con ella su memoria | `CallServiceTest` (7 tests de H-7), `ChatServiceTest` |
+| **P16** | Un sobre que el emisor da por enviado quedó **guardado** en el receptor (directo con acuse) o en el buzón del nodo; si el receptor no pudo guardarlo, el buzón lo vuelve a entregar | — | Probada desde el 12 oct 2026, **condicionada**: con un receptor que solo habla `/krypta/msg/1.0.0`, «enviado» por directo sigue significando «escrito» | Go `TestEntregaDirecta*`, `TestUnEmisorAnteriorSigueEntregando`; `ChatServiceTest` («un directo que no se pudo guardar no se acusa», «por ratchet un fallo al guardar no se confirma») |
 
 ---
 
@@ -602,6 +624,7 @@ este protocolo tiene todavía análisis formal ni revisión externa** (ver
 | Llamadas | `CallService.kt`, `ChatService.recordMissedCall` | `CallServiceTest`, `ChatServiceTest`, Go `TestCallStreamEcho`, `TestVideoStreamEcho` |
 | Transporte bajo las llamadas (W-8) | go-libp2p: TLS 1.3 o Noise por defecto, también en el circuito del relay | Go `TestTransporteRechazaBytesManipulados`, `TestRelayNoVeLoQueViajaPorElCircuito`, `TestRelayMessagingLocal` |
 | Buzón ciego | `MailboxLabel.kt`, `ChatService` (`outboxLabel`, `inboxLabels`), `infra/node/mailbox.go` | `MailboxLabelTest`, `ChatServiceTest`, Go `TestMailboxV2NoGuardaNiRemitenteNiDestinatario`, `TestMailboxV2LaEtiquetaEsLaLlave` |
+| Entrega y acuse (§3.1) | `bridge.go` (`SendMessage`, `SetMessageHandler`, `ProtocolIDAck`), `ChatService` (`setDirectProcessor`, `openRatchet`, `persistEnvelope`) | Go `TestEntregaDirecta*`, `TestUnEmisorAnteriorSigueEntregando`, `ChatServiceTest` |
 | Rendezvous | `RendezvousService.kt` | `RendezvousServiceTest` |
 | Número de seguridad | `SafetyNumber.kt`, `QrCode` | `SafetyNumberTest`, `QrCodeTest` |
 | `.krbk` | `IdentityBackup.kt`, `BackupManager.kt` | `IdentityBackupTest`, `ParserFuzzTest` |

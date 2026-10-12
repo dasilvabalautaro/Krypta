@@ -68,6 +68,8 @@ class CallServiceTest {
     private class FakeCallSignaling(val myPeerId: String) : ISignalingService {
         lateinit var other: FakeCallSignaling
         lateinit var deliver: suspend (fromPeerId: String, ciphertext: ByteArray) -> Unit
+        override suspend fun setAllowedPeers(peers: String) = Unit
+        override fun setDirectProcessor(processor: suspend (fromPeerId: String, ciphertext: ByteArray) -> Boolean) = Unit
 
         override val events = MutableSharedFlow<SignalingEvent>()
         override val incomingCallStreams = MutableSharedFlow<Pair<String, CallStream>>(extraBufferCapacity = 4)
@@ -130,6 +132,12 @@ class CallServiceTest {
     private class FakeMessages : MessageRepository {
         val saved = mutableListOf<Message>()
         override fun observeConversation(conversationId: String): Flow<List<Message>> = flowOf(saved)
+        override fun observeRecent(conversationId: String, limit: Int): Flow<List<Message>> =
+            flowOf(saved.filter { it.conversationId == conversationId }.sortedBy { it.timestamp }.takeLast(limit))
+        override suspend fun countSince(conversationId: String, id: String): Int {
+            val target = saved.find { it.id == id && it.conversationId == conversationId } ?: return 0
+            return saved.count { it.conversationId == conversationId && it.timestamp >= target.timestamp }
+        }
         override fun observeLastMessages(): Flow<List<Message>> = flowOf(emptyList())
         override fun observeUnreadCounts(): Flow<Map<String, Int>> = flowOf(emptyMap())
         override suspend fun save(message: Message) {
@@ -143,7 +151,8 @@ class CallServiceTest {
         override suspend fun findByStatus(status: MessageStatus, limit: Int): List<Message> =
             saved.filter { it.status == status }.take(limit)
         override suspend fun updateStatus(id: String, status: MessageStatus) = Unit
-        override suspend fun markIncomingRead(conversationId: String) = Unit
+        override suspend fun markIncomingRead(conversationId: String): List<String> = emptyList()
+        override suspend fun markOutgoingRead(conversationId: String, senderId: String, ids: List<String>) = Unit
         override suspend fun deleteConversation(conversationId: String) {
             saved.removeAll { it.conversationId == conversationId }
         }
@@ -156,6 +165,15 @@ class CallServiceTest {
         override suspend fun findById(id: String) = store[id]
         override suspend fun findByPeerId(peerId: String) = store.values.find { it.peerId == peerId }
         override suspend fun delete(id: String) { store.remove(id) }
+        override suspend fun setVerified(id: String, verified: Boolean) {
+            store[id]?.let { store[id] = it.copy(verified = verified) }
+        }
+        override suspend fun setBlocked(id: String, blocked: Boolean) {
+            store[id]?.let { store[id] = it.copy(blocked = blocked) }
+        }
+        override suspend fun markAnnounced(id: String, protocol: Int) {
+            store[id]?.let { store[id] = it.copy(announcedProtocol = maxOf(it.announcedProtocol, protocol)) }
+        }
     }
 
     private class FakeKeyExchange(val peerId: String) : KeyExchange {

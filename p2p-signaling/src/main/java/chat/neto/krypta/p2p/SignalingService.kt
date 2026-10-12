@@ -63,6 +63,12 @@ class SignalingService @Inject constructor(
         }
     }
 
+    override fun setDirectProcessor(processor: suspend (fromPeerId: String, ciphertext: ByteArray) -> Boolean) {
+        node.directProcessor = { from, data ->
+            kotlinx.coroutines.runBlocking { processor(from, data) }
+        }
+    }
+
     override fun setMailboxProcessor(
         processor: suspend (
             fromPeerId: String,

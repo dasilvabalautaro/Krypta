@@ -48,6 +48,7 @@ class MainActivity : ComponentActivity() {
         AppLock.init(applicationContext)
         // Preferencia de tema (claro/oscuro/sistema); por defecto sigue al sistema.
         ThemePreference.init(applicationContext)
+        NotificationPrivacy.init(applicationContext)
         openContactId = intent.getStringExtra(KryptaNotifications.EXTRA_OPEN_CONTACT)
         // Android 13+ exige permiso en tiempo de ejecución para notificar mensajes nuevos.
         if (Build.VERSION.SDK_INT >= 33 &&

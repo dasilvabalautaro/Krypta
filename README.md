@@ -13,7 +13,10 @@ cuando el otro está desconectado.
 > [revisión interna](docs/REVISION-protocolo-2026-09-14.md) del 14 sep 2026 encontró y arregló
 > dos fallos graves, y una [auditoría interna](docs/AUDITORIA-interna-2026-10-11.md) del 11 oct
 > encontró que el estado guardado reabre los mensajes de la época en curso (cerrado en el protocolo
-> v4, aún sin probar entre dos móviles). Antes de confiarle nada sensible, lee
+> v4, aún sin probar entre dos móviles). Otra del 12 oct, de
+> [arquitectura y código](docs/AUDITORIA-2026-10-12.md), encontró que se podían perder mensajes sin
+> aviso (el buzón confirmaba lo que no se había guardado, y la entrega directa no tenía acuse):
+> arreglado el mismo día. Antes de confiarle nada sensible, lee
 > [lo que Krypta no protege](docs/security-model.md#9-resumen-honesto-de-lo-que-krypta-no-protege).
 
 *English summary [below](#english).*
@@ -55,8 +58,9 @@ cuando el otro está desconectado.
 - **No hay** grupos, multidispositivo, criptografía post-cuántica (diseñada, sin implementar) ni
   rotación de identidad (diseñada, sin implementar).
 - **La copia `.krbk` no incluye los mensajes**: perder el móvil es perder el historial.
-- En algunos móviles (Transsion/HiOS), la entrega con la app en segundo plano depende de los
-  ajustes de batería del fabricante.
+- En algunos móviles (comprobado en Transsion/HiOS), el sistema congela la app en segundo plano
+  **aunque se ajuste la batería**, y los mensajes no se avisan hasta abrirla (no se pierden: el nodo
+  los guarda 7 días). Sin arreglo dentro de la app; ver [docs/PLAY-STORE.md](docs/PLAY-STORE.md).
 
 El detalle, sin rebajas, está en [docs/security-model.md](docs/security-model.md).
 
@@ -117,9 +121,11 @@ Casi toda está en español.
 | [ESPECIFICACION-protocolo.en.md](docs/ESPECIFICACION-protocolo.en.md) | La misma especificación en inglés, para quien la revise |
 | [REVISION-protocolo-2026-09-14.md](docs/REVISION-protocolo-2026-09-14.md) | Revisión interna del protocolo, sus hallazgos y el plan de revisión externa y análisis formal |
 | [AUDITORIA-interna-2026-10-11.md](docs/AUDITORIA-interna-2026-10-11.md) | Auditoría interna del diseño criptográfico: hallazgos, respuesta y plan de ajustes |
+| [AUDITORIA-2026-10-12.md](docs/AUDITORIA-2026-10-12.md) | Auditoría interna de arquitectura, patrones y código: hallazgos O-1…O-11 y plan |
 | [formal/](docs/formal/README.md) | Modelos en Tamarin del ratchet y del linaje, y cómo correrlos |
 | [SOLICITUD-revision-externa.md](docs/SOLICITUD-revision-externa.md) | Qué se pide en la revisión externa, y los textos para pedirla |
 | [architecture.md](docs/architecture.md) | Arquitectura actual |
+| [HISTORIAL.md](docs/HISTORIAL.md) | Cómo se construyó cada pieza, qué falló en vivo y por qué cada decisión es como es (narrativa, en inglés) |
 | [TECNOLOGIA-propia.md](docs/TECNOLOGIA-propia.md) | Qué toma Krypta de terceros y qué construye por su cuenta |
 | [DISENO-ratchet.md](docs/DISENO-ratchet.md) | Doble ratchet por épocas y relleno por tramos |
 | [DISENO-buzon-ciego.md](docs/DISENO-buzon-ciego.md) | Depósito ciego en el buzón |
@@ -167,7 +173,10 @@ properties and declared weaknesses. An internal review on 14 Sep 2026
 a key/nonce reuse race and a permanent message-loss bug; an internal audit on 11 Oct 2026
 ([docs/AUDITORIA-interna-2026-10-11.md](docs/AUDITORIA-interna-2026-10-11.md), Spanish) found that
 a device's stored ratchet state re-opens the messages of its current epoch; protocol v4 closes it
-(not yet tested between two phones).
+(not yet tested between two phones). An internal architecture and code audit on 12 Oct 2026
+([docs/AUDITORIA-2026-10-12.md](docs/AUDITORIA-2026-10-12.md), Spanish) found that messages could be
+lost silently (the mailbox acked what had not been stored, and direct delivery had no
+acknowledgement); fixed the same day.
 The infrastructure nodes never see content
 but do see metadata; see [docs/security-model.md](docs/security-model.md) (Spanish) for the full,
 unsoftened threat model.

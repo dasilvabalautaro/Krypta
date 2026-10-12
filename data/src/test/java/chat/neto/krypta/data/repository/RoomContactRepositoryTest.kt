@@ -36,6 +36,15 @@ class RoomContactRepositoryTest {
         override suspend fun raisePeerProtocol(id: String, protocol: Int) {
             store[id]?.let { store[id] = it.copy(peerProtocol = maxOf(it.peerProtocol, protocol)) }
         }
+        override suspend fun setVerified(id: String, verified: Boolean) {
+            store[id]?.let { store[id] = it.copy(verified = verified) }
+        }
+        override suspend fun setBlocked(id: String, blocked: Boolean) {
+            store[id]?.let { store[id] = it.copy(blocked = blocked) }
+        }
+        override suspend fun markAnnounced(id: String, protocol: Int) {
+            store[id]?.let { store[id] = it.copy(announcedProtocol = maxOf(it.announcedProtocol, protocol)) }
+        }
         override suspend fun findById(id: String) = store[id]
         override suspend fun findByPeerId(peerId: String) = store.values.find { it.peerId == peerId }
         override suspend fun delete(id: String) { store.remove(id) }
