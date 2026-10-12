@@ -918,7 +918,12 @@ móviles**: un build anterior en el emisor sigue mandando descriptores al reinte
      A lo marca FALLIDO, tocarlo para reintentar: el Diagnóstico de A debe decir
      `↻ reenviando <nombre>` y después `→ archivo enviado … (N trozos)`, y B debe acabar con el
      archivo **abrible**. Una burbuja que no se abre en B es un fallo.
-3. - [ ] **Con B cerrado**, A manda uno de ~1 MB (cabe en el buzón). Al abrir B, llega y se abre.
+3. - [x] **Con B cerrado**, A manda uno de ~1 MB (cabe en el buzón). Al abrir B, llega y se abre.
+     ✅ **12 oct 2026**, más grande de lo pedido: un PDF de 4,5 MB de la colaboradora al TECNO llegó
+     **por el buzón**. El Diagnóstico registra `08:37:12 buzón: 102 mensaje(s) recogido(s)`, que son
+     los 96 trozos de 48 KiB del PDF (4 674 201 B de contenido) más su meta y el resto de esa tanda.
+     En disco quedó entero y cifrado (`KFV1`, 4 674 233 B), `staging/` vacío, y la burbuja dice «toca
+     para abrir». No consta si el TECNO estaba con la app cerrada o solo sin conexión directa.
 4. - [ ] **Reintento automático.** A en modo avión manda un archivo (queda FALLIDO), quita el modo
      avión y **no toca nada**: en uno o dos ciclos WAN debe salir solo y llegar a B.
 5. - [x] **Nada de burbujas vacías.** ✅ **3 oct 2026**: las tres burbujas nuevas dicen «toca para
@@ -936,6 +941,12 @@ va atada a la propuesta del emisor. Se activa por pareja cuando los dos anuncian
 JVM (`RatchetCompromisoTest`, y `RatchetPropertyTest` con v4 y con la transición v3→v4), pero
 **nunca ha cruzado entre dos móviles**. Los pasos 1 a 3 son el mínimo antes de dar el v4 por bueno.
 
+   **Del 12 oct 2026, comprobado en el TECNO**: el TECNO mandó un PNG de 1,2 MB (llegó el acuse
+   «leído»), una imagen, un PDF de 49 KB y una nota de voz de 111 KB, y la colaboradora respondió
+   con texto, una imagen y el PDF de 4,5 MB del paso 3. Es decir, conversación de ida y vuelta por
+   ratchet con relleno entre dos móviles con el build del 11 oct. No hubo ninguna fila «sesión
+   reiniciada», que es lo esperado sin reinstalaciones.
+
 1. - [ ] **v3↔v4.** Con B en un build anterior al 11 oct (v3) y A en el nuevo, una conversación de
      ida y vuelta, una foto y un archivo de ~1 MB. Todo debe llegar. En A, «Verificar identidad»
      debe decir «Clave que cambia (ratchet por épocas) y tamaño relleno.».
@@ -945,6 +956,12 @@ JVM (`RatchetCompromisoTest`, y `RatchetPropertyTest` con v4 y con la transició
      mensajes de antes y de después deben llegar.
 3. - [ ] **v4↔v4 bajo presión**: un archivo de 6–8 MB (cientos de trozos en una ráfaga, el caso de
      W-15), con B cerrado a mitad para que una parte vaya por el buzón. Debe ensamblarse entero.
+     🟡 **12 oct 2026, a medias**: el PDF de 4,5 MB de §18.3 (96 trozos, todos por el buzón) se
+     ensambló entero en el TECNO. Los dos móviles tenían, o debían tener, el APK del 11 oct con el
+     v4 (`207d6341…`, el mismo que el TECNO). Desde el TECNO **no se puede confirmar que la pareja
+     vaya por v4**: «Verificar identidad» dice «ratchet por épocas y tamaño relleno», que también es
+     v3, y la línea del anuncio de la colaboradora ya había salido del Diagnóstico, que solo guarda
+     30 líneas. Falta además el tamaño pedido (6–8 MB) y cerrar B a mitad.
 4. - [ ] **Llamada** entre los dos con el build nuevo: debe conectar y oírse. Repetirla con B todavía
      en v3 (paso 1): debe conectar igual, por la clave negociada.
 5. - [ ] **Reinstalar B** (con `.krbk`) y escribirse: la conversación debe reengancharse sola, y
