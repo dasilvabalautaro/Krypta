@@ -1051,7 +1051,7 @@ private fun VerifyIdentityDialog(
                         modifier = Modifier.padding(vertical = 16.dp),
                     )
                 }
-                ProtectionLine(contact.displayName, protection)
+                ProtectionLine(contact.displayName, protection, contact.peerProtocol)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = { showQr = !showQr }) {
                         Text(if (showQr) "Ver número" else "Usar QR")
@@ -1082,7 +1082,7 @@ private fun VerifyIdentityDialog(
  * 11 oct 2026).
  */
 @Composable
-private fun ProtectionLine(name: String, protection: ChatService.Protection) {
+private fun ProtectionLine(name: String, protection: ChatService.Protection, peerProtocol: Int) {
     val (texto, color) = when (protection) {
         ChatService.Protection.STATIC ->
             "Clave fija: la app de $name todavía no ha anunciado la versión nueva. Quien obtenga " +
@@ -1099,6 +1099,14 @@ private fun ProtectionLine(name: String, protection: ChatService.Protection) {
         style = MaterialTheme.typography.bodySmall,
         color = color,
         modifier = Modifier.padding(top = 4.dp),
+    )
+    // La versión que consta del contacto. «Ratchet y relleno» es igual en v3 y en v4, y sin esto no
+    // había forma de saber desde el móvil si una pareja ya va por el protocolo v4 (12 oct 2026).
+    Text(
+        if (peerProtocol > 0) "Su app anuncia el protocolo v$peerProtocol."
+        else "Su app todavía no ha anunciado qué versión del protocolo habla.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
 
@@ -1117,6 +1125,9 @@ internal fun WanStatusLine(status: WanStatus) {
     )
 }
 
+/** Líneas del Diagnóstico que se ven en Ajustes: todas las que guarda `ChatService`. */
+private const val DIAGNOSTICS_VISIBLE_LINES = 150
+
 @Composable
 internal fun DiagnosticsPanel(lines: List<String>) {
     Column(
@@ -1128,8 +1139,9 @@ internal fun DiagnosticsPanel(lines: List<String>) {
             .padding(8.dp)
     ) {
         Text("Diagnóstico", style = MaterialTheme.typography.labelSmall)
-        // Más recientes abajo; mostramos las últimas 8 líneas.
-        lines.takeLast(8).forEach { line ->
+        // Más recientes abajo. Antes solo se veían 8: lo que pasaba durante una prueba con dos
+        // móviles ya no estaba cuando se miraba (12 oct 2026). La pantalla de Ajustes desplaza.
+        lines.takeLast(DIAGNOSTICS_VISIBLE_LINES).forEach { line ->
             Text(
                 line,
                 style = MaterialTheme.typography.bodySmall,

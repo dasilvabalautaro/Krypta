@@ -950,7 +950,10 @@ JVM (`RatchetCompromisoTest`, y `RatchetPropertyTest` con v4 y con la transició
 1. - [ ] **v3↔v4.** Con B en un build anterior al 11 oct (v3) y A en el nuevo, una conversación de
      ida y vuelta, una foto y un archivo de ~1 MB. Todo debe llegar. En A, «Verificar identidad»
      debe decir «Clave que cambia (ratchet por épocas) y tamaño relleno.».
-2. - [ ] **Paso a v4.** Actualizar B. En el Diagnóstico de los dos debe salir
+2. - [x] **Paso a v4.** ✅ **12 oct 2026**: tras actualizar la colaboradora, el TECNO la tiene
+     apuntada como v4 y la conversación siguió sin borrar nada. No se vieron las líneas del
+     Diagnóstico porque, con solo 30, ya habían salido; desde el 12 oct guarda 150 y las enseña
+     todas. Actualizar B. En el Diagnóstico de los dos debe salir
      `↔ protocolo v4 anunciado a … contacto(s)` y, del otro, `↔ … habla protocolo v4` (o
      `escribe por ratchet: se apunta v4`). Seguir la misma conversación sin borrar nada: los
      mensajes de antes y de después deben llegar.
@@ -958,10 +961,9 @@ JVM (`RatchetCompromisoTest`, y `RatchetPropertyTest` con v4 y con la transició
      W-15), con B cerrado a mitad para que una parte vaya por el buzón. Debe ensamblarse entero.
      🟡 **12 oct 2026, a medias**: el PDF de 4,5 MB de §18.3 (96 trozos, todos por el buzón) se
      ensambló entero en el TECNO. Los dos móviles tenían, o debían tener, el APK del 11 oct con el
-     v4 (`207d6341…`, el mismo que el TECNO). Desde el TECNO **no se puede confirmar que la pareja
-     vaya por v4**: «Verificar identidad» dice «ratchet por épocas y tamaño relleno», que también es
-     v3, y la línea del anuncio de la colaboradora ya había salido del Diagnóstico, que solo guarda
-     30 líneas. Falta además el tamaño pedido (6–8 MB) y cerrar B a mitad.
+     v4 (`207d6341…`, el mismo que el TECNO). **La pareja va por v4**: el mismo día, con el diálogo
+     «Verificar identidad» ampliado para enseñar la versión del contacto, el TECNO dice «Su app
+     anuncia el protocolo v4». Falta el tamaño pedido (6–8 MB) y cerrar B a mitad.
 4. - [ ] **Llamada** entre los dos con el build nuevo: debe conectar y oírse. Repetirla con B todavía
      en v3 (paso 1): debe conectar igual, por la clave negociada.
 5. - [ ] **Reinstalar B** (con `.krbk`) y escribirse: la conversación debe reengancharse sola, y

@@ -139,7 +139,7 @@ class ChatService @Inject constructor(
     private fun logLine(msg: String) {
         val line = "${LocalTime.now().withNano(0)}  $msg"
         runCatching { android.util.Log.i("KryptaDiag", msg) } // a logcat; no-op en tests JVM
-        _log.update { (it + line).takeLast(30) }
+        _log.update { (it + line).takeLast(LOG_LINES) }
     }
 
     /** Escribe una línea en el panel de diagnóstico desde fuera (p. ej. datos del dispositivo). */
@@ -1871,6 +1871,12 @@ class ChatService @Inject constructor(
          * un hash con el contacto para que un `callId` elegido por el otro no pueda coincidir con
          * el id de ningún otro mensaje, de esta conversación o de otra.
          */
+        /**
+         * Líneas del Diagnóstico que se guardan (en memoria, se pierden al cerrar la app). Eran 30, y
+         * un archivo por trozos o una tanda del buzón las desplazaba en segundos (12 oct 2026).
+         */
+        const val LOG_LINES = 150
+
         /** Texto de la fila de R3. Va en primera persona del sistema, no del contacto. */
         const val SESSION_RESTART_TEXT =
             "🔄 La sesión con este contacto se ha reiniciado. Si no ha reinstalado ni restaurado " +
